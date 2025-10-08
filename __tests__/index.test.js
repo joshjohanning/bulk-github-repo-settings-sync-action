@@ -1,5 +1,5 @@
 /**
- * Tests for the Hello World Action
+ * Tests for the Bulk GitHub Repository Settings Action
  */
 
 import { jest } from '@jest/globals';
@@ -15,6 +15,7 @@ const mockCore = {
   setSecret: jest.fn(),
   summary: {
     addHeading: jest.fn().mockReturnThis(),
+    addRaw: jest.fn().mockReturnThis(),
     addTable: jest.fn().mockReturnThis(),
     write: jest.fn().mockResolvedValue(undefined)
   }
@@ -31,9 +32,24 @@ const mockGithub = {
 const mockOctokit = {
   rest: {
     repos: {
-      get: jest.fn()
+      get: jest.fn(),
+      update: jest.fn(),
+      listForUser: jest.fn()
+    },
+    codeScanning: {
+      updateDefaultSetup: jest.fn()
     }
   }
+};
+
+// Mock fs module
+const mockFs = {
+  readFileSync: jest.fn()
+};
+
+// Mock yaml module
+const mockYaml = {
+  load: jest.fn()
 };
 
 // Mock the modules before importing the main module
@@ -42,219 +58,295 @@ jest.unstable_mockModule('@actions/github', () => mockGithub);
 jest.unstable_mockModule('@octokit/rest', () => ({
   Octokit: jest.fn(() => mockOctokit)
 }));
+jest.unstable_mockModule('fs', () => mockFs);
+jest.unstable_mockModule('js-yaml', () => mockYaml);
 
 // Import the main module and helper functions after mocking
-const { default: run, createGreeting, getCurrentTime, getRepoStats } = await import('../src/index.js');
+const { default: run, parseRepositories, updateRepositorySettings } = await import('../src/index.js');
 
-describe('Hello World Action', () => {
+describe('Bulk GitHub Repository Settings Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Reset Octokit mock
-    mockOctokit.rest.repos.get.mockClear();
+    mockOctokit.rest.repos.update.mockClear();
+    mockOctokit.rest.repos.listForUser.mockClear();
+    mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
 
     // Set default inputs
     mockCore.getInput.mockImplementation(name => {
       const inputs = {
-        'who-to-greet': 'World',
-        'message-prefix': 'Hello',
-        'github-token': ''
+        'github-token': 'test-token',
+        repositories: '',
+        'repositories-file': '',
+        owner: '',
+        'allow-squash-merge': '',
+        'allow-merge-commit': '',
+        'allow-rebase-merge': '',
+        'allow-auto-merge': '',
+        'delete-branch-on-merge': '',
+        'allow-update-branch': '',
+        'enable-code-scanning': ''
       };
       return inputs[name] || '';
     });
   });
 
-  describe('createGreeting', () => {
-    test('should create correct greeting with default values', () => {
-      const result = createGreeting('Hello', 'World');
-      expect(result).toBe('Hello, World!');
+  describe('parseRepositories', () => {
+    test('should parse comma-separated repository list', async () => {
+      const result = await parseRepositories('owner/repo1,owner/repo2', '', '', mockOctokit);
+      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
     });
 
-    test('should create correct greeting with custom values', () => {
-      const result = createGreeting('Hi', 'GitHub');
-      expect(result).toBe('Hi, GitHub!');
+    test('should parse repository list from YAML file', async () => {
+      mockFs.readFileSync.mockReturnValue('repositories:\n  - owner/repo1\n  - owner/repo2');
+      mockYaml.load.mockReturnValue({
+        repositories: ['owner/repo1', 'owner/repo2']
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
     });
 
-    test('should handle empty prefix', () => {
-      const result = createGreeting('', 'World');
-      expect(result).toBe(', World!');
+    test('should parse repository list from YAML array', async () => {
+      mockFs.readFileSync.mockReturnValue('- owner/repo1\n- owner/repo2');
+      mockYaml.load.mockReturnValue(['owner/repo1', 'owner/repo2']);
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
     });
 
-    test('should handle empty name', () => {
-      const result = createGreeting('Hello', '');
-      expect(result).toBe('Hello, !');
+    test('should fetch all repositories for owner', async () => {
+      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+        data: [{ full_name: 'owner/repo1' }, { full_name: 'owner/repo2' }]
+      });
+      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+        data: []
+      });
+
+      const result = await parseRepositories('all', '', 'owner', mockOctokit);
+      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+    });
+
+    test('should throw error when using "all" without owner', async () => {
+      await expect(parseRepositories('all', '', '', mockOctokit)).rejects.toThrow(
+        'Owner must be specified when using "all" for repositories'
+      );
+    });
+
+    test('should throw error when no repositories specified', async () => {
+      await expect(parseRepositories('', '', '', mockOctokit)).rejects.toThrow('No repositories specified');
     });
   });
 
-  describe('getCurrentTime', () => {
-    test('should return a valid ISO timestamp', () => {
-      const result = getCurrentTime();
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  describe('updateRepositorySettings', () => {
+    test('should update repository settings successfully', async () => {
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: true,
+        allow_merge_commit: false,
+        allow_rebase_merge: true,
+        allow_auto_merge: true,
+        delete_branch_on_merge: true,
+        allow_update_branch: true
+      };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false);
+
+      expect(result.success).toBe(true);
+      expect(result.repository).toBe('owner/repo');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        allow_squash_merge: true,
+        allow_merge_commit: false,
+        allow_rebase_merge: true,
+        allow_auto_merge: true,
+        delete_branch_on_merge: true,
+        allow_update_branch: true
+      });
     });
 
-    test('should return different timestamps when called multiple times', async () => {
-      const time1 = getCurrentTime();
-      // Wait a bit longer to ensure different timestamps
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const time2 = getCurrentTime();
-      expect(time1).not.toBe(time2);
+    test('should enable CodeQL scanning when requested', async () => {
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true);
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningEnabled).toBe(true);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        state: 'configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should handle CodeQL setup failures gracefully', async () => {
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(new Error('Language not supported'));
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true);
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningWarning).toContain('Could not enable CodeQL');
+      expect(result.codeScanningWarning).toContain('Language not supported');
+    });
+
+    test('should only update specified settings', async () => {
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: true,
+        allow_merge_commit: null,
+        allow_rebase_merge: null,
+        allow_auto_merge: null,
+        delete_branch_on_merge: true,
+        allow_update_branch: null
+      };
+
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false);
+
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        allow_squash_merge: true,
+        delete_branch_on_merge: true
+      });
+    });
+
+    test('should handle invalid repository format', async () => {
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
+    });
+
+    test('should handle API errors', async () => {
+      mockOctokit.rest.repos.update.mockRejectedValue(new Error('API Error'));
+
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('API Error');
     });
   });
 
   describe('Action execution', () => {
-    test('should handle default inputs correctly', async () => {
-      await run();
-
-      expect(mockCore.getInput).toHaveBeenCalledWith('who-to-greet');
-      expect(mockCore.getInput).toHaveBeenCalledWith('message-prefix');
-      expect(mockCore.getInput).toHaveBeenCalledWith('include-time');
-      expect(mockCore.setOutput).toHaveBeenCalledWith('message', 'Hello, World!');
-      expect(mockCore.info).toHaveBeenCalledWith('Generated greeting: Hello, World!');
-    });
-
-    test('should include time when requested', async () => {
+    test('should process repositories successfully', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
-          'who-to-greet': 'World',
-          'message-prefix': 'Hello',
-          'include-time': 'true', // Set to 'true' string to trigger time inclusion
-          'github-token': ''
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true',
+          'delete-branch-on-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
+    });
+
+    test('should handle partial failures', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('API Error'));
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update'));
+    });
+
+    test('should fail when no token provided', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': '',
+          repositories: 'owner/repo1'
         };
         return inputs[name] || '';
       });
 
       await run();
 
-      expect(mockCore.setOutput).toHaveBeenCalledWith('message', 'Hello, World!');
-      expect(mockCore.setOutput).toHaveBeenCalledWith(
-        'time',
-        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+      expect(mockCore.setFailed).toHaveBeenCalledWith('Action failed with error: github-token is required');
+    });
+
+    test('should fail when no settings specified', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1'
+        };
+        return inputs[name] || '';
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        'Action failed with error: At least one repository setting must be specified (or enable-code-scanning must be true)'
       );
     });
 
-    test('should handle custom inputs', async () => {
+    test('should allow CodeQL scanning as the only setting', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
-          'who-to-greet': 'GitHub',
-          'message-prefix': 'Hi'
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'enable-code-scanning': 'true'
         };
         return inputs[name] || '';
       });
 
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
       await run();
 
-      expect(mockCore.setOutput).toHaveBeenCalledWith('message', 'Hi, GitHub!');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledTimes(1);
     });
 
     test('should create summary table', async () => {
-      await run();
-
-      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Hello World Action Results');
-      expect(mockCore.summary.addTable).toHaveBeenCalled();
-      expect(mockCore.summary.write).toHaveBeenCalled();
-    });
-
-    test('should handle errors gracefully', async () => {
-      mockCore.setOutput.mockImplementation(() => {
-        throw new Error('Test error');
-      });
-
-      await run();
-
-      expect(mockCore.setFailed).toHaveBeenCalledWith('Action failed with error: Test error');
-    });
-  });
-
-  describe('Error handling', () => {
-    test('should handle invalid inputs gracefully', () => {
-      expect(() => createGreeting(null, 'World')).not.toThrow();
-      expect(() => createGreeting('Hello', null)).not.toThrow();
-    });
-  });
-
-  describe('Time formatting', () => {
-    test('should format time as ISO string', () => {
-      const mockDate = new Date('2023-01-01T12:00:00.000Z');
-      const originalDate = global.Date;
-      global.Date = jest.fn(() => mockDate);
-      global.Date.now = originalDate.now;
-
-      const result = getCurrentTime();
-      expect(result).toBe('2023-01-01T12:00:00.000Z');
-
-      global.Date = originalDate;
-    });
-  });
-
-  describe('getRepoStats', () => {
-    test('should fetch repository statistics successfully', async () => {
-      const mockRepoData = {
-        full_name: 'test-owner/test-repo',
-        stargazers_count: 42,
-        forks_count: 7,
-        open_issues_count: 3,
-        language: 'JavaScript',
-        size: 1024,
-        created_at: '2023-01-01T00:00:00Z',
-        updated_at: '2023-12-01T00:00:00Z'
-      };
-
-      mockOctokit.rest.repos.get.mockResolvedValue({ data: mockRepoData });
-
-      const result = await getRepoStats('token', 'test-owner', 'test-repo');
-
-      expect(result).toEqual({
-        name: 'test-owner/test-repo',
-        stars: 42,
-        forks: 7,
-        issues: 3,
-        language: 'JavaScript',
-        size: 1024,
-        created: '2023-01-01T00:00:00Z',
-        updated: '2023-12-01T00:00:00Z'
-      });
-
-      expect(mockOctokit.rest.repos.get).toHaveBeenCalledWith({
-        owner: 'test-owner',
-        repo: 'test-repo'
-      });
-    });
-
-    test('should handle API errors gracefully', async () => {
-      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
-
-      const result = await getRepoStats('token', 'test-owner', 'test-repo');
-
-      expect(result).toBeNull();
-      expect(mockCore.warning).toHaveBeenCalledWith('Failed to fetch repository stats: API Error');
-    });
-  });
-
-  describe('Action execution with GitHub API', () => {
-    test('should fetch repo stats when token is provided', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
-          'who-to-greet': 'World',
-          'message-prefix': 'Hello',
-          'github-token': 'test-token'
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
         };
         return inputs[name] || '';
       });
 
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
       await run();
 
-      expect(mockCore.setOutput).toHaveBeenCalledWith('message', 'Hello, World!');
-
-      // Check that GitHub token was detected
-      expect(mockCore.info).toHaveBeenCalledWith('GitHub token provided: Yes');
-    });
-
-    test('should skip repo stats when no token provided', async () => {
-      await run();
-
-      expect(mockOctokit.rest.repos.get).not.toHaveBeenCalled();
-      expect(mockCore.setOutput).toHaveBeenCalledWith('message', 'Hello, World!');
-      expect(mockCore.setOutput).not.toHaveBeenCalledWith('repo-stats', expect.anything());
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results');
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      expect(mockCore.summary.write).toHaveBeenCalled();
     });
   });
 });

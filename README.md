@@ -1,81 +1,226 @@
-# nodejs-actions-starter-template
+# Bulk GitHub Repository Settings Action
 
-![Coverage](./badges/coverage.svg)
+Update repository settings in bulk across multiple GitHub repositories.
 
-👋 Starter template with the action layout, linting, CI, and publishing pre-configured
+## Features
 
-A complete GitHub Action starter template that includes:
-
-- ✅ Action boilerplate with inputs/outputs
-- ✅ ESLint configuration for code quality
-- ✅ Jest testing framework with sample tests
-- ✅ GitHub Actions CI/CD workflow
-- ✅ Automated bundling with ncc
-- ✅ Example implementation that works out of the box
-- ✅ GitHub REST API integration with Octokit
-- ✅ Repository statistics fetching example
-
-## Getting Started
-
-### 1. Use This Template
-
-1. Click "Use this template" to create a new repository
-2. Clone your new repository locally
-3. Run `npm install` to install dependencies
-
-### 2. Customize Your Action
-
-📋 **See [TEMPLATE_CHECKLIST_DELETE_ME.md](./TEMPLATE_CHECKLIST_DELETE_ME.md) for a comprehensive customization guide**
-
-1. Update `package.json` with your action name and details
-2. Update `action.yml` with your action's inputs and outputs
-3. Modify `src/index.js` with your action logic
-4. Update this README with your action's documentation
-5. Update the publish workflow if needed
-
-### 3. Test Your Action
-
-```bash
-npm test              # Run tests
-npm run lint          # Check code quality with ESLint
-npm run format:write  # Run Prettier for formatting
-npm run coverage      # Generate coverage badge
-npm run package       # Bundle for distribution
-npm run all           # Alternatively: Run format, lint, test, coverage, and package
-```
+- 🔧 Update pull request merge strategies (squash, merge, rebase)
+- ✅ Configure auto-merge settings
+- 🗑️ Enable automatic branch deletion after merge
+- 🔄 Configure pull request branch update suggestions
+- 📊 Enable default CodeQL code scanning
+- 📝 Support multiple repository input methods:
+  - Comma-separated list
+  - YAML configuration file
+  - All repositories for a user/organization
 
 ## Example Usage
 
+### Basic Usage with Repository List
+
 ```yml
-- name: Hello World Action
-  uses: your-username/your-action-name@v1
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
   with:
-    who-to-greet: 'World'
-    include-time: true
-    message-prefix: 'Hello'
-    github-token: ${{ secrets.GITHUB_TOKEN }} # Optional: for repo stats
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2,owner/repo3'
+    allow-squash-merge: true
+    allow-merge-commit: false
+    allow-rebase-merge: true
+    allow-auto-merge: true
+    delete-branch-on-merge: true
+    allow-update-branch: true
+    enable-code-scanning: true
+```
+
+### Using a YAML Configuration File
+
+Create a `repos.yml` file:
+
+```yaml
+repositories:
+  - owner/repo1
+  - owner/repo2
+  - owner/repo3
+```
+
+Then use it in your workflow:
+
+```yml
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    allow-squash-merge: true
+    delete-branch-on-merge: true
+    enable-code-scanning: true
+```
+
+### Update All Repositories for an Organization
+
+```yml
+- name: Update All Org Repositories
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'all'
+    owner: 'my-organization'
+    allow-squash-merge: true
+    delete-branch-on-merge: true
+    enable-code-scanning: true
+```
+
+### Complete Example with GitHub App Token
+
+> **Recommended:** Use a GitHub App token for better security and rate limits. See [GitHub App Authentication](#github-app-authentication) below.
+
+```yml
+name: Update Repository Settings
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-settings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Update Repository Settings
+        uses: joshjohanning/bulk-github-repo-settings-action@v1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repositories: 'owner/repo1,owner/repo2'
+          allow-squash-merge: true
+          allow-merge-commit: false
+          allow-rebase-merge: true
+          allow-auto-merge: true
+          delete-branch-on-merge: true
+          allow-update-branch: true
+          enable-code-scanning: true
 ```
 
 ## Action Inputs
 
-| Input            | Description                                      | Required | Default   |
-| ---------------- | ------------------------------------------------ | -------- | --------- |
-| `who-to-greet`   | Who to greet in the message                      | No       | `'World'` |
-| `include-time`   | Whether to include current time in output        | No       | `false`   |
-| `message-prefix` | Prefix for the greeting message                  | No       | `'Hello'` |
-| `github-token`   | GitHub token for API access (enables repo stats) | No       | -         |
+| Input                    | Description                                                                                      | Required | Default |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | -------- | ------- |
+| `github-token`           | GitHub token for API access (requires `repo` scope or GitHub App with repository administration) | Yes      | -       |
+| `repositories`           | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos            | No\*     | -       |
+| `repositories-file`      | Path to YAML file containing repository list                                                     | No\*     | -       |
+| `owner`                  | Owner (user or organization) name - required when using `repositories: "all"`                    | No       | -       |
+| `allow-squash-merge`     | Allow squash merging pull requests                                                               | No       | -       |
+| `allow-merge-commit`     | Allow merge commits for pull requests                                                            | No       | -       |
+| `allow-rebase-merge`     | Allow rebase merging pull requests                                                               | No       | -       |
+| `allow-auto-merge`       | Allow auto-merge on pull requests                                                                | No       | -       |
+| `delete-branch-on-merge` | Automatically delete head branches after pull requests are merged                                | No       | -       |
+| `allow-update-branch`    | Always suggest updating pull request branches                                                    | No       | -       |
+| `enable-code-scanning`   | Enable default CodeQL code scanning setup                                                        | No       | -       |
+
+\* Either `repositories` or `repositories-file` must be provided
 
 ## Action Outputs
 
-| Output       | Description                                    |
-| ------------ | ---------------------------------------------- |
-| `message`    | The generated greeting                         |
-| `time`       | Current timestamp (if requested)               |
-| `repo-stats` | Repository statistics JSON (if token provided) |
+| Output                 | Description                                  |
+| ---------------------- | -------------------------------------------- |
+| `updated-repositories` | Number of repositories successfully updated  |
+| `failed-repositories`  | Number of repositories that failed to update |
+| `results`              | JSON array of update results for each repository |
+
+## GitHub App Authentication
+
+**Recommended approach:** Use a GitHub App instead of a Personal Access Token (PAT) for better security, audit logging, and rate limits.
+
+### Why Use a GitHub App?
+
+- ✅ Better security with fine-grained permissions
+- ✅ Higher rate limits
+- ✅ Better audit logging
+- ✅ Tokens expire automatically (1 hour)
+- ✅ Can be scoped to specific repositories or organizations
+
+### Setting Up a GitHub App
+
+1. Create a GitHub App in your organization settings
+2. Grant the app the following permissions:
+   - Repository permissions:
+     - **Administration**: Read and Write (for repository settings)
+     - **Code scanning alerts**: Read and Write (for enabling CodeQL)
+3. Install the app to your organization or specific repositories
+4. Save the App ID and generate/download a private key
+5. Add these as secrets to your repository:
+   - `APP_ID`: Your GitHub App's ID
+   - `APP_PRIVATE_KEY`: Your GitHub App's private key
+
+### Generating a Token
+
+Use the [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) action:
+
+```yml
+- name: Generate GitHub App Token
+  id: app-token
+  uses: actions/create-github-app-token@v1
+  with:
+    app-id: ${{ secrets.APP_ID }}
+    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    owner: ${{ github.repository_owner }}
+
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    # ... other inputs
+```
+
+### Alternative: Using a Personal Access Token
+
+If you can't use a GitHub App, you can use a Personal Access Token (classic) or Fine-grained PAT with `repo` scope:
+
+```yml
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ secrets.PAT_TOKEN }}
+    # ... other inputs
+```
+
+## YAML File Format
+
+The `repositories-file` can be in one of two formats:
+
+### Format 1: Array with `repositories` key
+
+```yaml
+repositories:
+  - owner/repo1
+  - owner/repo2
+  - owner/repo3
+```
+
+### Format 2: Simple array
+
+```yaml
+- owner/repo1
+- owner/repo2
+- owner/repo3
+```
+
+## Notes
+
+- You must specify at least one setting to update (or enable CodeQL)
+- Settings that are not specified will not be changed
+- Each setting accepts `true` or `false` values
+- Failed repository updates will be logged as warnings but won't fail the entire action
+- The action provides a summary table showing the results for each repository
+- CodeQL scanning may not be available for all repositories (e.g., unsupported languages) - these will show warnings but won't fail the action
 
 ## Development
-
-This template includes everything you need to start developing GitHub Actions:
 
 ### Development Setup
 
@@ -98,21 +243,14 @@ This template includes everything you need to start developing GitHub Actions:
 You can test the action locally by setting environment variables:
 
 ```bash
-export INPUT_WHO_TO_GREET="Local Dev"
-export INPUT_INCLUDE_TIME="true"
-export INPUT_MESSAGE_PREFIX="Hey"
+export INPUT_GITHUB_TOKEN="ghp_your_token_here"
+export INPUT_REPOSITORIES="owner/repo1,owner/repo2"
+export INPUT_ALLOW_SQUASH_MERGE="true"
+export INPUT_DELETE_BRANCH_ON_MERGE="true"
+export INPUT_ENABLE_CODE_SCANNING="true"
 node src/index.js
 ```
 
-### Project Structure
+## License
 
-```text
-├── src/
-│   └── index.js          # Main action code
-├── __tests__/
-│   └── index.test.js     # Jest tests
-├── dist/                 # Bundled action (generated)
-├── action.yml           # Action metadata
-├── package.json         # Dependencies and scripts
-└── README.md           # This file
-```
+MIT

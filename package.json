@@ -1,6 +1,6 @@
 {
-  "name": "nodejs-actions-starter-template",
-  "description": "👋 A starter template for creating GitHub Actions with Node.js",
+  "name": "bulk-github-repo-settings-action",
+  "description": "Update repository settings in bulk for multiple GitHub repositories",
   "version": "1.0.0",
   "type": "module",
   "author": {
@@ -9,20 +9,20 @@
     "url": "https://github.com/joshjohanning"
   },
   "private": true,
-  "homepage": "https://github.com/joshjohanning/nodejs-actions-starter-template#readme",
+  "homepage": "https://github.com/joshjohanning/bulk-github-repo-settings-action#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joshjohanning/nodejs-actions-starter-template.git"
+    "url": "git+https://github.com/joshjohanning/bulk-github-repo-settings-action.git"
   },
   "bugs": {
-    "url": "https://github.com/joshjohanning/nodejs-actions-starter-template/issues"
+    "url": "https://github.com/joshjohanning/bulk-github-repo-settings-action/issues"
   },
   "keywords": [
     "github-actions",
-    "template",
-    "starter",
-    "nodejs",
-    "hello-world"
+    "repository-settings",
+    "bulk-updates",
+    "github-api",
+    "automation"
   ],
   "exports": {
     ".": "./dist/index.js"
@@ -46,7 +46,8 @@
   "dependencies": {
     "@actions/core": "^1.10.1",
     "@actions/github": "^6.0.0",
-    "@octokit/rest": "^22.0.0"
+    "@octokit/rest": "^22.0.0",
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@vercel/ncc": "^0.38.1",
