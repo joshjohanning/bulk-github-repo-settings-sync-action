@@ -1,0 +1,25 @@
+name: 'Publish GitHub Action'
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      - uses: joshjohanning/publish-github-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          npm_package_command: npm run package
+          commit_node_modules: false
+          publish_minor_version: false
+          publish_release_branch: false

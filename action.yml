@@ -1,0 +1,35 @@
+name: 'Hello World Action Template'
+description: '👋 A simple Hello World GitHub Action template with customizable greetings'
+
+branding:
+  icon: 'message-circle'
+  color: 'green'
+
+inputs:
+  who-to-greet:
+    description: 'Who to greet in the message'
+    required: false
+    default: 'World'
+  include-time:
+    description: 'Whether to include current time in output'
+    required: false
+    default: 'false'
+  message-prefix:
+    description: 'Prefix for the greeting message'
+    required: false
+    default: 'Hello'
+  github-token:
+    description: 'GitHub token for API access (optional, for repo stats)'
+    required: false
+
+outputs:
+  message:
+    description: 'The generated greeting message'
+  time:
+    description: 'Current timestamp (if requested)'
+  repo-stats:
+    description: 'Repository statistics (if token provided)'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

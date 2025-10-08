@@ -1,0 +1,63 @@
+{
+  "name": "nodejs-actions-starter-template",
+  "description": "👋 A starter template for creating GitHub Actions with Node.js",
+  "version": "1.0.0",
+  "type": "module",
+  "author": {
+    "name": "Josh Johanning",
+    "email": "joshjohanning@github.com",
+    "url": "https://github.com/joshjohanning"
+  },
+  "private": true,
+  "homepage": "https://github.com/joshjohanning/nodejs-actions-starter-template#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshjohanning/nodejs-actions-starter-template.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joshjohanning/nodejs-actions-starter-template/issues"
+  },
+  "keywords": [
+    "github-actions",
+    "template",
+    "starter",
+    "nodejs",
+    "hello-world"
+  ],
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "bundle": "npm run format:write && npm run package",
+    "ci-test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "coverage": "npx make-coverage-badge --output-path ./badges/coverage.svg",
+    "format:write": "npx prettier --write .",
+    "format:check": "npx prettier --check .",
+    "lint": "npx eslint .",
+    "package": "npx ncc build src/index.js -o dist --source-map --license licenses.txt",
+    "package:watch": "npm run package -- --watch",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "all": "npm run format:write && npm run lint && npm run ci-test && npm run coverage && npm run package"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0",
+    "@octokit/rest": "^22.0.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1",
+    "eslint": "^9.37.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-github": "^5.1.8",
+    "eslint-plugin-jest": "^28.14.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "globals": "^16.4.0",
+    "jest": "^30.2.0",
+    "make-coverage-badge": "^1.2.0",
+    "prettier": "^3.0.0"
+  }
+}
