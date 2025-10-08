@@ -34,10 +34,14 @@ const mockOctokit = {
     repos: {
       get: jest.fn(),
       update: jest.fn(),
-      listForUser: jest.fn()
+      listForUser: jest.fn(),
+      listForOrg: jest.fn()
     },
     codeScanning: {
       updateDefaultSetup: jest.fn()
+    },
+    orgs: {
+      get: jest.fn()
     }
   }
 };
@@ -71,7 +75,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
     // Reset Octokit mock
     mockOctokit.rest.repos.update.mockClear();
     mockOctokit.rest.repos.listForUser.mockClear();
+    mockOctokit.rest.repos.listForOrg.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
+    mockOctokit.rest.orgs.get.mockClear();
 
     // Set default inputs
     mockCore.getInput.mockImplementation(name => {
@@ -117,6 +123,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should fetch all repositories for owner', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not an org'));
       mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
         data: [{ full_name: 'owner/repo1' }, { full_name: 'owner/repo2' }]
       });
@@ -126,6 +133,21 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const result = await parseRepositories('all', '', 'owner', mockOctokit);
       expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+      expect(mockOctokit.rest.repos.listForUser).toHaveBeenCalled();
+    });
+
+    test('should fetch all repositories for organization', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [{ full_name: 'my-org/repo1' }, { full_name: 'my-org/repo2' }]
+      });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: []
+      });
+
+      const result = await parseRepositories('all', '', 'my-org', mockOctokit);
+      expect(result).toEqual(['my-org/repo1', 'my-org/repo2']);
+      expect(mockOctokit.rest.repos.listForOrg).toHaveBeenCalled();
     });
 
     test('should throw error when using "all" without owner', async () => {

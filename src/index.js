@@ -101,13 +101,30 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
       let page = 1;
       let hasMore = true;
 
+      // Try to fetch as organization first, fall back to user if it fails
+      let isOrg = false;
+      try {
+        await octokit.rest.orgs.get({ org: owner });
+        isOrg = true;
+      } catch {
+        // Not an org or no access, treat as user
+        isOrg = false;
+      }
+
       while (hasMore) {
-        const { data } = await octokit.rest.repos.listForUser({
-          username: owner,
-          type: 'all',
-          per_page: 100,
-          page
-        });
+        const { data } = isOrg
+          ? await octokit.rest.repos.listForOrg({
+              org: owner,
+              type: 'all',
+              per_page: 100,
+              page
+            })
+          : await octokit.rest.repos.listForUser({
+              username: owner,
+              type: 'all',
+              per_page: 100,
+              page
+            });
 
         if (data.length === 0) {
           hasMore = false;

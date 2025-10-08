@@ -1,0 +1,37 @@
+name: Update Repository Settings
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Dry run (preview changes without applying)'
+        required: false
+        default: 'false'
+
+jobs:
+  update-repo-settings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Update Repository Settings
+        uses: joshjohanning/bulk-github-repo-settings-action@v1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repositories-file: 'example-repos.yml'
+          allow-squash-merge: true
+          allow-merge-commit: false
+          allow-rebase-merge: true
+          allow-auto-merge: true
+          delete-branch-on-merge: true
+          allow-update-branch: true
+          enable-code-scanning: true

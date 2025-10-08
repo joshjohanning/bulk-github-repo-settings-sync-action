@@ -127,10 +127,10 @@ jobs:
 
 ## Action Outputs
 
-| Output                 | Description                                  |
-| ---------------------- | -------------------------------------------- |
-| `updated-repositories` | Number of repositories successfully updated  |
-| `failed-repositories`  | Number of repositories that failed to update |
+| Output                 | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `updated-repositories` | Number of repositories successfully updated      |
+| `failed-repositories`  | Number of repositories that failed to update     |
 | `results`              | JSON array of update results for each repository |
 
 ## GitHub App Authentication
