@@ -391,6 +391,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.error).toBe('API Error');
     });
 
+    test('should handle 403 access denied errors with warning', async () => {
+      const error403 = new Error('Forbidden');
+      error403.status = 403;
+      mockOctokit.rest.repos.get.mockRejectedValue(error403);
+
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+
+      expect(result.success).toBe(false);
+      expect(result.accessDenied).toBe(true);
+      expect(result.error).toContain('Access denied');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Access denied to repository owner/repo'));
+    });
+
     test('should not make update API calls in dry-run mode', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {

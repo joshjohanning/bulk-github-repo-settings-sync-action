@@ -188,10 +188,30 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
 
   try {
     // Fetch current repository settings to show what's changing
-    const { data: currentRepo } = await octokit.rest.repos.get({
-      owner,
-      repo: repoName
-    });
+    let currentRepo;
+    try {
+      const response = await octokit.rest.repos.get({
+        owner,
+        repo: repoName
+      });
+      currentRepo = response.data;
+    } catch (error) {
+      // Handle 403 (Forbidden) - likely means the app doesn't have access
+      if (error.status === 403) {
+        core.warning(
+          `Access denied to repository ${repo}. The GitHub App or token does not have permission to access this repository. Skipping.`
+        );
+        return {
+          repository: repo,
+          success: false,
+          error: 'Access denied - GitHub App or token does not have permission to access this repository',
+          accessDenied: true,
+          dryRun
+        };
+      }
+      // Re-throw other errors
+      throw error;
+    }
 
     const updateParams = {
       owner,

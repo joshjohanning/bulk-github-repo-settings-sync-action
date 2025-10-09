@@ -356,6 +356,18 @@ When using the `repos` array:
 - The action provides a summary table showing the results for each repository
 - CodeQL scanning may not be available for all repositories (e.g., unsupported languages) - these will show warnings but won't fail the action
 
+### Error Handling and Access Control
+
+- **Access Denied (403)**: If the GitHub App or token doesn't have access to a repository, the action will log a warning and skip that repository without failing the entire workflow
+- **Partial Failures**: If some repositories fail to update, the action continues processing remaining repositories
+- **Clear Error Messages**: All failures include descriptive error messages in the warnings and summary table
+
+Example of access denied handling:
+
+```
+⚠️ Access denied to repository owner/private-repo. The GitHub App or token does not have permission to access this repository. Skipping.
+```
+
 ## Development
 
 ### Development Setup
