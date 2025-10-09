@@ -36,12 +36,16 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
-  enable-code-scanning:
-    description: 'Enable default CodeQL code scanning setup'
+  enable-default-code-scanning:
+    description: 'Enable default code scanning setup'
     required: false
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
     required: false
+  dry-run:
+    description: 'Preview changes without applying them (logs what would be changed)'
+    required: false
+    default: 'false'
 
 outputs:
   updated-repositories:

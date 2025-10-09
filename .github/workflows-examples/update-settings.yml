@@ -34,5 +34,5 @@ jobs:
           allow-auto-merge: true
           delete-branch-on-merge: true
           allow-update-branch: true
-          enable-code-scanning: true
+          enable-default-code-scanning: true
           topics: 'javascript,github-actions,automation'

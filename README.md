@@ -31,7 +31,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-auto-merge: true
     delete-branch-on-merge: true
     allow-update-branch: true
-    enable-code-scanning: true
+    enable-default-code-scanning: true
     topics: 'javascript,github-actions,automation'
 ```
 
@@ -56,7 +56,7 @@ Then use it in your workflow:
     repositories-file: 'repos.yml'
     allow-squash-merge: true
     delete-branch-on-merge: true
-    enable-code-scanning: true
+    enable-default-code-scanning: true
 ```
 
 ### Using YAML File with Per-Repository Overrides
@@ -74,7 +74,7 @@ repos:
   - repo: owner/repo2
     # This repo will use the global defaults from action inputs
   - repo: owner/repo3
-    enable-code-scanning: false
+    enable-default-code-scanning: false
 ```
 
 Use in workflow with global defaults:
@@ -90,7 +90,7 @@ Use in workflow with global defaults:
     allow-merge-commit: false
     allow-rebase-merge: true
     delete-branch-on-merge: true
-    enable-code-scanning: true
+    enable-default-code-scanning: true
     topics: 'javascript,github-actions,automation'
 ```
 
@@ -116,8 +116,25 @@ Use in workflow with global defaults:
     owner: 'my-organization'
     allow-squash-merge: true
     delete-branch-on-merge: true
-    enable-code-scanning: true
+    enable-default-code-scanning: true
     topics: 'company-project,internal'
+```
+
+### Preview Changes with Dry-Run Mode
+
+Preview what changes would be made without actually applying them:
+
+```yml
+- name: Preview Repository Settings Changes
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2'
+    allow-squash-merge: true
+    allow-merge-commit: false
+    delete-branch-on-merge: true
+    topics: 'javascript,github-actions'
+    dry-run: true
 ```
 
 ### Complete Example with GitHub App Token
@@ -153,26 +170,27 @@ jobs:
           allow-auto-merge: true
           delete-branch-on-merge: true
           allow-update-branch: true
-          enable-code-scanning: true
+          enable-default-code-scanning: true
           topics: 'javascript,github-actions,automation'
 ```
 
 ## Action Inputs
 
-| Input                    | Description                                                                                      | Required | Default |
-| ------------------------ | ------------------------------------------------------------------------------------------------ | -------- | ------- |
-| `github-token`           | GitHub token for API access (requires `repo` scope or GitHub App with repository administration) | Yes      | -       |
-| `repositories`           | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos            | No\*     | -       |
-| `repositories-file`      | Path to YAML file containing repository list                                                     | No\*     | -       |
-| `owner`                  | Owner (user or organization) name - required when using `repositories: "all"`                    | No       | -       |
-| `allow-squash-merge`     | Allow squash merging pull requests                                                               | No       | -       |
-| `allow-merge-commit`     | Allow merge commits for pull requests                                                            | No       | -       |
-| `allow-rebase-merge`     | Allow rebase merging pull requests                                                               | No       | -       |
-| `allow-auto-merge`       | Allow auto-merge on pull requests                                                                | No       | -       |
-| `delete-branch-on-merge` | Automatically delete head branches after pull requests are merged                                | No       | -       |
-| `allow-update-branch`    | Always suggest updating pull request branches                                                    | No       | -       |
-| `enable-code-scanning`   | Enable default CodeQL code scanning setup                                                        | No       | -       |
-| `topics`                 | Comma-separated list of topics to set on repositories (replaces existing topics)                 | No       | -       |
+| Input                          | Description                                                                                      | Required | Default |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ | -------- | ------- |
+| `github-token`                 | GitHub token for API access (requires `repo` scope or GitHub App with repository administration) | Yes      | -       |
+| `repositories`                 | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos            | No\*     | -       |
+| `repositories-file`            | Path to YAML file containing repository list                                                     | No\*     | -       |
+| `owner`                        | Owner (user or organization) name - required when using `repositories: "all"`                    | No       | -       |
+| `allow-squash-merge`           | Allow squash merging pull requests                                                               | No       | -       |
+| `allow-merge-commit`           | Allow merge commits for pull requests                                                            | No       | -       |
+| `allow-rebase-merge`           | Allow rebase merging pull requests                                                               | No       | -       |
+| `allow-auto-merge`             | Allow auto-merge on pull requests                                                                | No       | -       |
+| `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                | No       | -       |
+| `allow-update-branch`          | Always suggest updating pull request branches                                                    | No       | -       |
+| `enable-default-code-scanning` | Enable default code scanning setup                                                               | No       | -       |
+| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                 | No       | -       |
+| `dry-run`                      | Preview changes without applying them (logs what would be changed)                               | No       | `false` |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -278,7 +296,7 @@ repos:
     allow-auto-merge: false
     delete-branch-on-merge: false
     allow-update-branch: false
-    enable-code-scanning: false
+    enable-default-code-scanning: false
     topics: 'javascript,custom-topic'
   - repo: owner/repo2
     # Uses global defaults from action inputs

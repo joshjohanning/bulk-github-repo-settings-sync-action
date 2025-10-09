@@ -78,7 +78,7 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
       const fileContent = fs.readFileSync(repositoriesFile, 'utf8');
       const data = yaml.load(fileContent);
 
-      // Support new format with repos array containing objects
+      // Only support repos array format
       if (Array.isArray(data.repos)) {
         repoList = data.repos.map(item => {
           if (typeof item === 'string') {
@@ -91,12 +91,6 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
             throw new Error('Each item in repos array must be a string or object with "repo" property');
           }
         });
-      }
-      // Also support repositories array and top-level array for backwards compatibility
-      else if (Array.isArray(data.repositories)) {
-        repoList = data.repositories.map(repo => ({ repo }));
-      } else if (Array.isArray(data)) {
-        repoList = data.map(repo => ({ repo }));
       } else {
         throw new Error('YAML file must contain a "repos" array');
       }
@@ -178,9 +172,10 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
  * @param {Object} settings - Settings to update
  * @param {boolean} enableCodeScanning - Enable default CodeQL scanning
  * @param {Array<string>|null} topics - Topics to set on repository
+ * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics) {
+export async function updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics, dryRun) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -217,43 +212,57 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       updateParams.allow_update_branch = settings.allow_update_branch;
     }
 
-    // Update repository settings
-    await octokit.rest.repos.update(updateParams);
-
     const result = {
       repository: repo,
       success: true,
-      settings: updateParams
+      settings: updateParams,
+      dryRun
     };
 
-    // Update topics if provided
+    // Update repository settings (skip in dry-run mode)
+    if (!dryRun) {
+      await octokit.rest.repos.update(updateParams);
+    }
+
+    // Update topics if provided (skip in dry-run mode)
     if (topics !== null) {
-      try {
-        await octokit.rest.repos.replaceAllTopics({
-          owner,
-          repo: repoName,
-          names: topics
-        });
-        result.topicsUpdated = true;
+      if (!dryRun) {
+        try {
+          await octokit.rest.repos.replaceAllTopics({
+            owner,
+            repo: repoName,
+            names: topics
+          });
+          result.topicsUpdated = true;
+          result.topics = topics;
+        } catch (error) {
+          result.topicsWarning = `Could not update topics: ${error.message}`;
+        }
+      } else {
+        // In dry-run mode, just record what would be changed
+        result.topicsWouldUpdate = true;
         result.topics = topics;
-      } catch (error) {
-        result.topicsWarning = `Could not update topics: ${error.message}`;
       }
     }
 
-    // Enable CodeQL scanning if requested
+    // Enable CodeQL scanning if requested (skip in dry-run mode)
     if (enableCodeScanning) {
-      try {
-        await octokit.rest.codeScanning.updateDefaultSetup({
-          owner,
-          repo: repoName,
-          state: 'configured',
-          query_suite: 'default'
-        });
-        result.codeScanningEnabled = true;
-      } catch (error) {
-        // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
-        result.codeScanningWarning = `Could not enable CodeQL: ${error.message}`;
+      if (!dryRun) {
+        try {
+          await octokit.rest.codeScanning.updateDefaultSetup({
+            owner,
+            repo: repoName,
+            state: 'configured',
+            query_suite: 'default'
+          });
+          result.codeScanningEnabled = true;
+        } catch (error) {
+          // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
+          result.codeScanningWarning = `Could not enable CodeQL: ${error.message}`;
+        }
+      } else {
+        // In dry-run mode, just record what would be changed
+        result.codeScanningWouldEnable = true;
       }
     }
 
@@ -262,7 +271,8 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
     return {
       repository: repo,
       success: false,
-      error: error.message
+      error: error.message,
+      dryRun
     };
   }
 }
@@ -288,7 +298,8 @@ export async function run() {
       allow_update_branch: getBooleanInput('allow-update-branch')
     };
 
-    const enableCodeScanning = getBooleanInput('enable-code-scanning');
+    const enableCodeScanning = getBooleanInput('enable-default-code-scanning');
+    const dryRun = getBooleanInput('dry-run');
 
     // Parse topics if provided
     const topicsInput = getInput('topics');
@@ -301,6 +312,10 @@ export async function run() {
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
+    if (dryRun) {
+      core.info('🔍 DRY-RUN MODE: No changes will be applied');
+    }
+
     if (!githubToken) {
       throw new Error('github-token is required');
     }
@@ -309,7 +324,7 @@ export async function run() {
     const hasSettings = Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-code-scanning must be true, or topics must be provided)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided)'
       );
     }
 
@@ -364,7 +379,9 @@ export async function run() {
       };
 
       const repoEnableCodeScanning =
-        repoConfig['enable-code-scanning'] !== undefined ? repoConfig['enable-code-scanning'] : enableCodeScanning;
+        repoConfig['enable-default-code-scanning'] !== undefined
+          ? repoConfig['enable-default-code-scanning']
+          : enableCodeScanning;
 
       // Handle repo-specific topics
       let repoTopics = topics;
@@ -381,20 +398,37 @@ export async function run() {
         }
       }
 
-      const result = await updateRepositorySettings(octokit, repo, repoSettings, repoEnableCodeScanning, repoTopics);
+      const result = await updateRepositorySettings(
+        octokit,
+        repo,
+        repoSettings,
+        repoEnableCodeScanning,
+        repoTopics,
+        dryRun
+      );
       results.push(result);
 
       if (result.success) {
         successCount++;
-        core.info(`✅ Successfully updated ${repo}`);
+        if (dryRun) {
+          core.info(`🔍 Would update ${repo}`);
+        } else {
+          core.info(`✅ Successfully updated ${repo}`);
+        }
         if (result.topicsUpdated) {
           core.info(`  🏷️  Topics updated: ${result.topics.join(', ')}`);
+        }
+        if (result.topicsWouldUpdate) {
+          core.info(`  🏷️  Would update topics: ${result.topics.join(', ')}`);
         }
         if (result.topicsWarning) {
           core.warning(`  ⚠️ ${result.topicsWarning}`);
         }
         if (result.codeScanningEnabled) {
           core.info(`  📊 CodeQL scanning enabled`);
+        }
+        if (result.codeScanningWouldEnable) {
+          core.info(`  📊 Would enable CodeQL scanning`);
         }
         if (result.codeScanningWarning) {
           core.warning(`  ⚠️ ${result.codeScanningWarning}`);

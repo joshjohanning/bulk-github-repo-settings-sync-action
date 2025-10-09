@@ -6,7 +6,7 @@ repos:
     allow-auto-merge: false
     delete-branch-on-merge: false
     allow-update-branch: false
-    enable-code-scanning: false
+    enable-default-code-scanning: false
     topics: 'javascript,github-actions,automation,different'
   - repo: joshjohanning/other-repo
     # This repo will use the defaults from the action inputs
