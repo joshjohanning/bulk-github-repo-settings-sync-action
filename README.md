@@ -15,6 +15,14 @@ Update repository settings in bulk across multiple GitHub repositories.
   - YAML configuration file
   - All repositories for a user/organization
 
+## Key Features
+
+- **Change Visibility**: Always shows before/after values for all changes, whether in dry-run or regular mode
+- **Dry-Run Mode**: Preview changes without applying them - fetches current settings and shows diffs
+- **Per-Repository Overrides**: Set global defaults in action inputs, override specific settings per repo in YAML
+- **Intelligent Change Detection**: Only updates settings that actually differ from current values
+- **Comprehensive Logging**: Clear output showing exactly what changed or would change
+
 ## Example Usage
 
 ### Basic Usage with Repository List
@@ -122,7 +130,7 @@ Use in workflow with global defaults:
 
 ### Preview Changes with Dry-Run Mode
 
-Preview what changes would be made without actually applying them:
+Preview what changes would be made without actually applying them. The action fetches current repository settings and shows what would change:
 
 ```yml
 - name: Preview Repository Settings Changes
@@ -135,6 +143,24 @@ Preview what changes would be made without actually applying them:
     delete-branch-on-merge: true
     topics: 'javascript,github-actions'
     dry-run: true
+```
+
+The dry-run mode:
+
+- Fetches current repository settings via API
+- Compares current values with desired values
+- Logs all differences that would be changed
+- Does not make any actual changes
+
+Example output:
+
+```
+🔍 Would update owner/repo1
+  📝 Settings changes:
+     allow-squash-merge: false → true
+     allow-merge-commit: true → false
+     delete-branch-on-merge: false → true
+  🏷️  Would update topics: (none) → javascript, github-actions
 ```
 
 ### Complete Example with GitHub App Token

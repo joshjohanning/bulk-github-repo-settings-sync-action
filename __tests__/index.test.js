@@ -36,10 +36,12 @@ const mockOctokit = {
       update: jest.fn(),
       listForUser: jest.fn(),
       listForOrg: jest.fn(),
-      replaceAllTopics: jest.fn()
+      replaceAllTopics: jest.fn(),
+      getAllTopics: jest.fn()
     },
     codeScanning: {
-      updateDefaultSetup: jest.fn()
+      updateDefaultSetup: jest.fn(),
+      getDefaultSetup: jest.fn()
     },
     orgs: {
       get: jest.fn()
@@ -192,6 +194,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
   describe('updateRepositorySettings', () => {
     test('should update repository settings successfully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: false,
+          allow_auto_merge: false,
+          delete_branch_on_merge: false,
+          allow_update_branch: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
 
       const settings = {
@@ -207,6 +219,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
+      expect(result.changes.length).toBe(6);
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
@@ -220,7 +233,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should enable CodeQL scanning when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       const settings = { allow_squash_merge: true };
@@ -238,7 +257,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle CodeQL setup failures gracefully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(new Error('Language not supported'));
 
       const settings = { allow_squash_merge: true };
@@ -246,12 +271,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, false);
 
       expect(result.success).toBe(true);
-      expect(result.codeScanningWarning).toContain('Could not enable CodeQL');
+      expect(result.codeScanningWarning).toContain('Could not process CodeQL');
       expect(result.codeScanningWarning).toContain('Language not supported');
     });
 
     test('should update topics when provided', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
+        data: { names: ['old-topic'] }
+      });
       mockOctokit.rest.repos.replaceAllTopics.mockResolvedValue({});
 
       const settings = { allow_squash_merge: true };
@@ -261,7 +294,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.topicsUpdated).toBe(true);
-      expect(result.topics).toEqual(topics);
+      expect(result.topicsChange).toBeDefined();
+      expect(result.topicsChange.from).toEqual(['old-topic']);
+      expect(result.topicsChange.to).toEqual(topics);
       expect(mockOctokit.rest.repos.replaceAllTopics).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
@@ -270,8 +305,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle topics update failures gracefully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.repos.replaceAllTopics.mockRejectedValue(new Error('Topics update failed'));
+      mockOctokit.rest.repos.getAllTopics.mockRejectedValue(new Error('Topics fetch failed'));
 
       const settings = { allow_squash_merge: true };
       const topics = ['test'];
@@ -279,11 +319,15 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, topics, false);
 
       expect(result.success).toBe(true);
-      expect(result.topicsWarning).toContain('Could not update topics');
-      expect(result.topicsWarning).toContain('Topics update failed');
+      expect(result.topicsWarning).toContain('Could not process topics');
     });
 
     test('should not update topics when null', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
 
       const settings = { allow_squash_merge: true };
@@ -291,10 +335,21 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
 
       expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.getAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
     });
 
     test('should only update specified settings', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          allow_merge_commit: null,
+          allow_rebase_merge: null,
+          allow_auto_merge: null,
+          delete_branch_on_merge: false,
+          allow_update_branch: null
+        }
+      });
       mockOctokit.rest.repos.update.mockResolvedValue({});
 
       const settings = {
@@ -325,7 +380,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockOctokit.rest.repos.update.mockRejectedValue(new Error('API Error'));
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
       const settings = { allow_squash_merge: true };
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
@@ -334,7 +389,17 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.error).toBe('API Error');
     });
 
-    test('should not make API calls in dry-run mode', async () => {
+    test('should not make update API calls in dry-run mode', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false
+        }
+      });
+      mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
+        data: { names: [] }
+      });
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
@@ -344,6 +409,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dryRun).toBe(true);
       expect(result.topicsWouldUpdate).toBe(true);
       expect(result.codeScanningWouldEnable).toBe(true);
+      expect(mockOctokit.rest.repos.get).toHaveBeenCalled(); // Should fetch current state
       expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();

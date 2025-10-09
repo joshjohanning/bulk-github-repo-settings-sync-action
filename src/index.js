@@ -187,82 +187,183 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
   }
 
   try {
+    // Fetch current repository settings to show what's changing
+    const { data: currentRepo } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+
     const updateParams = {
       owner,
       repo: repoName
     };
 
-    // Only add settings that are explicitly set (not null)
+    const changes = [];
+    const currentSettings = {};
+
+    // Only add settings that are explicitly set (not null) and track changes
     if (settings.allow_squash_merge !== null) {
       updateParams.allow_squash_merge = settings.allow_squash_merge;
+      currentSettings.allow_squash_merge = currentRepo.allow_squash_merge;
+      if (currentRepo.allow_squash_merge !== settings.allow_squash_merge) {
+        changes.push({
+          setting: 'allow_squash_merge',
+          from: currentRepo.allow_squash_merge,
+          to: settings.allow_squash_merge
+        });
+      }
     }
     if (settings.allow_merge_commit !== null) {
       updateParams.allow_merge_commit = settings.allow_merge_commit;
+      currentSettings.allow_merge_commit = currentRepo.allow_merge_commit;
+      if (currentRepo.allow_merge_commit !== settings.allow_merge_commit) {
+        changes.push({
+          setting: 'allow_merge_commit',
+          from: currentRepo.allow_merge_commit,
+          to: settings.allow_merge_commit
+        });
+      }
     }
     if (settings.allow_rebase_merge !== null) {
       updateParams.allow_rebase_merge = settings.allow_rebase_merge;
+      currentSettings.allow_rebase_merge = currentRepo.allow_rebase_merge;
+      if (currentRepo.allow_rebase_merge !== settings.allow_rebase_merge) {
+        changes.push({
+          setting: 'allow_rebase_merge',
+          from: currentRepo.allow_rebase_merge,
+          to: settings.allow_rebase_merge
+        });
+      }
     }
     if (settings.allow_auto_merge !== null) {
       updateParams.allow_auto_merge = settings.allow_auto_merge;
+      currentSettings.allow_auto_merge = currentRepo.allow_auto_merge;
+      if (currentRepo.allow_auto_merge !== settings.allow_auto_merge) {
+        changes.push({
+          setting: 'allow_auto_merge',
+          from: currentRepo.allow_auto_merge,
+          to: settings.allow_auto_merge
+        });
+      }
     }
     if (settings.delete_branch_on_merge !== null) {
       updateParams.delete_branch_on_merge = settings.delete_branch_on_merge;
+      currentSettings.delete_branch_on_merge = currentRepo.delete_branch_on_merge;
+      if (currentRepo.delete_branch_on_merge !== settings.delete_branch_on_merge) {
+        changes.push({
+          setting: 'delete_branch_on_merge',
+          from: currentRepo.delete_branch_on_merge,
+          to: settings.delete_branch_on_merge
+        });
+      }
     }
     if (settings.allow_update_branch !== null) {
       updateParams.allow_update_branch = settings.allow_update_branch;
+      currentSettings.allow_update_branch = currentRepo.allow_update_branch;
+      if (currentRepo.allow_update_branch !== settings.allow_update_branch) {
+        changes.push({
+          setting: 'allow_update_branch',
+          from: currentRepo.allow_update_branch,
+          to: settings.allow_update_branch
+        });
+      }
     }
 
     const result = {
       repository: repo,
       success: true,
       settings: updateParams,
+      currentSettings,
+      changes,
       dryRun
     };
 
     // Update repository settings (skip in dry-run mode)
-    if (!dryRun) {
+    if (!dryRun && changes.length > 0) {
       await octokit.rest.repos.update(updateParams);
     }
 
-    // Update topics if provided (skip in dry-run mode)
+    // Handle topics
     if (topics !== null) {
-      if (!dryRun) {
-        try {
-          await octokit.rest.repos.replaceAllTopics({
-            owner,
-            repo: repoName,
-            names: topics
-          });
-          result.topicsUpdated = true;
-          result.topics = topics;
-        } catch (error) {
-          result.topicsWarning = `Could not update topics: ${error.message}`;
+      try {
+        // Fetch current topics
+        const { data: topicsData } = await octokit.rest.repos.getAllTopics({
+          owner,
+          repo: repoName
+        });
+        const currentTopics = topicsData.names || [];
+        result.currentTopics = currentTopics;
+
+        // Check if topics are different
+        const topicsChanged =
+          currentTopics.length !== topics.length || !currentTopics.every((topic, index) => topic === topics[index]);
+
+        if (topicsChanged) {
+          result.topicsChange = {
+            from: currentTopics,
+            to: topics
+          };
+
+          if (!dryRun) {
+            await octokit.rest.repos.replaceAllTopics({
+              owner,
+              repo: repoName,
+              names: topics
+            });
+            result.topicsUpdated = true;
+          } else {
+            result.topicsWouldUpdate = true;
+          }
+        } else {
+          result.topicsUnchanged = true;
         }
-      } else {
-        // In dry-run mode, just record what would be changed
-        result.topicsWouldUpdate = true;
         result.topics = topics;
+      } catch (error) {
+        result.topicsWarning = `Could not process topics: ${error.message}`;
       }
     }
 
-    // Enable CodeQL scanning if requested (skip in dry-run mode)
+    // Handle CodeQL scanning
     if (enableCodeScanning) {
-      if (!dryRun) {
+      try {
+        // Try to get current code scanning setup
+        let currentCodeScanning = null;
         try {
-          await octokit.rest.codeScanning.updateDefaultSetup({
+          const { data: codeScanningData } = await octokit.rest.codeScanning.getDefaultSetup({
             owner,
-            repo: repoName,
-            state: 'configured',
-            query_suite: 'default'
+            repo: repoName
           });
-          result.codeScanningEnabled = true;
-        } catch (error) {
-          // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
-          result.codeScanningWarning = `Could not enable CodeQL: ${error.message}`;
+          currentCodeScanning = codeScanningData.state;
+        } catch {
+          // Default setup might not exist yet
+          currentCodeScanning = 'not-configured';
         }
-      } else {
-        // In dry-run mode, just record what would be changed
-        result.codeScanningWouldEnable = true;
+
+        result.currentCodeScanning = currentCodeScanning;
+
+        if (currentCodeScanning !== 'configured') {
+          result.codeScanningChange = {
+            from: currentCodeScanning,
+            to: 'configured'
+          };
+
+          if (!dryRun) {
+            await octokit.rest.codeScanning.updateDefaultSetup({
+              owner,
+              repo: repoName,
+              state: 'configured',
+              query_suite: 'default'
+            });
+            result.codeScanningEnabled = true;
+          } else {
+            result.codeScanningWouldEnable = true;
+          }
+        } else {
+          result.codeScanningUnchanged = true;
+        }
+      } catch (error) {
+        // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
+        result.codeScanningWarning = `Could not process CodeQL: ${error.message}`;
       }
     }
 
@@ -415,23 +516,59 @@ export async function run() {
         } else {
           core.info(`✅ Successfully updated ${repo}`);
         }
-        if (result.topicsUpdated) {
-          core.info(`  🏷️  Topics updated: ${result.topics.join(', ')}`);
+
+        // Log repository setting changes
+        if (result.changes && result.changes.length > 0) {
+          core.info(`  📝 Settings changes:`);
+          for (const change of result.changes) {
+            const settingName = change.setting.replace(/_/g, '-');
+            if (dryRun) {
+              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
+            } else {
+              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
+            }
+          }
         }
-        if (result.topicsWouldUpdate) {
-          core.info(`  🏷️  Would update topics: ${result.topics.join(', ')}`);
+
+        // Log topics changes
+        if (result.topicsChange) {
+          const fromTopics = result.topicsChange.from.length > 0 ? result.topicsChange.from.join(', ') : '(none)';
+          const toTopics = result.topicsChange.to.join(', ');
+          if (dryRun) {
+            core.info(`  🏷️  Would update topics: ${fromTopics} → ${toTopics}`);
+          } else {
+            core.info(`  🏷️  Topics updated: ${fromTopics} → ${toTopics}`);
+          }
+        } else if (result.topicsUnchanged) {
+          core.info(`  🏷️  Topics unchanged: ${result.topics.join(', ')}`);
         }
+
         if (result.topicsWarning) {
           core.warning(`  ⚠️ ${result.topicsWarning}`);
         }
-        if (result.codeScanningEnabled) {
-          core.info(`  📊 CodeQL scanning enabled`);
+
+        // Log code scanning changes
+        if (result.codeScanningChange) {
+          if (dryRun) {
+            core.info(
+              `  📊 Would enable CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+            );
+          } else {
+            core.info(
+              `  📊 CodeQL scanning enabled: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+            );
+          }
+        } else if (result.codeScanningUnchanged) {
+          core.info(`  📊 CodeQL scanning unchanged: already configured`);
         }
-        if (result.codeScanningWouldEnable) {
-          core.info(`  📊 Would enable CodeQL scanning`);
-        }
+
         if (result.codeScanningWarning) {
           core.warning(`  ⚠️ ${result.codeScanningWarning}`);
+        }
+
+        // Log if no changes were needed
+        if ((!result.changes || result.changes.length === 0) && !result.topicsChange && !result.codeScanningChange) {
+          core.info(`  ℹ️  No changes needed - all settings already match desired state`);
         }
       } else {
         failureCount++;
