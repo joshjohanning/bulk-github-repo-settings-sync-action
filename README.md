@@ -1,81 +1,374 @@
-# nodejs-actions-starter-template
+# Bulk GitHub Repository Settings Action
 
-![Coverage](./badges/coverage.svg)
+Update repository settings in bulk across multiple GitHub repositories.
 
-👋 Starter template with the action layout, linting, CI, and publishing pre-configured
+## Features
 
-A complete GitHub Action starter template that includes:
+- 🔧 Update pull request merge strategies (squash, merge, rebase)
+- ✅ Configure auto-merge settings
+- 🗑️ Enable automatic branch deletion after merge
+- 🔄 Configure pull request branch update suggestions
+- 📊 Enable default CodeQL code scanning
+- 🏷️ Manage repository topics
+- 📝 Support multiple repository input methods:
+  - Comma-separated list
+  - YAML configuration file
+  - All repositories for a user/organization
 
-- ✅ Action boilerplate with inputs/outputs
-- ✅ ESLint configuration for code quality
-- ✅ Jest testing framework with sample tests
-- ✅ GitHub Actions CI/CD workflow
-- ✅ Automated bundling with ncc
-- ✅ Example implementation that works out of the box
-- ✅ GitHub REST API integration with Octokit
-- ✅ Repository statistics fetching example
+## Key Features
 
-## Getting Started
-
-### 1. Use This Template
-
-1. Click "Use this template" to create a new repository
-2. Clone your new repository locally
-3. Run `npm install` to install dependencies
-
-### 2. Customize Your Action
-
-📋 **See [TEMPLATE_CHECKLIST_DELETE_ME.md](./TEMPLATE_CHECKLIST_DELETE_ME.md) for a comprehensive customization guide**
-
-1. Update `package.json` with your action name and details
-2. Update `action.yml` with your action's inputs and outputs
-3. Modify `src/index.js` with your action logic
-4. Update this README with your action's documentation
-5. Update the publish workflow if needed
-
-### 3. Test Your Action
-
-```bash
-npm test              # Run tests
-npm run lint          # Check code quality with ESLint
-npm run format:write  # Run Prettier for formatting
-npm run coverage      # Generate coverage badge
-npm run package       # Bundle for distribution
-npm run all           # Alternatively: Run format, lint, test, coverage, and package
-```
+- **Change Visibility**: Always shows before/after values for all changes, whether in dry-run or regular mode
+- **Dry-Run Mode**: Preview changes without applying them - fetches current settings and shows diffs
+- **Per-Repository Overrides**: Set global defaults in action inputs, override specific settings per repo in YAML
+- **Intelligent Change Detection**: Only updates settings that actually differ from current values
+- **Comprehensive Logging**: Clear output showing exactly what changed or would change
 
 ## Example Usage
 
+### Basic Usage with Repository List
+
 ```yml
-- name: Hello World Action
-  uses: your-username/your-action-name@v1
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
   with:
-    who-to-greet: 'World'
-    include-time: true
-    message-prefix: 'Hello'
-    github-token: ${{ secrets.GITHUB_TOKEN }} # Optional: for repo stats
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2,owner/repo3'
+    allow-squash-merge: true
+    allow-merge-commit: false
+    allow-rebase-merge: true
+    allow-auto-merge: true
+    delete-branch-on-merge: true
+    allow-update-branch: true
+    enable-default-code-scanning: true
+    topics: 'javascript,github-actions,automation'
+```
+
+### Using a YAML Configuration File
+
+Create a `repos.yml` file:
+
+```yaml
+repositories:
+  - owner/repo1
+  - owner/repo2
+  - owner/repo3
+```
+
+Then use it in your workflow:
+
+```yml
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    allow-squash-merge: true
+    delete-branch-on-merge: true
+    enable-default-code-scanning: true
+```
+
+### Using YAML File with Per-Repository Overrides
+
+You can specify repository-specific settings that override the global defaults:
+
+Create a `repos.yml` file:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    allow-squash-merge: false
+    allow-merge-commit: true
+    topics: 'javascript,special-config'
+  - repo: owner/repo2
+    # This repo will use the global defaults from action inputs
+  - repo: owner/repo3
+    enable-default-code-scanning: false
+```
+
+Use in workflow with global defaults:
+
+```yml
+- name: Update Repository Settings with Overrides
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    # Global defaults (can be overridden per-repo in the YAML file)
+    allow-squash-merge: true
+    allow-merge-commit: false
+    allow-rebase-merge: true
+    delete-branch-on-merge: true
+    enable-default-code-scanning: true
+    topics: 'javascript,github-actions,automation'
+```
+
+### Sync Topics Across Repositories
+
+```yml
+- name: Sync Repository Topics
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2,owner/repo3'
+    topics: 'javascript,github-actions,automation'
+```
+
+### Update All Repositories for an Organization
+
+```yml
+- name: Update All Org Repositories
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'all'
+    owner: 'my-organization'
+    allow-squash-merge: true
+    delete-branch-on-merge: true
+    enable-default-code-scanning: true
+    topics: 'company-project,internal'
+```
+
+### Preview Changes with Dry-Run Mode
+
+Preview what changes would be made without actually applying them. The action fetches current repository settings and shows what would change:
+
+```yml
+- name: Preview Repository Settings Changes
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2'
+    allow-squash-merge: true
+    allow-merge-commit: false
+    delete-branch-on-merge: true
+    topics: 'javascript,github-actions'
+    dry-run: true
+```
+
+The dry-run mode:
+
+- Fetches current repository settings via API
+- Compares current values with desired values
+- Logs all differences that would be changed
+- Does not make any actual changes
+
+Example output:
+
+```
+🔍 Would update owner/repo1
+  📝 Settings changes:
+     allow-squash-merge: false → true
+     allow-merge-commit: true → false
+     delete-branch-on-merge: false → true
+  🏷️  Would add topics: javascript, github-actions
+```
+
+### Complete Example with GitHub App Token
+
+> **Recommended:** Use a GitHub App token for better security and rate limits. See [GitHub App Authentication](#github-app-authentication) below.
+
+```yml
+name: Update Repository Settings
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-settings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Update Repository Settings
+        uses: joshjohanning/bulk-github-repo-settings-action@v1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repositories: 'owner/repo1,owner/repo2'
+          allow-squash-merge: true
+          allow-merge-commit: false
+          allow-rebase-merge: true
+          allow-auto-merge: true
+          delete-branch-on-merge: true
+          allow-update-branch: true
+          enable-default-code-scanning: true
+          topics: 'javascript,github-actions,automation'
 ```
 
 ## Action Inputs
 
-| Input            | Description                                      | Required | Default   |
-| ---------------- | ------------------------------------------------ | -------- | --------- |
-| `who-to-greet`   | Who to greet in the message                      | No       | `'World'` |
-| `include-time`   | Whether to include current time in output        | No       | `false`   |
-| `message-prefix` | Prefix for the greeting message                  | No       | `'Hello'` |
-| `github-token`   | GitHub token for API access (enables repo stats) | No       | -         |
+| Input                          | Description                                                                                      | Required | Default |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ | -------- | ------- |
+| `github-token`                 | GitHub token for API access (requires `repo` scope or GitHub App with repository administration) | Yes      | -       |
+| `repositories`                 | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos            | No\*     | -       |
+| `repositories-file`            | Path to YAML file containing repository list                                                     | No\*     | -       |
+| `owner`                        | Owner (user or organization) name - required when using `repositories: "all"`                    | No       | -       |
+| `allow-squash-merge`           | Allow squash merging pull requests                                                               | No       | -       |
+| `allow-merge-commit`           | Allow merge commits for pull requests                                                            | No       | -       |
+| `allow-rebase-merge`           | Allow rebase merging pull requests                                                               | No       | -       |
+| `allow-auto-merge`             | Allow auto-merge on pull requests                                                                | No       | -       |
+| `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                | No       | -       |
+| `allow-update-branch`          | Always suggest updating pull request branches                                                    | No       | -       |
+| `enable-default-code-scanning` | Enable default code scanning setup                                                               | No       | -       |
+| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                 | No       | -       |
+| `dry-run`                      | Preview changes without applying them (logs what would be changed)                               | No       | `false` |
+
+\* Either `repositories` or `repositories-file` must be provided
 
 ## Action Outputs
 
-| Output       | Description                                    |
-| ------------ | ---------------------------------------------- |
-| `message`    | The generated greeting                         |
-| `time`       | Current timestamp (if requested)               |
-| `repo-stats` | Repository statistics JSON (if token provided) |
+| Output                 | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `updated-repositories` | Number of repositories successfully updated      |
+| `failed-repositories`  | Number of repositories that failed to update     |
+| `results`              | JSON array of update results for each repository |
+
+## GitHub App Authentication
+
+**Recommended approach:** Use a GitHub App instead of a Personal Access Token (PAT) for better security, audit logging, and rate limits.
+
+### Why Use a GitHub App?
+
+- ✅ Better security with fine-grained permissions
+- ✅ Higher rate limits
+- ✅ Better audit logging
+- ✅ Tokens expire automatically (1 hour)
+- ✅ Can be scoped to specific repositories or organizations
+
+### Setting Up a GitHub App
+
+1. Create a GitHub App in your organization settings
+2. Grant the app the following permissions:
+   - Repository permissions:
+     - **Administration**: Read and Write (for repository settings)
+     - **Code scanning alerts**: Read and Write (for enabling CodeQL)
+3. Install the app to your organization or specific repositories
+4. Save the App ID and generate/download a private key
+5. Add these as secrets to your repository:
+   - `APP_ID`: Your GitHub App's ID
+   - `APP_PRIVATE_KEY`: Your GitHub App's private key
+
+### Generating a Token
+
+Use the [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) action:
+
+```yml
+- name: Generate GitHub App Token
+  id: app-token
+  uses: actions/create-github-app-token@v1
+  with:
+    app-id: ${{ secrets.APP_ID }}
+    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    owner: ${{ github.repository_owner }}
+
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    # ... other inputs
+```
+
+### Alternative: Using a Personal Access Token
+
+If you can't use a GitHub App, you can use a Personal Access Token (classic) or Fine-grained PAT with `repo` scope:
+
+```yml
+- name: Update Repository Settings
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ secrets.PAT_TOKEN }}
+    # ... other inputs
+```
+
+## YAML File Format
+
+The `repositories-file` uses a `repos` array format that supports both simple repository names and per-repository settings:
+
+### Basic Format
+
+For repositories that use all global defaults from the action inputs:
+
+```yaml
+repos:
+  - owner/repo1
+  - owner/repo2
+  - owner/repo3
+```
+
+Or using the object format:
+
+```yaml
+repos:
+  - repo: owner/repo1
+  - repo: owner/repo2
+  - repo: owner/repo3
+```
+
+### Format with Per-Repository Settings Overrides
+
+You can override specific settings for individual repositories:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    allow-squash-merge: false
+    allow-merge-commit: true
+    allow-rebase-merge: false
+    allow-auto-merge: false
+    delete-branch-on-merge: false
+    allow-update-branch: false
+    enable-default-code-scanning: false
+    topics: 'javascript,custom-topic'
+  - repo: owner/repo2
+    # Uses global defaults from action inputs
+  - repo: owner/repo3
+    topics: 'different-topics,here'
+    # Other settings use global defaults
+```
+
+You can also mix string and object formats in the same file:
+
+```yaml
+repos:
+  - owner/repo1 # String format - uses all global defaults
+  - repo: owner/repo2 # Object format - can include overrides
+    allow-squash-merge: false
+```
+
+### Per-Repository Setting Priority
+
+When using the `repos` array:
+
+1. Settings specified in the YAML file for a specific repository take priority
+2. If a setting is not specified for a repository, the global default from action inputs is used
+3. This allows you to set common defaults in the action and override only specific settings for certain repos
+
+- You must specify at least one setting to update (or enable CodeQL, or provide topics)
+- Settings that are not specified will not be changed
+- Each setting accepts `true` or `false` values
+- Topics will **replace** all existing topics on the repository with the ones you specify
+- Failed repository updates will be logged as warnings but won't fail the entire action
+- The action provides a summary table showing the results for each repository
+- CodeQL scanning may not be available for all repositories (e.g., unsupported languages) - these will show warnings but won't fail the action
+
+### Error Handling and Access Control
+
+- **Access Denied (403)**: If the GitHub App or token doesn't have access to a repository, the action will log a warning and skip that repository without failing the entire workflow
+- **Partial Failures**: If some repositories fail to update, the action continues processing remaining repositories
+- **Clear Error Messages**: All failures include descriptive error messages in the warnings and summary table
+
+Example of access denied handling:
+
+```
+⚠️ Access denied to repository owner/private-repo. The GitHub App or token does not have permission to access this repository. Skipping.
+```
 
 ## Development
-
-This template includes everything you need to start developing GitHub Actions:
 
 ### Development Setup
 
@@ -98,21 +391,14 @@ This template includes everything you need to start developing GitHub Actions:
 You can test the action locally by setting environment variables:
 
 ```bash
-export INPUT_WHO_TO_GREET="Local Dev"
-export INPUT_INCLUDE_TIME="true"
-export INPUT_MESSAGE_PREFIX="Hey"
+export INPUT_GITHUB_TOKEN="ghp_your_token_here"
+export INPUT_REPOSITORIES="owner/repo1,owner/repo2"
+export INPUT_ALLOW_SQUASH_MERGE="true"
+export INPUT_DELETE_BRANCH_ON_MERGE="true"
+export INPUT_ENABLE_CODE_SCANNING="true"
 node src/index.js
 ```
 
-### Project Structure
+## License
 
-```text
-├── src/
-│   └── index.js          # Main action code
-├── __tests__/
-│   └── index.test.js     # Jest tests
-├── dist/                 # Bundled action (generated)
-├── action.yml           # Action metadata
-├── package.json         # Dependencies and scripts
-└── README.md           # This file
-```
+MIT

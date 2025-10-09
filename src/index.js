@@ -1,32 +1,36 @@
 /**
- * Hello World GitHub Action
- * A simple template action that demonstrates common patterns and best practices
+ * Bulk GitHub Repository Settings Action
+ * Update repository settings in bulk for multiple GitHub repositories
  *
  * Local Development & Testing:
  *
  * 1. Set environment variables to simulate GitHub Actions inputs:
- *    export INPUT_WHO_TO_GREET="Local Developer"
- *    export INPUT_INCLUDE_TIME="true"
- *    export INPUT_MESSAGE_PREFIX="Hey"
- *    export INPUT_GITHUB_TOKEN="ghp_your_token_here"  # Optional, for repo stats
+ *    export INPUT_GITHUB_TOKEN="ghp_your_token_here"
+ *    export INPUT_REPOSITORIES="owner/repo1,owner/repo2"
+ *    export INPUT_ALLOW_SQUASH_MERGE="true"
+ *    export INPUT_ALLOW_MERGE_COMMIT="false"
+ *    export INPUT_ALLOW_REBASE_MERGE="true"
+ *    export INPUT_ALLOW_AUTO_MERGE="true"
+ *    export INPUT_DELETE_BRANCH_ON_MERGE="true"
+ *    export INPUT_ALLOW_UPDATE_BRANCH="true"
  *
- * 2. Set GitHub context environment variables (optional, for repo stats):
- *    export GITHUB_REPOSITORY="owner/repo-name"
- *    export GITHUB_REF="refs/heads/main"
- *    export GITHUB_SHA="abc123..."
- *
- * 3. Run locally:
+ * 2. Run locally:
  *    node src/index.js
  *
- * Example one-liner for testing:
- *    INPUT_WHO_TO_GREET="Local Dev" INPUT_INCLUDE_TIME="true" INPUT_MESSAGE_PREFIX="Hi" node src/index.js
+ * Example with YAML file:
+ *    export INPUT_REPOSITORIES_FILE="repos.yml"
+ *    node src/index.js
  *
- * Note: Without GITHUB_REPOSITORY set, repo stats won't be fetched even with a token
+ * Example with all repos:
+ *    export INPUT_REPOSITORIES="all"
+ *    export INPUT_OWNER="your-org-or-user"
+ *    node src/index.js
  */
 
 import * as core from '@actions/core';
-import * as github from '@actions/github';
 import { Octokit } from '@octokit/rest';
+import * as fs from 'fs';
+import * as yaml from 'js-yaml';
 
 /**
  * Get input value (works reliably in both GitHub Actions and local environments)
@@ -49,60 +53,355 @@ function getInput(name) {
 /**
  * Convert string input to boolean (more permissive than core.getBooleanInput)
  * @param {string} name - Input name
- * @returns {boolean} Boolean value
+ * @returns {boolean|null} Boolean value or null if not set
  */
 function getBooleanInput(name) {
   const input = getInput(name).toLowerCase();
+  if (!input) return null;
   return input === 'true' || input === '1' || input === 'yes';
 }
 
 /**
- * Get current timestamp in ISO format
- * @returns {string} Current timestamp
+ * Parse repository list from various input sources
+ * @param {string} repositories - Comma-separated list or "all"
+ * @param {string} repositoriesFile - Path to YAML file
+ * @param {string} owner - Owner name (for "all" option)
+ * @param {Octokit} octokit - Octokit instance
+ * @returns {Promise<Array>} Array of repository objects with settings
  */
-export function getCurrentTime() {
-  return new Date().toISOString();
+export async function parseRepositories(repositories, repositoriesFile, owner, octokit) {
+  let repoList = [];
+
+  // Parse from YAML file if provided
+  if (repositoriesFile) {
+    try {
+      const fileContent = fs.readFileSync(repositoriesFile, 'utf8');
+      const data = yaml.load(fileContent);
+
+      // Only support repos array format
+      if (Array.isArray(data.repos)) {
+        repoList = data.repos.map(item => {
+          if (typeof item === 'string') {
+            // Simple string format: just repo name
+            return { repo: item };
+          } else if (typeof item === 'object' && item.repo) {
+            // Object format with repo and optional settings
+            return item;
+          } else {
+            throw new Error('Each item in repos array must be a string or object with "repo" property');
+          }
+        });
+      } else {
+        throw new Error('YAML file must contain a "repos" array');
+      }
+    } catch (error) {
+      throw new Error(`Failed to parse repositories file: ${error.message}`);
+    }
+  }
+  // Get all repositories for owner
+  else if (repositories === 'all') {
+    if (!owner) {
+      throw new Error('Owner must be specified when using "all" for repositories');
+    }
+
+    try {
+      core.info(`Fetching all repositories for ${owner}...`);
+      const repos = [];
+      let page = 1;
+      let hasMore = true;
+
+      // Try to fetch as organization first, fall back to user if it fails
+      let isOrg = false;
+      try {
+        await octokit.rest.orgs.get({ org: owner });
+        isOrg = true;
+      } catch {
+        // Not an org or no access, treat as user
+        isOrg = false;
+      }
+
+      while (hasMore) {
+        const { data } = isOrg
+          ? await octokit.rest.repos.listForOrg({
+              org: owner,
+              type: 'all',
+              per_page: 100,
+              page
+            })
+          : await octokit.rest.repos.listForUser({
+              username: owner,
+              type: 'all',
+              per_page: 100,
+              page
+            });
+
+        if (data.length === 0) {
+          hasMore = false;
+        } else {
+          repos.push(...data.map(r => ({ repo: r.full_name })));
+          page++;
+        }
+      }
+
+      repoList = repos;
+      core.info(`Found ${repoList.length} repositories`);
+    } catch (error) {
+      throw new Error(`Failed to fetch repositories for ${owner}: ${error.message}`);
+    }
+  }
+  // Parse from comma-separated list
+  else if (repositories) {
+    repoList = repositories
+      .split(',')
+      .map(r => r.trim())
+      .filter(r => r.length > 0)
+      .map(repo => ({ repo }));
+  }
+
+  if (repoList.length === 0) {
+    throw new Error('No repositories specified. Use repositories, repositories-file, or repositories="all" with owner');
+  }
+
+  return repoList;
 }
 
 /**
- * Create a greeting message
- * @param {string} prefix - Message prefix (e.g., "Hello")
- * @param {string} name - Name to greet
- * @returns {string} Formatted greeting
+ * Update repository settings
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Object} settings - Settings to update
+ * @param {boolean} enableCodeScanning - Enable default CodeQL scanning
+ * @param {Array<string>|null} topics - Topics to set on repository
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
  */
-export function createGreeting(prefix, name) {
-  return `${prefix}, ${name}!`;
-}
+export async function updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics, dryRun) {
+  const [owner, repoName] = repo.split('/');
 
-/**
- * Fetch repository statistics using GitHub API
- * @param {string} token - GitHub token
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @returns {Object} Repository statistics
- */
-export async function getRepoStats(token, owner, repo) {
-  try {
-    const octokit = new Octokit({ auth: token });
-
-    const { data: repoData } = await octokit.rest.repos.get({
-      owner,
-      repo
-    });
-
+  if (!owner || !repoName) {
     return {
-      name: repoData.full_name,
-      stars: repoData.stargazers_count,
-      forks: repoData.forks_count,
-      issues: repoData.open_issues_count,
-      language: repoData.language,
-      size: repoData.size,
-      created: repoData.created_at,
-      updated: repoData.updated_at
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"'
     };
+  }
+
+  try {
+    // Fetch current repository settings to show what's changing
+    let currentRepo;
+    try {
+      const response = await octokit.rest.repos.get({
+        owner,
+        repo: repoName
+      });
+      currentRepo = response.data;
+    } catch (error) {
+      // Handle 403 (Forbidden) - likely means the app doesn't have access
+      if (error.status === 403) {
+        core.warning(
+          `Access denied to repository ${repo}. The GitHub App or token does not have permission to access this repository. Skipping.`
+        );
+        return {
+          repository: repo,
+          success: false,
+          error: 'Access denied - GitHub App or token does not have permission to access this repository',
+          accessDenied: true,
+          dryRun
+        };
+      }
+      // Re-throw other errors
+      throw error;
+    }
+
+    const updateParams = {
+      owner,
+      repo: repoName
+    };
+
+    const changes = [];
+    const currentSettings = {};
+
+    // Only add settings that are explicitly set (not null) and track changes
+    if (settings.allow_squash_merge !== null) {
+      updateParams.allow_squash_merge = settings.allow_squash_merge;
+      currentSettings.allow_squash_merge = currentRepo.allow_squash_merge;
+      if (currentRepo.allow_squash_merge !== settings.allow_squash_merge) {
+        changes.push({
+          setting: 'allow_squash_merge',
+          from: currentRepo.allow_squash_merge,
+          to: settings.allow_squash_merge
+        });
+      }
+    }
+    if (settings.allow_merge_commit !== null) {
+      updateParams.allow_merge_commit = settings.allow_merge_commit;
+      currentSettings.allow_merge_commit = currentRepo.allow_merge_commit;
+      if (currentRepo.allow_merge_commit !== settings.allow_merge_commit) {
+        changes.push({
+          setting: 'allow_merge_commit',
+          from: currentRepo.allow_merge_commit,
+          to: settings.allow_merge_commit
+        });
+      }
+    }
+    if (settings.allow_rebase_merge !== null) {
+      updateParams.allow_rebase_merge = settings.allow_rebase_merge;
+      currentSettings.allow_rebase_merge = currentRepo.allow_rebase_merge;
+      if (currentRepo.allow_rebase_merge !== settings.allow_rebase_merge) {
+        changes.push({
+          setting: 'allow_rebase_merge',
+          from: currentRepo.allow_rebase_merge,
+          to: settings.allow_rebase_merge
+        });
+      }
+    }
+    if (settings.allow_auto_merge !== null) {
+      updateParams.allow_auto_merge = settings.allow_auto_merge;
+      currentSettings.allow_auto_merge = currentRepo.allow_auto_merge;
+      if (currentRepo.allow_auto_merge !== settings.allow_auto_merge) {
+        changes.push({
+          setting: 'allow_auto_merge',
+          from: currentRepo.allow_auto_merge,
+          to: settings.allow_auto_merge
+        });
+      }
+    }
+    if (settings.delete_branch_on_merge !== null) {
+      updateParams.delete_branch_on_merge = settings.delete_branch_on_merge;
+      currentSettings.delete_branch_on_merge = currentRepo.delete_branch_on_merge;
+      if (currentRepo.delete_branch_on_merge !== settings.delete_branch_on_merge) {
+        changes.push({
+          setting: 'delete_branch_on_merge',
+          from: currentRepo.delete_branch_on_merge,
+          to: settings.delete_branch_on_merge
+        });
+      }
+    }
+    if (settings.allow_update_branch !== null) {
+      updateParams.allow_update_branch = settings.allow_update_branch;
+      currentSettings.allow_update_branch = currentRepo.allow_update_branch;
+      if (currentRepo.allow_update_branch !== settings.allow_update_branch) {
+        changes.push({
+          setting: 'allow_update_branch',
+          from: currentRepo.allow_update_branch,
+          to: settings.allow_update_branch
+        });
+      }
+    }
+
+    const result = {
+      repository: repo,
+      success: true,
+      settings: updateParams,
+      currentSettings,
+      changes,
+      dryRun
+    };
+
+    // Update repository settings (skip in dry-run mode)
+    if (!dryRun && changes.length > 0) {
+      await octokit.rest.repos.update(updateParams);
+    }
+
+    // Handle topics
+    if (topics !== null) {
+      try {
+        // Fetch current topics
+        const { data: topicsData } = await octokit.rest.repos.getAllTopics({
+          owner,
+          repo: repoName
+        });
+        const currentTopics = topicsData.names || [];
+        result.currentTopics = currentTopics;
+
+        // Check if topics are different (order-independent comparison)
+        const currentTopicsSet = new Set(currentTopics);
+        const newTopicsSet = new Set(topics);
+
+        const topicsToAdd = topics.filter(topic => !currentTopicsSet.has(topic));
+        const topicsToRemove = currentTopics.filter(topic => !newTopicsSet.has(topic));
+
+        const topicsChanged = topicsToAdd.length > 0 || topicsToRemove.length > 0;
+
+        if (topicsChanged) {
+          result.topicsChange = {
+            from: currentTopics,
+            to: topics,
+            added: topicsToAdd,
+            removed: topicsToRemove
+          };
+
+          if (!dryRun) {
+            await octokit.rest.repos.replaceAllTopics({
+              owner,
+              repo: repoName,
+              names: topics
+            });
+            result.topicsUpdated = true;
+          } else {
+            result.topicsWouldUpdate = true;
+          }
+        } else {
+          result.topicsUnchanged = true;
+        }
+        result.topics = topics;
+      } catch (error) {
+        result.topicsWarning = `Could not process topics: ${error.message}`;
+      }
+    }
+
+    // Handle CodeQL scanning
+    if (enableCodeScanning) {
+      try {
+        // Try to get current code scanning setup
+        let currentCodeScanning = null;
+        try {
+          const { data: codeScanningData } = await octokit.rest.codeScanning.getDefaultSetup({
+            owner,
+            repo: repoName
+          });
+          currentCodeScanning = codeScanningData.state;
+        } catch {
+          // Default setup might not exist yet
+          currentCodeScanning = 'not-configured';
+        }
+
+        result.currentCodeScanning = currentCodeScanning;
+
+        if (currentCodeScanning !== 'configured') {
+          result.codeScanningChange = {
+            from: currentCodeScanning,
+            to: 'configured'
+          };
+
+          if (!dryRun) {
+            await octokit.rest.codeScanning.updateDefaultSetup({
+              owner,
+              repo: repoName,
+              state: 'configured',
+              query_suite: 'default'
+            });
+            result.codeScanningEnabled = true;
+          } else {
+            result.codeScanningWouldEnable = true;
+          }
+        } else {
+          result.codeScanningUnchanged = true;
+        }
+      } catch (error) {
+        // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
+        result.codeScanningWarning = `Could not process CodeQL: ${error.message}`;
+      }
+    }
+
+    return result;
   } catch (error) {
-    core.warning(`Failed to fetch repository stats: ${error.message}`);
-    return null;
+    return {
+      repository: repo,
+      success: false,
+      error: error.message,
+      dryRun
+    };
   }
 }
 
@@ -111,86 +410,249 @@ export async function getRepoStats(token, owner, repo) {
  */
 export async function run() {
   try {
-    // Get inputs from action.yml
-    const whoToGreet = getInput('who-to-greet') || 'World';
-    const includeTime = getBooleanInput('include-time');
-    const messagePrefix = getInput('message-prefix') || 'Hello';
+    // Get inputs
     const githubToken = getInput('github-token');
+    const repositories = getInput('repositories');
+    const repositoriesFile = getInput('repositories-file');
+    const owner = getInput('owner');
 
-    core.info(`Starting Hello World Action...`);
-    core.info(`Who to greet: ${whoToGreet}`);
-    core.info(`Message prefix: ${messagePrefix}`);
-    core.info(`Include time: ${includeTime}`);
-    core.info(`GitHub token provided: ${githubToken ? 'Yes' : 'No'}`);
+    // Get settings inputs
+    const settings = {
+      allow_squash_merge: getBooleanInput('allow-squash-merge'),
+      allow_merge_commit: getBooleanInput('allow-merge-commit'),
+      allow_rebase_merge: getBooleanInput('allow-rebase-merge'),
+      allow_auto_merge: getBooleanInput('allow-auto-merge'),
+      delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
+      allow_update_branch: getBooleanInput('allow-update-branch')
+    };
 
-    // Create the greeting message
-    const greeting = createGreeting(messagePrefix, whoToGreet);
+    const enableCodeScanning = getBooleanInput('enable-default-code-scanning');
+    const dryRun = getBooleanInput('dry-run');
 
-    // Log the greeting
-    core.info(`Generated greeting: ${greeting}`);
+    // Parse topics if provided
+    const topicsInput = getInput('topics');
+    const topics = topicsInput
+      ? topicsInput
+          .split(',')
+          .map(t => t.trim())
+          .filter(t => t.length > 0)
+      : null;
 
-    // Set the greeting as an output
-    core.setOutput('message', greeting);
+    core.info('Starting Bulk GitHub Repository Settings Action...');
 
-    // Optionally include timestamp
-    let currentTime = null;
-    if (includeTime) {
-      currentTime = getCurrentTime();
-      core.info(`Current time: ${currentTime}`);
-      core.setOutput('time', currentTime);
+    if (dryRun) {
+      core.info('🔍 DRY-RUN MODE: No changes will be applied');
     }
 
-    // Optionally fetch repository stats if token is provided
-    let repoStats = null;
-    if (githubToken && github.context.repo.owner && github.context.repo.repo) {
-      core.info('Fetching repository statistics...');
-      repoStats = await getRepoStats(githubToken, github.context.repo.owner, github.context.repo.repo);
+    if (!githubToken) {
+      throw new Error('github-token is required');
+    }
 
-      if (repoStats) {
-        core.info(`Repository: ${repoStats.name}`);
-        core.info(`⭐ Stars: ${repoStats.stars}`);
-        core.info(`🍴 Forks: ${repoStats.forks}`);
-        core.info(`🐛 Open Issues: ${repoStats.issues}`);
-        core.info(`📝 Language: ${repoStats.language || 'Unknown'}`);
+    // Check if any settings are specified
+    const hasSettings = Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null;
+    if (!hasSettings) {
+      throw new Error(
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided)'
+      );
+    }
 
-        core.setOutput('repo-stats', JSON.stringify(repoStats));
+    // Initialize Octokit
+    const octokit = new Octokit({ auth: githubToken });
+
+    // Parse repository list
+    const repoList = await parseRepositories(repositories, repositoriesFile, owner, octokit);
+
+    core.info(`Processing ${repoList.length} repositories...`);
+    core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);
+    if (enableCodeScanning) {
+      core.info('CodeQL scanning will be enabled');
+    }
+    if (topics !== null) {
+      core.info(`Topics to set: ${topics.join(', ')}`);
+    }
+
+    // Update repositories
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const repoConfig of repoList) {
+      const repo = repoConfig.repo;
+      core.info(`Updating ${repo}...`);
+
+      // Merge global settings with repo-specific overrides
+      const repoSettings = {
+        allow_squash_merge:
+          repoConfig['allow-squash-merge'] !== undefined
+            ? repoConfig['allow-squash-merge']
+            : settings.allow_squash_merge,
+        allow_merge_commit:
+          repoConfig['allow-merge-commit'] !== undefined
+            ? repoConfig['allow-merge-commit']
+            : settings.allow_merge_commit,
+        allow_rebase_merge:
+          repoConfig['allow-rebase-merge'] !== undefined
+            ? repoConfig['allow-rebase-merge']
+            : settings.allow_rebase_merge,
+        allow_auto_merge:
+          repoConfig['allow-auto-merge'] !== undefined ? repoConfig['allow-auto-merge'] : settings.allow_auto_merge,
+        delete_branch_on_merge:
+          repoConfig['delete-branch-on-merge'] !== undefined
+            ? repoConfig['delete-branch-on-merge']
+            : settings.delete_branch_on_merge,
+        allow_update_branch:
+          repoConfig['allow-update-branch'] !== undefined
+            ? repoConfig['allow-update-branch']
+            : settings.allow_update_branch
+      };
+
+      const repoEnableCodeScanning =
+        repoConfig['enable-default-code-scanning'] !== undefined
+          ? repoConfig['enable-default-code-scanning']
+          : enableCodeScanning;
+
+      // Handle repo-specific topics
+      let repoTopics = topics;
+      if (repoConfig.topics !== undefined) {
+        if (typeof repoConfig.topics === 'string') {
+          repoTopics = repoConfig.topics
+            .split(',')
+            .map(t => t.trim())
+            .filter(t => t.length > 0);
+        } else if (Array.isArray(repoConfig.topics)) {
+          repoTopics = repoConfig.topics;
+        } else {
+          repoTopics = null;
+        }
+      }
+
+      const result = await updateRepositorySettings(
+        octokit,
+        repo,
+        repoSettings,
+        repoEnableCodeScanning,
+        repoTopics,
+        dryRun
+      );
+      results.push(result);
+
+      if (result.success) {
+        successCount++;
+        if (dryRun) {
+          core.info(`🔍 Would update ${repo}`);
+        } else {
+          core.info(`✅ Successfully updated ${repo}`);
+        }
+
+        // Log repository setting changes
+        if (result.changes && result.changes.length > 0) {
+          core.info(`  📝 Settings changes:`);
+          for (const change of result.changes) {
+            const settingName = change.setting.replace(/_/g, '-');
+            if (dryRun) {
+              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
+            } else {
+              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
+            }
+          }
+        }
+
+        // Log topics changes
+        if (result.topicsChange) {
+          if (result.topicsChange.added.length > 0) {
+            const addedTopics = result.topicsChange.added.join(', ');
+            if (dryRun) {
+              core.info(`  🏷️  Would add topics: ${addedTopics}`);
+            } else {
+              core.info(`  🏷️  Topics added: ${addedTopics}`);
+            }
+          }
+          if (result.topicsChange.removed.length > 0) {
+            const removedTopics = result.topicsChange.removed.join(', ');
+            if (dryRun) {
+              core.info(`  🏷️  Would remove topics: ${removedTopics}`);
+            } else {
+              core.info(`  🏷️  Topics removed: ${removedTopics}`);
+            }
+          }
+        } else if (result.topicsUnchanged) {
+          core.info(`  🏷️  Topics unchanged: ${result.topics.join(', ')}`);
+        }
+
+        if (result.topicsWarning) {
+          core.warning(`  ⚠️ ${result.topicsWarning}`);
+        }
+
+        // Log code scanning changes
+        if (result.codeScanningChange) {
+          if (dryRun) {
+            core.info(
+              `  📊 Would enable CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+            );
+          } else {
+            core.info(
+              `  📊 CodeQL scanning enabled: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+            );
+          }
+        } else if (result.codeScanningUnchanged) {
+          core.info(`  📊 CodeQL scanning unchanged: already configured`);
+        }
+
+        if (result.codeScanningWarning) {
+          core.warning(`  ⚠️ ${result.codeScanningWarning}`);
+        }
+
+        // Log if no changes were needed
+        if ((!result.changes || result.changes.length === 0) && !result.topicsChange && !result.codeScanningChange) {
+          core.info(`  ℹ️  No changes needed - all settings already match desired state`);
+        }
+      } else {
+        failureCount++;
+        core.warning(`❌ Failed to update ${repo}: ${result.error}`);
       }
     }
 
-    // Example of setting a secret (this won't be logged)
-    core.setSecret('my-secret-value');
+    // Set outputs
+    core.setOutput('updated-repositories', successCount.toString());
+    core.setOutput('failed-repositories', failureCount.toString());
+    core.setOutput('results', JSON.stringify(results));
 
-    // Create enhanced summary with repo stats if available
+    // Create summary
     const summaryTable = [
       [
-        { data: 'Field', header: true },
-        { data: 'Value', header: true }
+        { data: 'Repository', header: true },
+        { data: 'Status', header: true },
+        { data: 'Details', header: true }
       ],
-      ['Greeting', greeting],
-      ...(includeTime ? [['Timestamp', currentTime]] : []),
-      ...(repoStats
-        ? [
-            ['Repository', repoStats.name],
-            ['⭐ Stars', repoStats.stars.toString()],
-            ['🍴 Forks', repoStats.forks.toString()],
-            ['🐛 Open Issues', repoStats.issues.toString()],
-            ['📝 Language', repoStats.language || 'Unknown']
-          ]
-        : [])
+      ...results.map(r => [r.repository, r.success ? '✅ Success' : '❌ Failed', r.success ? 'Updated' : r.error])
     ];
 
-    // Create summary (only works in GitHub Actions environment)
     try {
-      await core.summary.addHeading('Hello World Action Results').addTable(summaryTable).write();
+      await core.summary
+        .addHeading('Bulk Repository Settings Update Results')
+        .addRaw(`\n**Total Repositories:** ${repoList.length}`)
+        .addRaw(`\n**Successful:** ${successCount}`)
+        .addRaw(`\n**Failed:** ${failureCount}\n\n`)
+        .addTable(summaryTable)
+        .write();
     } catch {
-      // Fallback: write table to console for local development
-      core.info('📊 Hello World Action Results:');
-      for (const [field, value] of summaryTable.slice(1)) {
-        core.info(`   ${field}: ${value}`);
+      // Fallback for local development
+      core.info('📊 Bulk Repository Settings Update Results:');
+      core.info(`Total Repositories: ${repoList.length}`);
+      core.info(`Successful: ${successCount}`);
+      core.info(`Failed: ${failureCount}`);
+      for (const result of results) {
+        core.info(
+          `  ${result.repository}: ${result.success ? '✅' : '❌'} ${result.success ? 'Updated' : result.error}`
+        );
       }
     }
 
     core.info('✅ Action completed successfully!');
+
+    if (failureCount > 0) {
+      core.warning(`${failureCount} repositories failed to update`);
+    }
   } catch (error) {
     core.setFailed(`Action failed with error: ${error.message}`);
   }
