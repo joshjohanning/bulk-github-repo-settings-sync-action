@@ -39,6 +39,9 @@ inputs:
   enable-code-scanning:
     description: 'Enable default CodeQL code scanning setup'
     required: false
+  topics:
+    description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
+    required: false
 
 outputs:
   updated-repositories:

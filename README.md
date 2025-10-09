@@ -9,6 +9,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🗑️ Enable automatic branch deletion after merge
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
+- 🏷️ Manage repository topics
 - 📝 Support multiple repository input methods:
   - Comma-separated list
   - YAML configuration file
@@ -31,6 +32,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     delete-branch-on-merge: true
     allow-update-branch: true
     enable-code-scanning: true
+    topics: 'javascript,github-actions,automation'
 ```
 
 ### Using a YAML Configuration File
@@ -57,6 +59,17 @@ Then use it in your workflow:
     enable-code-scanning: true
 ```
 
+### Sync Topics Across Repositories
+
+```yml
+- name: Sync Repository Topics
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2,owner/repo3'
+    topics: 'javascript,github-actions,automation'
+```
+
 ### Update All Repositories for an Organization
 
 ```yml
@@ -69,6 +82,7 @@ Then use it in your workflow:
     allow-squash-merge: true
     delete-branch-on-merge: true
     enable-code-scanning: true
+    topics: 'company-project,internal'
 ```
 
 ### Complete Example with GitHub App Token
@@ -105,6 +119,7 @@ jobs:
           delete-branch-on-merge: true
           allow-update-branch: true
           enable-code-scanning: true
+          topics: 'javascript,github-actions,automation'
 ```
 
 ## Action Inputs
@@ -122,6 +137,7 @@ jobs:
 | `delete-branch-on-merge` | Automatically delete head branches after pull requests are merged                                | No       | -       |
 | `allow-update-branch`    | Always suggest updating pull request branches                                                    | No       | -       |
 | `enable-code-scanning`   | Enable default CodeQL code scanning setup                                                        | No       | -       |
+| `topics`                 | Comma-separated list of topics to set on repositories (replaces existing topics)                 | No       | -       |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -213,9 +229,10 @@ repositories:
 
 ## Notes
 
-- You must specify at least one setting to update (or enable CodeQL)
+- You must specify at least one setting to update (or enable CodeQL, or provide topics)
 - Settings that are not specified will not be changed
 - Each setting accepts `true` or `false` values
+- Topics will **replace** all existing topics on the repository with the ones you specify
 - Failed repository updates will be logged as warnings but won't fail the entire action
 - The action provides a summary table showing the results for each repository
 - CodeQL scanning may not be available for all repositories (e.g., unsupported languages) - these will show warnings but won't fail the action
