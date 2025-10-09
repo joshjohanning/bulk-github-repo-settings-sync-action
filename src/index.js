@@ -67,7 +67,7 @@ function getBooleanInput(name) {
  * @param {string} repositoriesFile - Path to YAML file
  * @param {string} owner - Owner name (for "all" option)
  * @param {Octokit} octokit - Octokit instance
- * @returns {Promise<string[]>} Array of repository names in "owner/repo" format
+ * @returns {Promise<Array>} Array of repository objects with settings
  */
 export async function parseRepositories(repositories, repositoriesFile, owner, octokit) {
   let repoList = [];
@@ -78,12 +78,27 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
       const fileContent = fs.readFileSync(repositoriesFile, 'utf8');
       const data = yaml.load(fileContent);
 
-      if (Array.isArray(data.repositories)) {
-        repoList = data.repositories;
+      // Support new format with repos array containing objects
+      if (Array.isArray(data.repos)) {
+        repoList = data.repos.map(item => {
+          if (typeof item === 'string') {
+            // Simple string format: just repo name
+            return { repo: item };
+          } else if (typeof item === 'object' && item.repo) {
+            // Object format with repo and optional settings
+            return item;
+          } else {
+            throw new Error('Each item in repos array must be a string or object with "repo" property');
+          }
+        });
+      }
+      // Support legacy format with repositories array (strings only)
+      else if (Array.isArray(data.repositories)) {
+        repoList = data.repositories.map(repo => ({ repo }));
       } else if (Array.isArray(data)) {
-        repoList = data;
+        repoList = data.map(repo => ({ repo }));
       } else {
-        throw new Error('YAML file must contain a "repositories" array or be an array of repositories');
+        throw new Error('YAML file must contain a "repos" array, "repositories" array, or be an array of repositories');
       }
     } catch (error) {
       throw new Error(`Failed to parse repositories file: ${error.message}`);
@@ -129,7 +144,7 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
         if (data.length === 0) {
           hasMore = false;
         } else {
-          repos.push(...data.map(repo => repo.full_name));
+          repos.push(...data.map(r => ({ repo: r.full_name })));
           page++;
         }
       }
@@ -145,7 +160,8 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
     repoList = repositories
       .split(',')
       .map(r => r.trim())
-      .filter(r => r.length > 0);
+      .filter(r => r.length > 0)
+      .map(repo => ({ repo }));
   }
 
   if (repoList.length === 0) {
@@ -317,9 +333,55 @@ export async function run() {
     let successCount = 0;
     let failureCount = 0;
 
-    for (const repo of repoList) {
+    for (const repoConfig of repoList) {
+      const repo = repoConfig.repo;
       core.info(`Updating ${repo}...`);
-      const result = await updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics);
+
+      // Merge global settings with repo-specific overrides
+      const repoSettings = {
+        allow_squash_merge:
+          repoConfig['allow-squash-merge'] !== undefined
+            ? repoConfig['allow-squash-merge']
+            : settings.allow_squash_merge,
+        allow_merge_commit:
+          repoConfig['allow-merge-commit'] !== undefined
+            ? repoConfig['allow-merge-commit']
+            : settings.allow_merge_commit,
+        allow_rebase_merge:
+          repoConfig['allow-rebase-merge'] !== undefined
+            ? repoConfig['allow-rebase-merge']
+            : settings.allow_rebase_merge,
+        allow_auto_merge:
+          repoConfig['allow-auto-merge'] !== undefined ? repoConfig['allow-auto-merge'] : settings.allow_auto_merge,
+        delete_branch_on_merge:
+          repoConfig['delete-branch-on-merge'] !== undefined
+            ? repoConfig['delete-branch-on-merge']
+            : settings.delete_branch_on_merge,
+        allow_update_branch:
+          repoConfig['allow-update-branch'] !== undefined
+            ? repoConfig['allow-update-branch']
+            : settings.allow_update_branch
+      };
+
+      const repoEnableCodeScanning =
+        repoConfig['enable-code-scanning'] !== undefined ? repoConfig['enable-code-scanning'] : enableCodeScanning;
+
+      // Handle repo-specific topics
+      let repoTopics = topics;
+      if (repoConfig.topics !== undefined) {
+        if (typeof repoConfig.topics === 'string') {
+          repoTopics = repoConfig.topics
+            .split(',')
+            .map(t => t.trim())
+            .filter(t => t.length > 0);
+        } else if (Array.isArray(repoConfig.topics)) {
+          repoTopics = repoConfig.topics;
+        } else {
+          repoTopics = null;
+        }
+      }
+
+      const result = await updateRepositorySettings(octokit, repo, repoSettings, repoEnableCodeScanning, repoTopics);
       results.push(result);
 
       if (result.success) {

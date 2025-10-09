@@ -104,17 +104,17 @@ describe('Bulk GitHub Repository Settings Action', () => {
   describe('parseRepositories', () => {
     test('should parse comma-separated repository list', async () => {
       const result = await parseRepositories('owner/repo1,owner/repo2', '', '', mockOctokit);
-      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
     });
 
-    test('should parse repository list from YAML file', async () => {
+    test('should parse repository list from YAML file (legacy format)', async () => {
       mockFs.readFileSync.mockReturnValue('repositories:\n  - owner/repo1\n  - owner/repo2');
       mockYaml.load.mockReturnValue({
         repositories: ['owner/repo1', 'owner/repo2']
       });
 
       const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
-      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
     });
 
     test('should parse repository list from YAML array', async () => {
@@ -122,7 +122,39 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockYaml.load.mockReturnValue(['owner/repo1', 'owner/repo2']);
 
       const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
-      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
+    });
+
+    test('should parse repository list from YAML with repos array (new format)', async () => {
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n  - repo: owner/repo2');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
+    });
+
+    test('should parse repository list with settings overrides', async () => {
+      mockFs.readFileSync.mockReturnValue(
+        'repos:\n  - repo: owner/repo1\n    allow-squash-merge: false\n  - repo: owner/repo2'
+      );
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false }, { repo: 'owner/repo2' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1', 'allow-squash-merge': false }, { repo: 'owner/repo2' }]);
+    });
+
+    test('should handle mixed string and object format in repos array', async () => {
+      mockFs.readFileSync.mockReturnValue('repos:\n  - owner/repo1\n  - repo: owner/repo2');
+      mockYaml.load.mockReturnValue({
+        repos: ['owner/repo1', { repo: 'owner/repo2' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
     });
 
     test('should fetch all repositories for owner', async () => {
@@ -135,7 +167,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const result = await parseRepositories('all', '', 'owner', mockOctokit);
-      expect(result).toEqual(['owner/repo1', 'owner/repo2']);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
       expect(mockOctokit.rest.repos.listForUser).toHaveBeenCalled();
     });
 
@@ -149,7 +181,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const result = await parseRepositories('all', '', 'my-org', mockOctokit);
-      expect(result).toEqual(['my-org/repo1', 'my-org/repo2']);
+      expect(result).toEqual([{ repo: 'my-org/repo1' }, { repo: 'my-org/repo2' }]);
       expect(mockOctokit.rest.repos.listForOrg).toHaveBeenCalled();
     });
 

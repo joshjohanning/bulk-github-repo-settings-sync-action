@@ -59,6 +59,41 @@ Then use it in your workflow:
     enable-code-scanning: true
 ```
 
+### Using YAML File with Per-Repository Overrides
+
+You can specify repository-specific settings that override the global defaults:
+
+Create a `repos.yml` file:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    allow-squash-merge: false
+    allow-merge-commit: true
+    topics: 'javascript,special-config'
+  - repo: owner/repo2
+    # This repo will use the global defaults from action inputs
+  - repo: owner/repo3
+    enable-code-scanning: false
+```
+
+Use in workflow with global defaults:
+
+```yml
+- name: Update Repository Settings with Overrides
+  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    # Global defaults (can be overridden per-repo in the YAML file)
+    allow-squash-merge: true
+    allow-merge-commit: false
+    allow-rebase-merge: true
+    delete-branch-on-merge: true
+    enable-code-scanning: true
+    topics: 'javascript,github-actions,automation'
+```
+
 ### Sync Topics Across Repositories
 
 ```yml
@@ -208,9 +243,9 @@ If you can't use a GitHub App, you can use a Personal Access Token (classic) or 
 
 ## YAML File Format
 
-The `repositories-file` can be in one of two formats:
+The `repositories-file` supports multiple formats:
 
-### Format 1: Array with `repositories` key
+### Format 1: Simple list with `repositories` key (Legacy)
 
 ```yaml
 repositories:
@@ -219,13 +254,52 @@ repositories:
   - owner/repo3
 ```
 
-### Format 2: Simple array
+### Format 2: Simple array (Legacy)
 
 ```yaml
 - owner/repo1
 - owner/repo2
 - owner/repo3
 ```
+
+### Format 3: List with `repos` key and per-repository settings (Recommended)
+
+This format allows you to specify settings for individual repositories that override the global defaults from the action inputs:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    allow-squash-merge: false
+    allow-merge-commit: true
+    allow-rebase-merge: false
+    allow-auto-merge: false
+    delete-branch-on-merge: false
+    allow-update-branch: false
+    enable-code-scanning: false
+    topics: 'javascript,custom-topic'
+  - repo: owner/repo2
+    # Uses global defaults from action inputs
+  - repo: owner/repo3
+    topics: 'different-topics,here'
+    # Other settings use global defaults
+```
+
+You can also use strings for repositories that should use all defaults:
+
+```yaml
+repos:
+  - owner/repo1 # String format - uses all global defaults
+  - repo: owner/repo2 # Object format - can include overrides
+    allow-squash-merge: false
+```
+
+### Per-Repository Setting Priority
+
+When using Format 3 with the `repos` array:
+
+1. Settings specified in the YAML file for a specific repository take priority
+2. If a setting is not specified for a repository, the global default from action inputs is used
+3. This allows you to set common defaults in the action and override only specific settings for certain repos
 
 ## Notes
 
