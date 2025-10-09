@@ -92,13 +92,13 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
           }
         });
       }
-      // Support legacy format with repositories array (strings only)
+      // Also support repositories array and top-level array for backwards compatibility
       else if (Array.isArray(data.repositories)) {
         repoList = data.repositories.map(repo => ({ repo }));
       } else if (Array.isArray(data)) {
         repoList = data.map(repo => ({ repo }));
       } else {
-        throw new Error('YAML file must contain a "repos" array, "repositories" array, or be an array of repositories');
+        throw new Error('YAML file must contain a "repos" array');
       }
     } catch (error) {
       throw new Error(`Failed to parse repositories file: ${error.message}`);

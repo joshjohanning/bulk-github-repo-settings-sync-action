@@ -243,28 +243,31 @@ If you can't use a GitHub App, you can use a Personal Access Token (classic) or 
 
 ## YAML File Format
 
-The `repositories-file` supports multiple formats:
+The `repositories-file` uses a `repos` array format that supports both simple repository names and per-repository settings:
 
-### Format 1: Simple list with `repositories` key (Legacy)
+### Basic Format
+
+For repositories that use all global defaults from the action inputs:
 
 ```yaml
-repositories:
+repos:
   - owner/repo1
   - owner/repo2
   - owner/repo3
 ```
 
-### Format 2: Simple array (Legacy)
+Or using the object format:
 
 ```yaml
-- owner/repo1
-- owner/repo2
-- owner/repo3
+repos:
+  - repo: owner/repo1
+  - repo: owner/repo2
+  - repo: owner/repo3
 ```
 
-### Format 3: List with `repos` key and per-repository settings (Recommended)
+### Format with Per-Repository Settings Overrides
 
-This format allows you to specify settings for individual repositories that override the global defaults from the action inputs:
+You can override specific settings for individual repositories:
 
 ```yaml
 repos:
@@ -284,7 +287,7 @@ repos:
     # Other settings use global defaults
 ```
 
-You can also use strings for repositories that should use all defaults:
+You can also mix string and object formats in the same file:
 
 ```yaml
 repos:
@@ -295,13 +298,11 @@ repos:
 
 ### Per-Repository Setting Priority
 
-When using Format 3 with the `repos` array:
+When using the `repos` array:
 
 1. Settings specified in the YAML file for a specific repository take priority
 2. If a setting is not specified for a repository, the global default from action inputs is used
 3. This allows you to set common defaults in the action and override only specific settings for certain repos
-
-## Notes
 
 - You must specify at least one setting to update (or enable CodeQL, or provide topics)
 - Settings that are not specified will not be changed

@@ -107,7 +107,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
     });
 
-    test('should parse repository list from YAML file (legacy format)', async () => {
+    test('should parse repository list from YAML file with repositories array', async () => {
       mockFs.readFileSync.mockReturnValue('repositories:\n  - owner/repo1\n  - owner/repo2');
       mockYaml.load.mockReturnValue({
         repositories: ['owner/repo1', 'owner/repo2']
