@@ -294,14 +294,21 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
         const currentTopics = topicsData.names || [];
         result.currentTopics = currentTopics;
 
-        // Check if topics are different
-        const topicsChanged =
-          currentTopics.length !== topics.length || !currentTopics.every((topic, index) => topic === topics[index]);
+        // Check if topics are different (order-independent comparison)
+        const currentTopicsSet = new Set(currentTopics);
+        const newTopicsSet = new Set(topics);
+
+        const topicsToAdd = topics.filter(topic => !currentTopicsSet.has(topic));
+        const topicsToRemove = currentTopics.filter(topic => !newTopicsSet.has(topic));
+
+        const topicsChanged = topicsToAdd.length > 0 || topicsToRemove.length > 0;
 
         if (topicsChanged) {
           result.topicsChange = {
             from: currentTopics,
-            to: topics
+            to: topics,
+            added: topicsToAdd,
+            removed: topicsToRemove
           };
 
           if (!dryRun) {
@@ -532,12 +539,21 @@ export async function run() {
 
         // Log topics changes
         if (result.topicsChange) {
-          const fromTopics = result.topicsChange.from.length > 0 ? result.topicsChange.from.join(', ') : '(none)';
-          const toTopics = result.topicsChange.to.join(', ');
-          if (dryRun) {
-            core.info(`  🏷️  Would update topics: ${fromTopics} → ${toTopics}`);
-          } else {
-            core.info(`  🏷️  Topics updated: ${fromTopics} → ${toTopics}`);
+          if (result.topicsChange.added.length > 0) {
+            const addedTopics = result.topicsChange.added.join(', ');
+            if (dryRun) {
+              core.info(`  🏷️  Would add topics: ${addedTopics}`);
+            } else {
+              core.info(`  🏷️  Topics added: ${addedTopics}`);
+            }
+          }
+          if (result.topicsChange.removed.length > 0) {
+            const removedTopics = result.topicsChange.removed.join(', ');
+            if (dryRun) {
+              core.info(`  🏷️  Would remove topics: ${removedTopics}`);
+            } else {
+              core.info(`  🏷️  Topics removed: ${removedTopics}`);
+            }
           }
         } else if (result.topicsUnchanged) {
           core.info(`  🏷️  Topics unchanged: ${result.topics.join(', ')}`);

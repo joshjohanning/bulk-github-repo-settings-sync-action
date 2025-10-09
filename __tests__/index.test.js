@@ -297,6 +297,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.topicsChange).toBeDefined();
       expect(result.topicsChange.from).toEqual(['old-topic']);
       expect(result.topicsChange.to).toEqual(topics);
+      expect(result.topicsChange.added).toEqual(['javascript', 'github-actions', 'automation']);
+      expect(result.topicsChange.removed).toEqual(['old-topic']);
       expect(mockOctokit.rest.repos.replaceAllTopics).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',

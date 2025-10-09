@@ -160,7 +160,7 @@ Example output:
      allow-squash-merge: false → true
      allow-merge-commit: true → false
      delete-branch-on-merge: false → true
-  🏷️  Would update topics: (none) → javascript, github-actions
+  🏷️  Would add topics: javascript, github-actions
 ```
 
 ### Complete Example with GitHub App Token
