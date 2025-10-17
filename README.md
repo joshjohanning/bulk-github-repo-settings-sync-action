@@ -1,11 +1,17 @@
-# Bulk GitHub Repository Settings Action
+# Bulk GitHub Repository Settings Sync Action
+
+[![GitHub release](https://img.shields.io/github/release/joshjohanning/bulk-github-repo-settings-sync-action.svg?labelColor=333)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/releases)
+[![GitHub marketplace](https://img.shields.io/badge/marketplace-Bulk%20GitHub%20Repository%20Settings%20Sync-blue?logo=github)](https://github.com/marketplace/actions/bulk-github-repository-settings-sync)
+[![CI](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml)
+[![Publish GitHub Action](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml/badge.svg?branch=main&event=push)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml)
+![Coverage](./badges/coverage.svg)
 
 Update repository settings in bulk across multiple GitHub repositories.
 
-## Features  
+## Features
 
 - 🔧 Update pull request merge strategies (squash, merge, rebase)
-- ✅ Configure auto-merge settings  
+- ✅ Configure auto-merge settings
 - 🗑️ Enable automatic branch deletion after merge
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
@@ -21,7 +27,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2,owner/repo3'
@@ -39,9 +45,9 @@ Create a `repos.yml` file:
 ```yaml
 repos:
   - repo: owner/repo1
-    allow-squash-merge: false  # Override global setting
+    allow-squash-merge: false # Override global setting
     topics: 'javascript,special-config'
-  - repo: owner/repo2  # Uses global defaults
+  - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
 ```
@@ -50,7 +56,7 @@ Use in workflow:
 
 ```yml
 - name: Update Repository Settings with Overrides
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -65,7 +71,7 @@ Use in workflow:
 
 ```yml
 - name: Update All Org Repositories
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'all'
@@ -80,7 +86,7 @@ Preview changes without applying them:
 
 ```yml
 - name: Preview Changes
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2'
@@ -132,7 +138,7 @@ Output shows what would change:
 For better security and rate limits, use a GitHub App:
 
 1. Create a GitHub App with **Repository Administration** permissions
-2. Install it to your organization/repositories  
+2. Install it to your organization/repositories
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
 ```yml
@@ -145,7 +151,7 @@ For better security and rate limits, use a GitHub App:
     owner: ${{ github.repository_owner }}
 
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     # ... other inputs
@@ -157,7 +163,7 @@ Alternatively, use a PAT with `repo` scope:
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ secrets.PAT_TOKEN }}
     # ... other inputs
@@ -181,9 +187,9 @@ repos:
 ```yaml
 repos:
   - repo: owner/repo1
-    allow-squash-merge: false  # Override global setting
+    allow-squash-merge: false # Override global setting
     topics: 'javascript,custom-topic'
-  - repo: owner/repo2  # Uses global defaults
+  - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
 ```

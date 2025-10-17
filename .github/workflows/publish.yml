@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 20
-      - uses: joshjohanning/publish-github-action@v1
+      - uses: joshjohanning/publish-github-action@v2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           npm_package_command: npm run package
