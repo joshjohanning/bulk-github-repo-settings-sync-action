@@ -13,6 +13,8 @@
  *    export INPUT_ALLOW_AUTO_MERGE="true"
  *    export INPUT_DELETE_BRANCH_ON_MERGE="true"
  *    export INPUT_ALLOW_UPDATE_BRANCH="true"
+ *    export INPUT_DEPENDABOT_YML="./path/to/dependabot.yml"
+ *    export INPUT_DEPENDABOT_PR_TITLE="chore: update dependabot.yml"
  *
  * 2. Run locally:
  *    node src/index.js
@@ -461,6 +463,227 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
 }
 
 /**
+ * Sync dependabot.yml file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} dependabotYmlPath - Path to local dependabot.yml file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = '.github/dependabot.yml';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source dependabot.yml file
+    let sourceContent;
+    try {
+      sourceContent = fs.readFileSync(dependabotYmlPath, 'utf8');
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read dependabot.yml file at ${dependabotYmlPath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if dependabot.yml exists in the target repo
+    let existingSha = null;
+    let existingContent = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) {
+      if (error.status === 404) {
+        // File doesn't exist - this is fine, we'll create it
+        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare content
+    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
+
+    if (!needsUpdate) {
+      return {
+        repository: repo,
+        success: true,
+        dependabotYml: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = 'dependabot-yml-sync';
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        dependabotYml: existingContent ? 'would-update' : 'would-create',
+        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        existingPR: existingPR ? existingPR.number : null,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update the file
+    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: commitMessage,
+      content: Buffer.from(sourceContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha || undefined
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Prepare PR body content
+    const prBody = existingContent
+      ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
+      : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`;
+
+    // Create or update PR
+    let prNumber;
+    if (existingPR) {
+      // Update existing PR
+      await octokit.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: existingPR.number,
+        title: prTitle,
+        body: prBody
+      });
+      prNumber = existingPR.number;
+      core.info(`  🔄 Updated existing PR #${prNumber}`);
+    } else {
+      // Create new PR
+      const { data: pr } = await octokit.rest.pulls.create({
+        owner,
+        repo: repoName,
+        title: prTitle,
+        head: branchName,
+        base: defaultBranch,
+        body: prBody
+      });
+      prNumber = pr.number;
+      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      dependabotYml: existingContent ? 'updated' : 'created',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: existingContent
+        ? `Updated ${targetPath} via PR #${prNumber}`
+        : `Created ${targetPath} via PR #${prNumber}`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync dependabot.yml: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Main action logic
  */
 export async function run() {
@@ -493,6 +716,10 @@ export async function run() {
           .filter(t => t.length > 0)
       : null;
 
+    // Get dependabot.yml settings
+    const dependabotYml = getInput('dependabot-yml');
+    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -504,10 +731,11 @@ export async function run() {
     }
 
     // Check if any settings are specified
-    const hasSettings = Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null;
+    const hasSettings =
+      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
       );
     }
 
@@ -524,6 +752,9 @@ export async function run() {
     }
     if (topics !== null) {
       core.info(`Topics to set: ${topics.join(', ')}`);
+    }
+    if (dependabotYml) {
+      core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
     }
 
     // Update repositories
@@ -581,6 +812,12 @@ export async function run() {
         }
       }
 
+      // Handle repo-specific dependabot.yml
+      let repoDependabotYml = dependabotYml;
+      if (repoConfig['dependabot-yml'] !== undefined) {
+        repoDependabotYml = repoConfig['dependabot-yml'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -590,6 +827,30 @@ export async function run() {
         dryRun
       );
       results.push(result);
+
+      // Sync dependabot.yml if specified
+      if (repoDependabotYml) {
+        core.info(`  📦 Syncing dependabot.yml...`);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+
+        // Add dependabot result to the main result
+        result.dependabotSync = dependabotResult;
+
+        if (dependabotResult.success) {
+          if (dependabotResult.dependabotYml === 'unchanged') {
+            core.info(`  📦 ${dependabotResult.message}`);
+          } else if (dryRun) {
+            core.info(`  📦 ${dependabotResult.message}`);
+          } else {
+            core.info(`  📦 ${dependabotResult.message}`);
+            if (dependabotResult.prUrl) {
+              core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
 
       if (result.success) {
         successCount++;
@@ -679,12 +940,38 @@ export async function run() {
         { data: 'Status', header: true },
         { data: 'Details', header: true }
       ],
-      ...results.map(r => [r.repository, r.success ? '✅ Success' : '❌ Failed', r.success ? 'Updated' : r.error])
+      ...results.map(r => {
+        if (!r.success) {
+          return [r.repository, '❌ Failed', r.error];
+        }
+
+        // Determine what actually happened
+        const hasChanges =
+          (r.changes && r.changes.length > 0) || r.topicsChange || r.codeScanningChange || r.dependabotChange;
+
+        let details;
+        if (dryRun) {
+          details = hasChanges ? 'Would update' : 'No changes needed';
+        } else {
+          details = hasChanges ? 'Updated' : 'No changes needed';
+        }
+
+        return [r.repository, '✅ Success', details];
+      })
     ];
 
     try {
-      await core.summary
-        .addHeading('Bulk Repository Settings Update Results')
+      const heading = dryRun
+        ? 'Bulk Repository Settings Update Results (DRY-RUN)'
+        : 'Bulk Repository Settings Update Results';
+
+      let summaryBuilder = core.summary.addHeading(heading);
+
+      if (dryRun) {
+        summaryBuilder = summaryBuilder.addRaw('\n**🔍 DRY-RUN MODE:** No changes were applied\n');
+      }
+
+      summaryBuilder
         .addRaw(`\n**Total Repositories:** ${repoList.length}`)
         .addRaw(`\n**Successful:** ${successCount}`)
         .addRaw(`\n**Failed:** ${failureCount}\n\n`)
@@ -692,14 +979,31 @@ export async function run() {
         .write();
     } catch {
       // Fallback for local development
-      core.info('📊 Bulk Repository Settings Update Results:');
+      const heading = dryRun
+        ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
+        : '📊 Bulk Repository Settings Update Results';
+      core.info(heading);
       core.info(`Total Repositories: ${repoList.length}`);
       core.info(`Successful: ${successCount}`);
       core.info(`Failed: ${failureCount}`);
       for (const result of results) {
-        core.info(
-          `  ${result.repository}: ${result.success ? '✅' : '❌'} ${result.success ? 'Updated' : result.error}`
-        );
+        if (!result.success) {
+          core.info(`  ${result.repository}: ❌ ${result.error}`);
+        } else {
+          const hasChanges =
+            (result.changes && result.changes.length > 0) ||
+            result.topicsChange ||
+            result.codeScanningChange ||
+            result.dependabotChange;
+          const details = dryRun
+            ? hasChanges
+              ? 'Would update'
+              : 'No changes needed'
+            : hasChanges
+              ? 'Updated'
+              : 'No changes needed';
+          core.info(`  ${result.repository}: ✅ ${details}`);
+        }
       }
     }
 

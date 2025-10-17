@@ -37,7 +37,9 @@ const mockOctokit = {
       listForUser: jest.fn(),
       listForOrg: jest.fn(),
       replaceAllTopics: jest.fn(),
-      getAllTopics: jest.fn()
+      getAllTopics: jest.fn(),
+      getContent: jest.fn(),
+      createOrUpdateFileContents: jest.fn()
     },
     codeScanning: {
       updateDefaultSetup: jest.fn(),
@@ -45,6 +47,16 @@ const mockOctokit = {
     },
     orgs: {
       get: jest.fn()
+    },
+    git: {
+      getRef: jest.fn(),
+      createRef: jest.fn(),
+      updateRef: jest.fn()
+    },
+    pulls: {
+      list: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn()
     }
   }
 };
@@ -69,7 +81,12 @@ jest.unstable_mockModule('fs', () => mockFs);
 jest.unstable_mockModule('js-yaml', () => mockYaml);
 
 // Import the main module and helper functions after mocking
-const { default: run, parseRepositories, updateRepositorySettings } = await import('../src/index.js');
+const {
+  default: run,
+  parseRepositories,
+  updateRepositorySettings,
+  syncDependabotYml
+} = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
   beforeEach(() => {
@@ -80,8 +97,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.listForUser.mockClear();
     mockOctokit.rest.repos.listForOrg.mockClear();
     mockOctokit.rest.repos.replaceAllTopics.mockClear();
+    mockOctokit.rest.repos.getContent.mockClear();
+    mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
     mockOctokit.rest.orgs.get.mockClear();
+    mockOctokit.rest.git.getRef.mockClear();
+    mockOctokit.rest.git.createRef.mockClear();
+    mockOctokit.rest.git.updateRef.mockClear();
+    mockOctokit.rest.pulls.list.mockClear();
+    mockOctokit.rest.pulls.create.mockClear();
+    mockOctokit.rest.pulls.update.mockClear();
 
     // Set default inputs
     mockCore.getInput.mockImplementation(name => {
@@ -98,6 +123,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'allow-update-branch': '',
         'enable-default-code-scanning': '',
         topics: '',
+        'dependabot-yml': '',
+        'dependabot-pr-title': '',
         'dry-run': ''
       };
       return inputs[name] || '';
@@ -602,7 +629,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
       );
     });
 
@@ -667,6 +694,313 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results');
       expect(mockCore.summary.addTable).toHaveBeenCalled();
       expect(mockCore.summary.write).toHaveBeenCalled();
+    });
+  });
+
+  describe('syncDependabotYml', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should create dependabot.yml when it does not exist', async () => {
+      const testDependabotContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      mockFs.readFileSync.mockReturnValue(testDependabotContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 }) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 42,
+          html_url: 'https://github.com/owner/repo/pull/42'
+        }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: add dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.github/dependabot.yml',
+          branch: 'dependabot-yml-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update dependabot.yml when content differs', async () => {
+      const newContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
+      const oldContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 43,
+          html_url: 'https://github.com/owner/repo/pull/43'
+        }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('updated');
+      expect(result.prNumber).toBe(43);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sha: 'file-sha-456'
+        })
+      );
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const content =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      mockFs.readFileSync.mockReturnValue(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    });
+
+    test('should update existing PR when one exists', async () => {
+      const newContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
+      const oldContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-999',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      // Branch exists
+      mockOctokit.rest.git.getRef
+        .mockResolvedValueOnce({}) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.updateRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.prNumber).toBe(50);
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode', async () => {
+      const newContent = 'version: 2\nupdates:\n  - package-ecosystem: "npm"';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: add dependabot.yml',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'invalid-repo-format',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing dependabot.yml file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './nonexistent.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read dependabot.yml file');
+    });
+
+    test('should handle API errors', async () => {
+      mockFs.readFileSync.mockReturnValue('version: 2');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync dependabot.yml');
     });
   });
 });
