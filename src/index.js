@@ -213,6 +213,36 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       throw error;
     }
 
+    // Check if we have insufficient permissions by checking for permissions object
+    // A repository response without a 'permissions' object typically indicates insufficient access
+    // This is more reliable than checking individual settings which might legitimately be undefined
+    if (!currentRepo.permissions) {
+      core.warning(
+        `Insufficient permissions for repository ${repo}. GitHub App may not be installed or does not have 'administration' permission. Skipping.`
+      );
+      return {
+        repository: repo,
+        success: false,
+        error: 'Insufficient permissions - GitHub App may not be installed or does not have administration permission',
+        insufficientPermissions: true,
+        dryRun
+      };
+    }
+
+    // Additionally check if admin permission is false when we need to modify settings
+    if (currentRepo.permissions.admin === false && Object.values(settings).some(value => value !== null)) {
+      core.warning(
+        `Missing admin permissions for repository ${repo}. Cannot modify repository settings without 'administration' permission. Skipping.`
+      );
+      return {
+        repository: repo,
+        success: false,
+        error: 'Missing admin permissions - requires administration permission to modify repository settings',
+        insufficientPermissions: true,
+        dryRun
+      };
+    }
+
     const updateParams = {
       owner,
       repo: repoName
