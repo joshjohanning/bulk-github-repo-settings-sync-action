@@ -42,6 +42,13 @@ inputs:
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
     required: false
+  dependabot-yml:
+    description: 'Path to a dependabot.yml file to sync to .github/dependabot.yml in target repositories'
+    required: false
+  dependabot-pr-title:
+    description: 'Title for pull requests when updating dependabot.yml'
+    required: false
+    default: 'chore: update dependabot.yml'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
