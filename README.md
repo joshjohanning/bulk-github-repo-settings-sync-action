@@ -245,7 +245,9 @@ repos:
 - Dependabot.yml syncing creates pull requests for review before merging
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
 - Failed updates are logged as warnings but don't fail the action
-- Access denied repositories are skipped with warnings
+- **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
+  - Repository Administration permissions
+  - Is installed on all target repositories
 - CodeQL scanning may not be available for all languages
 
 ## Contributing
