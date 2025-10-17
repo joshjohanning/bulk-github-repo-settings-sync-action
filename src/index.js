@@ -630,6 +630,11 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 
     core.info(`  ✍️  Committed changes to ${targetPath}`);
 
+    // Prepare PR body content
+    const prBody = existingContent
+      ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
+      : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`;
+
     // Create or update PR
     let prNumber;
     if (existingPR) {
@@ -639,9 +644,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
         repo: repoName,
         pull_number: existingPR.number,
         title: prTitle,
-        body: existingContent
-          ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
-          : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`
+        body: prBody
       });
       prNumber = existingPR.number;
       core.info(`  🔄 Updated existing PR #${prNumber}`);
@@ -653,9 +656,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
         title: prTitle,
         head: branchName,
         base: defaultBranch,
-        body: existingContent
-          ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
-          : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`
+        body: prBody
       });
       prNumber = pr.number;
       core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
