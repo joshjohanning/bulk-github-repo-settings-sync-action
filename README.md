@@ -36,6 +36,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     delete-branch-on-merge: true
     enable-default-code-scanning: true
     topics: 'javascript,github-actions,automation'
+    dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
 
 ### Using YAML Configuration with Overrides
@@ -92,6 +93,8 @@ Preview changes without applying them:
     repositories: 'owner/repo1,owner/repo2'
     allow-squash-merge: true
     dry-run: true
+    # dry-run true in PRs, false otherwise example:
+    # dry-run: ${{ github.event_name == 'pull_request' }}
 ```
 
 Output shows what would change:
