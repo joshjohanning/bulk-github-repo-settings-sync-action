@@ -939,12 +939,38 @@ export async function run() {
         { data: 'Status', header: true },
         { data: 'Details', header: true }
       ],
-      ...results.map(r => [r.repository, r.success ? '✅ Success' : '❌ Failed', r.success ? 'Updated' : r.error])
+      ...results.map(r => {
+        if (!r.success) {
+          return [r.repository, '❌ Failed', r.error];
+        }
+
+        // Determine what actually happened
+        const hasChanges =
+          (r.changes && r.changes.length > 0) || r.topicsChange || r.codeScanningChange || r.dependabotChange;
+
+        let details;
+        if (dryRun) {
+          details = hasChanges ? 'Would update' : 'No changes needed';
+        } else {
+          details = hasChanges ? 'Updated' : 'No changes needed';
+        }
+
+        return [r.repository, '✅ Success', details];
+      })
     ];
 
     try {
-      await core.summary
-        .addHeading('Bulk Repository Settings Update Results')
+      const heading = dryRun
+        ? 'Bulk Repository Settings Update Results (DRY-RUN)'
+        : 'Bulk Repository Settings Update Results';
+
+      let summaryBuilder = core.summary.addHeading(heading);
+
+      if (dryRun) {
+        summaryBuilder = summaryBuilder.addRaw('\n**🔍 DRY-RUN MODE:** No changes were applied\n');
+      }
+
+      summaryBuilder
         .addRaw(`\n**Total Repositories:** ${repoList.length}`)
         .addRaw(`\n**Successful:** ${successCount}`)
         .addRaw(`\n**Failed:** ${failureCount}\n\n`)
@@ -952,14 +978,31 @@ export async function run() {
         .write();
     } catch {
       // Fallback for local development
-      core.info('📊 Bulk Repository Settings Update Results:');
+      const heading = dryRun
+        ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
+        : '📊 Bulk Repository Settings Update Results';
+      core.info(heading);
       core.info(`Total Repositories: ${repoList.length}`);
       core.info(`Successful: ${successCount}`);
       core.info(`Failed: ${failureCount}`);
       for (const result of results) {
-        core.info(
-          `  ${result.repository}: ${result.success ? '✅' : '❌'} ${result.success ? 'Updated' : result.error}`
-        );
+        if (!result.success) {
+          core.info(`  ${result.repository}: ❌ ${result.error}`);
+        } else {
+          const hasChanges =
+            (result.changes && result.changes.length > 0) ||
+            result.topicsChange ||
+            result.codeScanningChange ||
+            result.dependabotChange;
+          const details = dryRun
+            ? hasChanges
+              ? 'Would update'
+              : 'No changes needed'
+            : hasChanges
+              ? 'Updated'
+              : 'No changes needed';
+          core.info(`  ${result.repository}: ✅ ${details}`);
+        }
       }
     }
 
