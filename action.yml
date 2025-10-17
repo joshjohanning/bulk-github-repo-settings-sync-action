@@ -1,4 +1,4 @@
-name: 'Bulk GitHub Repository Settings'
+name: 'Bulk GitHub Repository Settings Sync'
 description: 'Update repository settings in bulk for multiple GitHub repositories'
 
 branding:

@@ -1,5 +1,5 @@
 {
-  "name": "bulk-github-repo-settings-action",
+  "name": "bulk-github-repo-settings-sync-action",
   "description": "Update repository settings in bulk for multiple GitHub repositories",
   "version": "1.0.0",
   "type": "module",
@@ -9,13 +9,13 @@
     "url": "https://github.com/joshjohanning"
   },
   "private": true,
-  "homepage": "https://github.com/joshjohanning/bulk-github-repo-settings-action#readme",
+  "homepage": "https://github.com/joshjohanning/bulk-github-repo-settings-sync-action#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joshjohanning/bulk-github-repo-settings-action.git"
+    "url": "git+https://github.com/joshjohanning/bulk-github-repo-settings-sync-action.git"
   },
   "bugs": {
-    "url": "https://github.com/joshjohanning/bulk-github-repo-settings-action/issues"
+    "url": "https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/issues"
   },
   "keywords": [
     "github-actions",

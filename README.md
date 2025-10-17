@@ -21,7 +21,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2,owner/repo3'
@@ -50,7 +50,7 @@ Use in workflow:
 
 ```yml
 - name: Update Repository Settings with Overrides
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -65,7 +65,7 @@ Use in workflow:
 
 ```yml
 - name: Update All Org Repositories
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'all'
@@ -80,7 +80,7 @@ Preview changes without applying them:
 
 ```yml
 - name: Preview Changes
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2'
@@ -145,7 +145,7 @@ For better security and rate limits, use a GitHub App:
     owner: ${{ github.repository_owner }}
 
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     # ... other inputs
@@ -157,7 +157,7 @@ Alternatively, use a PAT with `repo` scope:
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ secrets.PAT_TOKEN }}
     # ... other inputs
