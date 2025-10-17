@@ -445,7 +445,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
             triage: false,
             pull: false
           }
-          // Missing allow_squash_merge indicates app not installed
+          // Missing allow_squash_merge may indicate app not installed, insufficient permissions, or API changes
         }
       });
 

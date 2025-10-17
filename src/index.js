@@ -230,7 +230,17 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
 
     // Check if we can read the repository settings
     // If allow_squash_merge is undefined, it means we can't read the settings (likely not installed on repo)
-    if (currentRepo.allow_squash_merge === undefined) {
+    // Check for multiple critical settings fields to robustly determine if settings are readable
+    const settingsFields = [
+      'allow_squash_merge',
+      'allow_merge_commit',
+      'allow_rebase_merge',
+      'delete_branch_on_merge',
+      'allow_auto_merge',
+      'allow_update_branch'
+    ];
+    const allSettingsUndefined = settingsFields.every(field => currentRepo[field] === undefined);
+    if (allSettingsUndefined) {
       core.warning(
         `Cannot read repository settings for ${repo}. GitHub App may not be installed on this repository. Skipping.`
       );
