@@ -8,10 +8,10 @@
 
 Update repository settings in bulk across multiple GitHub repositories.
 
-## Features  
+## Features
 
 - 🔧 Update pull request merge strategies (squash, merge, rebase)
-- ✅ Configure auto-merge settings  
+- ✅ Configure auto-merge settings
 - 🗑️ Enable automatic branch deletion after merge
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
@@ -45,9 +45,9 @@ Create a `repos.yml` file:
 ```yaml
 repos:
   - repo: owner/repo1
-    allow-squash-merge: false  # Override global setting
+    allow-squash-merge: false # Override global setting
     topics: 'javascript,special-config'
-  - repo: owner/repo2  # Uses global defaults
+  - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
 ```
@@ -138,7 +138,7 @@ Output shows what would change:
 For better security and rate limits, use a GitHub App:
 
 1. Create a GitHub App with **Repository Administration** permissions
-2. Install it to your organization/repositories  
+2. Install it to your organization/repositories
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
 ```yml
@@ -187,9 +187,9 @@ repos:
 ```yaml
 repos:
   - repo: owner/repo1
-    allow-squash-merge: false  # Override global setting
+    allow-squash-merge: false # Override global setting
     topics: 'javascript,custom-topic'
-  - repo: owner/repo2  # Uses global defaults
+  - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
 ```
