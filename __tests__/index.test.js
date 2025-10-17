@@ -417,31 +417,57 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: {
           name: 'repo',
           full_name: 'owner/repo',
-          // No permissions object - indicates insufficient access
-          allow_squash_merge: true,
-          allow_merge_commit: false
+          // No permissions object at all
+          allow_squash_merge: true
         }
       });
 
-      const settings = { allow_squash_merge: true };
+      const settings = { allow_squash_merge: false };
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
-      expect(result.error).toContain('Insufficient permissions');
+      expect(result.error).toContain('does not have any access');
       expect(mockCore.warning).toHaveBeenCalledWith(
         expect.stringContaining('Insufficient permissions for repository owner/repo')
       );
     });
 
-    test('should handle missing admin permissions', async () => {
+    test('should handle when app is not installed on repository', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           name: 'repo',
           full_name: 'owner/repo',
-          allow_squash_merge: true,
           permissions: {
             admin: false,
+            maintain: false,
+            push: false,
+            triage: false,
+            pull: false
+          }
+          // Missing allow_squash_merge may indicate app not installed, insufficient permissions, or API changes
+        }
+      });
+
+      const settings = { allow_squash_merge: false };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+
+      expect(result.success).toBe(false);
+      expect(result.insufficientPermissions).toBe(true);
+      expect(result.error).toContain('Cannot read repository settings');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('GitHub App may not be installed on this repository')
+      );
+    });
+
+    test('should handle missing admin permissions in non-dry-run mode', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          name: 'repo',
+          full_name: 'owner/repo',
+          allow_squash_merge: true, // Has the settings (app is installed)
+          permissions: {
+            admin: false, // But no admin permission
             push: true,
             pull: true
           }
@@ -457,6 +483,29 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(
         expect.stringContaining('Missing admin permissions for repository owner/repo')
       );
+    });
+
+    test('should allow dry-run mode without admin permissions', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          name: 'repo',
+          full_name: 'owner/repo',
+          allow_squash_merge: false, // Has settings (app is installed)
+          permissions: {
+            admin: false, // No admin permission
+            push: true,
+            pull: true
+          }
+        }
+      });
+
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, true); // dry-run
+
+      expect(result.success).toBe(true);
+      expect(result.dryRun).toBe(true);
+      expect(result.changes.length).toBe(1); // Should show what would change
+      expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
     });
 
     test('should not make update API calls in dry-run mode', async () => {
