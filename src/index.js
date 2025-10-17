@@ -947,7 +947,10 @@ export async function run() {
 
         // Determine what actually happened
         const hasChanges =
-          (r.changes && r.changes.length > 0) || r.topicsChange || r.codeScanningChange || r.dependabotChange;
+          (r.changes && r.changes.length > 0) ||
+          r.topicsChange ||
+          r.codeScanningChange ||
+          (r.dependabotSync && r.dependabotSync.dependabotYml !== 'unchanged');
 
         let details;
         if (dryRun) {
@@ -994,7 +997,7 @@ export async function run() {
             (result.changes && result.changes.length > 0) ||
             result.topicsChange ||
             result.codeScanningChange ||
-            result.dependabotChange;
+            (result.dependabotSync && result.dependabotSync.dependabotYml !== 'unchanged');
           const details = dryRun
             ? hasChanges
               ? 'Would update'
