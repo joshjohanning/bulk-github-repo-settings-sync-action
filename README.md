@@ -1,6 +1,6 @@
 # Bulk GitHub Repository Settings Sync Action
 
-[![GitHub release](https://img.shields.io/github/release/joshjohanning/bulk-github-repo-settings-sync-action.svg?labelColor=333)](https://github.com/joshjohanning/bulk-github-repo-settings/releases)
+[![GitHub release](https://img.shields.io/github/release/joshjohanning/bulk-github-repo-settings-sync-action.svg?labelColor=333)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/releases)
 [![GitHub marketplace](https://img.shields.io/badge/marketplace-Bulk%20GitHub%20Repository%20Settings%20Sync-blue?logo=github)](https://github.com/marketplace/actions/bulk-github-repository-settings-sync)
 [![CI](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml)
 [![Publish GitHub Action](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml/badge.svg?branch=main&event=push)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml)
