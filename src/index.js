@@ -213,24 +213,39 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       throw error;
     }
 
-    // Check if we have insufficient permissions by checking for permissions object
-    // A repository response without a 'permissions' object typically indicates insufficient access
-    // This is more reliable than checking individual settings which might legitimately be undefined
+    // Check if we have insufficient permissions
+    // The 'permissions' object should always be present. If it's missing, we don't have any access.
     if (!currentRepo.permissions) {
       core.warning(
-        `Insufficient permissions for repository ${repo}. GitHub App may not be installed or does not have 'administration' permission. Skipping.`
+        `Insufficient permissions for repository ${repo}. GitHub App may not be installed or does not have sufficient access. Skipping.`
       );
       return {
         repository: repo,
         success: false,
-        error: 'Insufficient permissions - GitHub App may not be installed or does not have administration permission',
+        error: 'Insufficient permissions - GitHub App may not be installed or does not have any access',
         insufficientPermissions: true,
         dryRun
       };
     }
 
-    // Additionally check if admin permission is false when we need to modify settings
-    if (currentRepo.permissions.admin === false && Object.values(settings).some(value => value !== null)) {
+    // Check if we can read the repository settings
+    // If allow_squash_merge is undefined, it means we can't read the settings (likely not installed on repo)
+    if (currentRepo.allow_squash_merge === undefined) {
+      core.warning(
+        `Cannot read repository settings for ${repo}. GitHub App may not be installed on this repository. Skipping.`
+      );
+      return {
+        repository: repo,
+        success: false,
+        error:
+          'Cannot read repository settings - GitHub App may not be installed on this repository or does not have sufficient access',
+        insufficientPermissions: true,
+        dryRun
+      };
+    }
+
+    // Check if we have admin permission when we need to modify settings (not dry-run)
+    if (!dryRun && currentRepo.permissions.admin === false && Object.values(settings).some(value => value !== null)) {
       core.warning(
         `Missing admin permissions for repository ${repo}. Cannot modify repository settings without 'administration' permission. Skipping.`
       );
