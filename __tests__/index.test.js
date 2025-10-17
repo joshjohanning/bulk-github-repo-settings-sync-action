@@ -405,6 +405,28 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Access denied to repository owner/repo'));
     });
 
+    test('should handle insufficient permissions when settings are undefined', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          name: 'repo',
+          full_name: 'owner/repo',
+          allow_squash_merge: undefined,
+          allow_merge_commit: undefined,
+          allow_rebase_merge: undefined
+        }
+      });
+
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+
+      expect(result.success).toBe(false);
+      expect(result.insufficientPermissions).toBe(true);
+      expect(result.error).toContain('Insufficient permissions');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Insufficient permissions for repository owner/repo')
+      );
+    });
+
     test('should not make update API calls in dry-run mode', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {

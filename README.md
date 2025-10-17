@@ -201,7 +201,9 @@ repos:
 - Settings not specified will remain unchanged
 - Topics **replace** all existing repository topics
 - Failed updates are logged as warnings but don't fail the action
-- Access denied repositories are skipped with warnings
+- **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
+  - Repository Administration permissions
+  - Is installed on all target repositories
 - CodeQL scanning may not be available for all languages
 
 ## Contributing

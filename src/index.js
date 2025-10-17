@@ -213,6 +213,25 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       throw error;
     }
 
+    // Check if we have insufficient permissions (repository settings are undefined)
+    // This can happen when the GitHub App is not installed on the repository
+    if (
+      currentRepo.allow_squash_merge === undefined &&
+      currentRepo.allow_merge_commit === undefined &&
+      currentRepo.allow_rebase_merge === undefined
+    ) {
+      core.warning(
+        `Insufficient permissions for repository ${repo}. GitHub App may not be installed or does not have 'administration' permission. Skipping.`
+      );
+      return {
+        repository: repo,
+        success: false,
+        error: 'Insufficient permissions - GitHub App may not be installed or does not have administration permission',
+        insufficientPermissions: true,
+        dryRun
+      };
+    }
+
     const updateParams = {
       owner,
       repo: repoName
