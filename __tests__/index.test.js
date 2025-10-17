@@ -487,14 +487,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
-    test('should handle missing admin permissions in non-dry-run mode', async () => {
+    test('should allow updates without admin permissions when app has proper permissions', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           name: 'repo',
           full_name: 'owner/repo',
-          allow_squash_merge: true, // Has the settings (app is installed)
+          allow_squash_merge: true, // Has the settings (app has permissions)
           permissions: {
-            admin: false, // But no admin permission
+            admin: false, // No admin permission (expected for GitHub Apps)
             push: true,
             pull: true
           }
@@ -504,12 +504,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: false };
       const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
 
-      expect(result.success).toBe(false);
-      expect(result.insufficientPermissions).toBe(true);
-      expect(result.error).toContain('Missing admin permissions');
-      expect(mockCore.warning).toHaveBeenCalledWith(
-        expect.stringContaining('Missing admin permissions for repository owner/repo')
-      );
+      expect(result.success).toBe(true);
+      expect(result.changes).toHaveLength(1);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalled();
     });
 
     test('should allow dry-run mode without admin permissions', async () => {
@@ -898,18 +895,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       });
 
-      // Branch exists
-      mockOctokit.rest.git.getRef
-        .mockResolvedValueOnce({}) // Branch check
-        .mockResolvedValueOnce({
-          // Default branch ref
-          data: { object: { sha: 'abc123' } }
-        });
-
-      mockOctokit.rest.git.updateRef.mockResolvedValue({});
-      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
-      mockOctokit.rest.pulls.update.mockResolvedValue({});
-
       const result = await syncDependabotYml(
         mockOctokit,
         'owner/repo',
@@ -919,10 +904,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('pr-exists');
       expect(result.prNumber).toBe(50);
-      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalled();
-      expect(mockOctokit.rest.pulls.update).toHaveBeenCalled();
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode', async () => {
@@ -938,6 +927,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       mockOctokit.rest.repos.getContent.mockRejectedValue({
         status: 404
+      });
+
+      // No existing PR
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
       });
 
       const result = await syncDependabotYml(
