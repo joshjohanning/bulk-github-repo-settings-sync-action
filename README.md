@@ -179,8 +179,9 @@ Output shows what would change:
 For better security and rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
-   - **Repository Administration**: Read and write
-   - **Single file**: Read and write to `.github/dependabot.yml` (if syncing Dependabot configuration)
+   - **Repository Administration**: Read and write (required for updating repository settings)
+   - **Contents**: Read and write (required if syncing `dependabot.yml`)
+   - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
 2. Install it to your organization/repositories
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 

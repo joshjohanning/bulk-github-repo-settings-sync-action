@@ -256,20 +256,6 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       };
     }
 
-    // Check if we have admin permission when we need to modify settings (not dry-run)
-    if (!dryRun && currentRepo.permissions.admin === false && Object.values(settings).some(value => value !== null)) {
-      core.warning(
-        `Missing admin permissions for repository ${repo}. Cannot modify repository settings without 'administration' permission. Skipping.`
-      );
-      return {
-        repository: repo,
-        success: false,
-        error: 'Missing admin permissions - requires administration permission to modify repository settings',
-        insufficientPermissions: true,
-        dryRun
-      };
-    }
-
     const updateParams = {
       owner,
       repo: repoName
@@ -561,13 +547,25 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
     }
 
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        dependabotYml: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        dryRun
+      };
+    }
+
     if (dryRun) {
       return {
         repository: repo,
         success: true,
         dependabotYml: existingContent ? 'would-update' : 'would-create',
         message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
-        existingPR: existingPR ? existingPR.number : null,
         dryRun
       };
     }
