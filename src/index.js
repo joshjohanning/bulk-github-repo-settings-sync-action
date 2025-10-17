@@ -684,6 +684,23 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Check if a repository result has any changes
+ * @param {Object} result - Repository update result object
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
+ */
+function hasRepositoryChanges(result) {
+  return (
+    (result.changes && result.changes.length > 0) ||
+    result.topicsChange ||
+    result.codeScanningChange ||
+    (result.dependabotSync &&
+      result.dependabotSync.success &&
+      result.dependabotSync.dependabotYml &&
+      result.dependabotSync.dependabotYml !== 'unchanged')
+  );
+}
+
+/**
  * Main action logic
  */
 export async function run() {
@@ -946,11 +963,7 @@ export async function run() {
         }
 
         // Determine what actually happened
-        const hasChanges =
-          (r.changes && r.changes.length > 0) ||
-          r.topicsChange ||
-          r.codeScanningChange ||
-          (r.dependabotSync && r.dependabotSync.dependabotYml !== 'unchanged');
+        const hasChanges = hasRepositoryChanges(r);
 
         let details;
         if (dryRun) {
@@ -993,11 +1006,7 @@ export async function run() {
         if (!result.success) {
           core.info(`  ${result.repository}: ❌ ${result.error}`);
         } else {
-          const hasChanges =
-            (result.changes && result.changes.length > 0) ||
-            result.topicsChange ||
-            result.codeScanningChange ||
-            (result.dependabotSync && result.dependabotSync.dependabotYml !== 'unchanged');
+          const hasChanges = hasRepositoryChanges(result);
           const details = dryRun
             ? hasChanges
               ? 'Would update'
