@@ -201,7 +201,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
           allow_rebase_merge: false,
           allow_auto_merge: false,
           delete_branch_on_merge: false,
-          allow_update_branch: false
+          allow_update_branch: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -235,7 +236,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should enable CodeQL scanning when requested', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -259,7 +261,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle CodeQL setup failures gracefully', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -278,7 +281,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should update topics when provided', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -309,7 +313,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle topics update failures gracefully', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -327,7 +332,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should not update topics when null', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
@@ -344,6 +350,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should only update specified settings', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
+          permissions: { admin: true, push: true, pull: true },
           allow_squash_merge: false,
           allow_merge_commit: null,
           allow_rebase_merge: null,
@@ -405,14 +412,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Access denied to repository owner/repo'));
     });
 
-    test('should handle insufficient permissions when settings are undefined', async () => {
+    test('should handle insufficient permissions when permissions object is missing', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           name: 'repo',
           full_name: 'owner/repo',
-          allow_squash_merge: undefined,
-          allow_merge_commit: undefined,
-          allow_rebase_merge: undefined
+          // No permissions object - indicates insufficient access
+          allow_squash_merge: true,
+          allow_merge_commit: false
         }
       });
 
@@ -427,10 +434,36 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test('should handle missing admin permissions', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          name: 'repo',
+          full_name: 'owner/repo',
+          allow_squash_merge: true,
+          permissions: {
+            admin: false,
+            push: true,
+            pull: true
+          }
+        }
+      });
+
+      const settings = { allow_squash_merge: false };
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+
+      expect(result.success).toBe(false);
+      expect(result.insufficientPermissions).toBe(true);
+      expect(result.error).toContain('Missing admin permissions');
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Missing admin permissions for repository owner/repo')
+      );
+    });
+
     test('should not make update API calls in dry-run mode', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          allow_squash_merge: false
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
         }
       });
       mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
