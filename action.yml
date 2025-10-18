@@ -53,6 +53,13 @@ inputs:
     description: 'Title for pull requests when updating dependabot.yml'
     required: false
     default: 'chore: update dependabot.yml'
+  copilot-instructions-md:
+    description: 'Path to a copilot-instructions.md file to sync to .github/copilot-instructions.md in target repositories'
+    required: false
+  copilot-instructions-pr-title:
+    description: 'Title for pull requests when updating copilot-instructions.md'
+    required: false
+    default: 'chore: update copilot-instructions.md'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
