@@ -17,6 +17,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
 - � **Sync dependabot.yml files** across repositories via pull requests
+- 📝 **Sync .gitignore files** across repositories via pull requests (preserves repo-specific entries)
 - �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
@@ -103,6 +104,58 @@ repos:
 - PRs are created/updated using the GitHub API so commits are verified
 - Updates existing open PRs instead of creating duplicates
 
+### Syncing .gitignore Configuration
+
+Sync a `.gitignore` file to `.gitignore` in target repositories via pull requests:
+
+```yml
+- name: Sync .gitignore Config
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    gitignore: './config/gitignore/.gitignore'
+    gitignore-pr-title: 'chore: update .gitignore'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    gitignore: './config/gitignore/node.gitignore'
+  - repo: owner/repo2
+    gitignore: './config/gitignore/python.gitignore'
+  - repo: owner/repo3
+    gitignore: './.gitignore' # use the same config that this repo is using
+```
+
+**Behavior:**
+
+- If `.gitignore` doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- **Repository-specific entries are preserved**: Content after a `# Repository-specific entries (preserved during sync)` marker is kept intact
+- If content is identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Updates existing open PRs instead of creating duplicates
+
+**Example: Preserving repo-specific entries**
+
+In your target repository's `.gitignore`, you can add repository-specific entries that will be preserved during syncs:
+
+```gitignore
+# Standard entries (synced from source)
+node_modules/
+dist/
+*.log
+
+# Repository-specific entries (preserved during sync)
+scanresults.json
+twistlock-*.md
+```
+
+When the sync runs, it will update the standard entries from the source file while keeping `scanresults.json` and `twistlock-*.md` intact.
+
 ### Organization-wide Updates
 
 ```yml
@@ -161,6 +214,8 @@ Output shows what would change:
 | `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
 | `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
+| `gitignore`                    | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content at end)                          | No       | -                              |
+| `gitignore-pr-title`           | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`     |
 | `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
 
 \* Either `repositories` or `repositories-file` must be provided
@@ -181,8 +236,8 @@ For better security and rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
    - **Repository Administration**: Read and write (required for updating repository settings)
-   - **Contents**: Read and write (required if syncing `dependabot.yml`)
-   - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
+   - **Contents**: Read and write (required if syncing `dependabot.yml` or `.gitignore`)
+   - **Pull Requests**: Read and write (required if syncing `dependabot.yml` or `.gitignore`)
 2. Install it to your organization/repositories
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
@@ -238,6 +293,7 @@ repos:
   - repo: owner/repo3
     enable-default-code-scanning: false
     dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+    gitignore: './config/gitignore/node.gitignore'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -248,6 +304,8 @@ repos:
 - Topics **replace** all existing repository topics
 - Dependabot.yml syncing creates pull requests for review before merging
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
+- .gitignore syncing creates pull requests and preserves repo-specific entries after a marker comment
+- .gitignore PRs use the GitHub API ensuring verified commits
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions

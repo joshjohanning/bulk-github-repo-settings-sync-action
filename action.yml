@@ -53,6 +53,13 @@ inputs:
     description: 'Title for pull requests when updating dependabot.yml'
     required: false
     default: 'chore: update dependabot.yml'
+  gitignore:
+    description: 'Path to a .gitignore file to sync to .gitignore in target repositories (preserves repo-specific content at end)'
+    required: false
+  gitignore-pr-title:
+    description: 'Title for pull requests when updating .gitignore'
+    required: false
+    default: 'chore: update .gitignore'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
