@@ -16,6 +16,8 @@
  *    export INPUT_ALLOW_UPDATE_BRANCH="true"
  *    export INPUT_DEPENDABOT_YML="./path/to/dependabot.yml"
  *    export INPUT_DEPENDABOT_PR_TITLE="chore: update dependabot.yml"
+ *    export INPUT_COPILOT_INSTRUCTIONS_MD="./path/to/copilot-instructions.md"
+ *    export INPUT_COPILOT_INSTRUCTIONS_PR_TITLE="chore: update copilot-instructions.md"
  *
  * 2. Run locally:
  *    node src/index.js
@@ -683,9 +685,242 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Sync copilot-instructions.md file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} copilotInstructionsPath - Path to local copilot-instructions.md file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncCopilotInstructions(octokit, repo, copilotInstructionsPath, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = '.github/copilot-instructions.md';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source copilot-instructions.md file
+    let sourceContent;
+    try {
+      sourceContent = fs.readFileSync(copilotInstructionsPath, 'utf8');
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read copilot-instructions.md file at ${copilotInstructionsPath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if copilot-instructions.md exists in the target repo
+    let existingSha = null;
+    let existingContent = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) {
+      if (error.status === 404) {
+        // File doesn't exist - this is fine, we'll create it
+        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare content
+    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
+
+    if (!needsUpdate) {
+      return {
+        repository: repo,
+        success: true,
+        copilotInstructions: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = 'copilot-instructions-md-sync';
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        copilotInstructions: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        copilotInstructions: existingContent ? 'would-update' : 'would-create',
+        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update the file
+    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: commitMessage,
+      content: Buffer.from(sourceContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha || undefined
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Prepare PR body content
+    const prBody = existingContent
+      ? `This PR updates \`.github/copilot-instructions.md\` to the latest version.\n\n**Changes:**\n- Updated Copilot instructions`
+      : `This PR adds \`.github/copilot-instructions.md\` to configure GitHub Copilot.\n\n**Changes:**\n- Added Copilot instructions`;
+
+    // Create or update PR
+    let prNumber;
+    if (existingPR) {
+      // Update existing PR
+      await octokit.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: existingPR.number,
+        title: prTitle,
+        body: prBody
+      });
+      prNumber = existingPR.number;
+      core.info(`  🔄 Updated existing PR #${prNumber}`);
+    } else {
+      // Create new PR
+      const { data: pr } = await octokit.rest.pulls.create({
+        owner,
+        repo: repoName,
+        title: prTitle,
+        head: branchName,
+        base: defaultBranch,
+        body: prBody
+      });
+      prNumber = pr.number;
+      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      copilotInstructions: existingContent ? 'updated' : 'created',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: existingContent
+        ? `Updated ${targetPath} via PR #${prNumber}`
+        : `Created ${targetPath} via PR #${prNumber}`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync copilot-instructions.md: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, dependabot, or copilot instructions)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -695,7 +930,11 @@ function hasRepositoryChanges(result) {
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged')
+      result.dependabotSync.dependabotYml !== 'unchanged') ||
+    (result.copilotInstructionsSync &&
+      result.copilotInstructionsSync.success &&
+      result.copilotInstructionsSync.copilotInstructions &&
+      result.copilotInstructionsSync.copilotInstructions !== 'unchanged')
   );
 }
 
@@ -735,7 +974,12 @@ export async function run() {
 
     // Get dependabot.yml settings
     const dependabotYml = getInput('dependabot-yml');
-    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
+    // Get copilot-instructions.md settings
+    const copilotInstructionsMd = getInput('copilot-instructions-md');
+    const copilotInstructionsPrTitle =
+      getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
@@ -749,10 +993,14 @@ export async function run() {
 
     // Check if any settings are specified
     const hasSettings =
-      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
+      Object.values(settings).some(value => value !== null) ||
+      enableCodeScanning ||
+      topics !== null ||
+      dependabotYml ||
+      copilotInstructionsMd;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or copilot-instructions-md must be specified)'
       );
     }
 
@@ -775,6 +1023,9 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (copilotInstructionsMd) {
+      core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
     }
 
     // Update repositories
@@ -838,6 +1089,12 @@ export async function run() {
         repoDependabotYml = repoConfig['dependabot-yml'];
       }
 
+      // Handle repo-specific copilot-instructions.md
+      let repoCopilotInstructionsMd = copilotInstructionsMd;
+      if (repoConfig['copilot-instructions-md'] !== undefined) {
+        repoCopilotInstructionsMd = repoConfig['copilot-instructions-md'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -851,7 +1108,7 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Syncing dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -869,6 +1126,36 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Sync copilot-instructions.md if specified
+      if (repoCopilotInstructionsMd) {
+        core.info(`  🤖 Syncing copilot-instructions.md...`);
+        const copilotResult = await syncCopilotInstructions(
+          octokit,
+          repo,
+          repoCopilotInstructionsMd,
+          copilotInstructionsPrTitle,
+          dryRun
+        );
+
+        // Add copilot instructions result to the main result
+        result.copilotInstructionsSync = copilotResult;
+
+        if (copilotResult.success) {
+          if (copilotResult.copilotInstructions === 'unchanged') {
+            core.info(`  🤖 ${copilotResult.message}`);
+          } else if (dryRun) {
+            core.info(`  🤖 ${copilotResult.message}`);
+          } else {
+            core.info(`  🤖 ${copilotResult.message}`);
+            if (copilotResult.prUrl) {
+              core.info(`  🔗 PR URL: ${copilotResult.prUrl}`);
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${copilotResult.error}`);
         }
       }
 

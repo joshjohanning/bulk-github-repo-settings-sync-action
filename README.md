@@ -16,8 +16,9 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
-- � **Sync dependabot.yml files** across repositories via pull requests
-- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📦 **Sync dependabot.yml files** across repositories via pull requests
+- 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
+- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -103,6 +104,40 @@ repos:
 - PRs are created/updated using the GitHub API so commits are verified
 - Updates existing open PRs instead of creating duplicates
 
+### Syncing Copilot Instructions
+
+Sync a `copilot-instructions.md` file to `.github/copilot-instructions.md` in target repositories via pull requests:
+
+```yml
+- name: Sync Copilot Instructions
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    copilot-instructions-md: './.github/copilot-instructions.md'
+    copilot-instructions-pr-title: 'chore: update copilot-instructions.md'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    copilot-instructions-md: './config/copilot/javascript-instructions.md'
+  - repo: owner/repo2
+    copilot-instructions-md: './config/copilot/python-instructions.md'
+  - repo: owner/repo3
+    copilot-instructions-md: './.github/copilot-instructions.md' # use the same config that this repo is using
+```
+
+**Behavior:**
+
+- If `.github/copilot-instructions.md` doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- If content is identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Updates existing open PRs instead of creating duplicates
+
 ### Organization-wide Updates
 
 ```yml
@@ -158,10 +193,12 @@ Output shows what would change:
 | `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                                                          | No       | -                              |
 | `allow-update-branch`          | Always suggest updating pull request branches                                                                                              | No       | -                              |
 | `enable-default-code-scanning` | Enable default code scanning setup                                                                                                         | No       | -                              |
-| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
-| `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
-| `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
-| `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
+| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                       |
+| `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                       |
+| `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`          |
+| `copilot-instructions-md`      | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
+| `copilot-instructions-pr-title`| Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
+| `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -238,6 +275,7 @@ repos:
   - repo: owner/repo3
     enable-default-code-scanning: false
     dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+    copilot-instructions-md: './github/copilot-instructions-custom.md'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -246,8 +284,8 @@ repos:
 
 - Settings not specified will remain unchanged
 - Topics **replace** all existing repository topics
-- Dependabot.yml syncing creates pull requests for review before merging
-- Dependabot.yml PRs use the GitHub API ensuring verified commits
+- Dependabot.yml and Copilot-instructions.md syncing creates pull requests for review before merging
+- File syncing PRs use the GitHub API ensuring verified commits
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions
