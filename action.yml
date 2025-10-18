@@ -53,6 +53,16 @@ inputs:
     description: 'Title for pull requests when updating dependabot.yml'
     required: false
     default: 'chore: update dependabot.yml'
+  source-files:
+    description: 'Comma-separated list of source file paths to sync (e.g., ".github/workflows/ci.yml,.github/workflows/release.yml")'
+    required: false
+  target-files:
+    description: 'Comma-separated list of target file paths in repositories (must match order of source-files)'
+    required: false
+  custom-files-pr-title:
+    description: 'Title for pull requests when syncing custom files'
+    required: false
+    default: 'chore: sync files'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

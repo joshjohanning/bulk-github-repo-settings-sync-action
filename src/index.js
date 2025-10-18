@@ -683,11 +683,260 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Create a safe Git branch name from a file path
+ * @param {string} filePath - File path to convert
+ * @returns {string} Safe branch name (max 100 chars to stay well under Git's 255 char limit)
+ */
+function createSafeBranchName(filePath) {
+  // Remove leading dots and slashes, replace special chars with dashes
+  let safeName = filePath.replace(/^[./]+/, '').replace(/[^a-zA-Z0-9]/g, '-');
+
+  // Truncate if too long and add hash for uniqueness
+  if (safeName.length > 80) {
+    // Use a simple hash of the full path for uniqueness
+    const hash = filePath
+      .split('')
+      .reduce((acc, char) => ((acc << 5) - acc + char.charCodeAt(0)) | 0, 0)
+      .toString(16)
+      .slice(-8);
+    safeName = `${safeName.substring(0, 80)}-${hash}`;
+  }
+
+  return `custom-files-sync-${safeName}`;
+}
+
+/**
+ * Sync custom file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} sourceFilePath - Path to local source file
+ * @param {string} targetFilePath - Target path in repository
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncCustomFile(octokit, repo, sourceFilePath, targetFilePath, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source file
+    let sourceContent;
+    try {
+      sourceContent = fs.readFileSync(sourceFilePath, 'utf8');
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read source file at ${sourceFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if file exists in the target repo
+    let existingSha = null;
+    let existingContent = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetFilePath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) {
+      if (error.status === 404) {
+        // File doesn't exist - this is fine, we'll create it
+        core.info(`  📄 ${targetFilePath} does not exist in ${repo}, will create it`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare content
+    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
+
+    if (!needsUpdate) {
+      return {
+        repository: repo,
+        success: true,
+        customFile: 'unchanged',
+        message: `${targetFilePath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = createSafeBranchName(targetFilePath);
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetFilePath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        customFile: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetFilePath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        customFile: existingContent ? 'would-update' : 'would-create',
+        message: existingContent ? `Would update ${targetFilePath} via PR` : `Would create ${targetFilePath} via PR`,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update the file
+    const commitMessage = existingContent ? `chore: update ${targetFilePath}` : `chore: add ${targetFilePath}`;
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetFilePath,
+      message: commitMessage,
+      content: Buffer.from(sourceContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha || undefined
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetFilePath}`);
+
+    // Prepare PR body content
+    const prBody = existingContent
+      ? `This PR updates \`${targetFilePath}\` to the latest version.\n\n**Changes:**\n- Updated file content`
+      : `This PR adds \`${targetFilePath}\`.\n\n**Changes:**\n- Added file`;
+
+    // Create PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+
+    return {
+      repository: repo,
+      success: true,
+      customFile: existingContent ? 'updated' : 'created',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: existingContent
+        ? `Updated ${targetFilePath} via PR #${prNumber}`
+        : `Created ${targetFilePath} via PR #${prNumber}`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync ${targetFilePath}: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, dependabot, or custom files)
  */
 function hasRepositoryChanges(result) {
+  // Check for custom file syncs
+  const hasCustomFileChanges =
+    result.customFileSyncs &&
+    Array.isArray(result.customFileSyncs) &&
+    result.customFileSyncs.some(
+      sync => sync.success && sync.customFile && sync.customFile !== 'unchanged' && sync.customFile !== 'pr-exists'
+    );
+
   return (
     (result.changes && result.changes.length > 0) ||
     result.topicsChange ||
@@ -695,7 +944,8 @@ function hasRepositoryChanges(result) {
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged')
+      result.dependabotSync.dependabotYml !== 'unchanged') ||
+    hasCustomFileChanges
   );
 }
 
@@ -735,7 +985,38 @@ export async function run() {
 
     // Get dependabot.yml settings
     const dependabotYml = getInput('dependabot-yml');
-    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
+    // Get custom file sync settings
+    const sourceFilesInput = getInput('source-files');
+    const targetFilesInput = getInput('target-files');
+    const customFilesPrTitle = getInput('custom-files-pr-title') || 'chore: sync files';
+
+    // Parse file mappings
+    let fileMappings = [];
+    if (sourceFilesInput && targetFilesInput) {
+      const sourceFiles = sourceFilesInput
+        .split(',')
+        .map(f => f.trim())
+        .filter(f => f.length > 0);
+      const targetFiles = targetFilesInput
+        .split(',')
+        .map(f => f.trim())
+        .filter(f => f.length > 0);
+
+      if (sourceFiles.length !== targetFiles.length) {
+        throw new Error(
+          `Number of source-files (${sourceFiles.length}) must match number of target-files (${targetFiles.length})`
+        );
+      }
+
+      fileMappings = sourceFiles.map((source, index) => ({
+        source,
+        target: targetFiles[index]
+      }));
+    } else if (sourceFilesInput || targetFilesInput) {
+      throw new Error('Both source-files and target-files must be provided together');
+    }
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
@@ -749,10 +1030,14 @@ export async function run() {
 
     // Check if any settings are specified
     const hasSettings =
-      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
+      Object.values(settings).some(value => value !== null) ||
+      enableCodeScanning ||
+      topics !== null ||
+      dependabotYml ||
+      fileMappings.length > 0;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or source-files/target-files must be provided)'
       );
     }
 
@@ -775,6 +1060,12 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (fileMappings.length > 0) {
+      core.info(`Custom files to sync: ${fileMappings.length} file(s)`);
+      for (const mapping of fileMappings) {
+        core.info(`  ${mapping.source} → ${mapping.target}`);
+      }
     }
 
     // Update repositories
@@ -838,6 +1129,42 @@ export async function run() {
         repoDependabotYml = repoConfig['dependabot-yml'];
       }
 
+      // Handle repo-specific custom file mappings
+      let repoFileMappings = fileMappings;
+      if (repoConfig['source-files'] !== undefined && repoConfig['target-files'] !== undefined) {
+        const repoSourceFiles =
+          typeof repoConfig['source-files'] === 'string'
+            ? repoConfig['source-files']
+                .split(',')
+                .map(f => f.trim())
+                .filter(f => f.length > 0)
+            : Array.isArray(repoConfig['source-files'])
+              ? repoConfig['source-files']
+              : [];
+
+        const repoTargetFiles =
+          typeof repoConfig['target-files'] === 'string'
+            ? repoConfig['target-files']
+                .split(',')
+                .map(f => f.trim())
+                .filter(f => f.length > 0)
+            : Array.isArray(repoConfig['target-files'])
+              ? repoConfig['target-files']
+              : [];
+
+        if (repoSourceFiles.length !== repoTargetFiles.length) {
+          core.warning(
+            `  ⚠️  Repository ${repo}: source-files and target-files must have the same length. Skipping custom file sync for this repo.`
+          );
+          repoFileMappings = [];
+        } else {
+          repoFileMappings = repoSourceFiles.map((source, index) => ({
+            source,
+            target: repoTargetFiles[index]
+          }));
+        }
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -851,7 +1178,7 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Syncing dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -869,6 +1196,43 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Sync custom files if specified
+      if (repoFileMappings.length > 0) {
+        core.info(`  📁 Syncing ${repoFileMappings.length} custom file(s)...`);
+        result.customFileSyncs = [];
+
+        for (const mapping of repoFileMappings) {
+          core.info(`  📄 Syncing ${mapping.source} → ${mapping.target}...`);
+          const customFileResult = await syncCustomFile(
+            octokit,
+            repo,
+            mapping.source,
+            mapping.target,
+            customFilesPrTitle,
+            dryRun
+          );
+
+          result.customFileSyncs.push(customFileResult);
+
+          if (customFileResult.success) {
+            if (customFileResult.customFile === 'unchanged') {
+              core.info(`  📄 ${customFileResult.message}`);
+            } else if (customFileResult.customFile === 'pr-exists') {
+              core.info(`  📄 ${customFileResult.message}`);
+            } else if (dryRun) {
+              core.info(`  📄 ${customFileResult.message}`);
+            } else {
+              core.info(`  📄 ${customFileResult.message}`);
+              if (customFileResult.prUrl) {
+                core.info(`  🔗 PR URL: ${customFileResult.prUrl}`);
+              }
+            }
+          } else {
+            core.warning(`  ⚠️  ${customFileResult.error}`);
+          }
         }
       }
 
