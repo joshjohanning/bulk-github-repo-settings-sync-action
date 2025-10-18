@@ -780,14 +780,23 @@ export async function syncPackageJson(
     const updatedPackageJson = { ...existingPackageJson };
     const changes = [];
 
+    // Helper function for comparing objects
+    const objectsAreEqual = (obj1, obj2) => {
+      const keys1 = Object.keys(obj1).sort();
+      const keys2 = Object.keys(obj2).sort();
+
+      if (keys1.length !== keys2.length) return false;
+      if (keys1.join(',') !== keys2.join(',')) return false;
+
+      return keys1.every(key => obj1[key] === obj2[key]);
+    };
+
     if (syncDevDependencies && sourcePackageJson.devDependencies) {
       const oldDevDeps = existingPackageJson.devDependencies || {};
       const newDevDeps = sourcePackageJson.devDependencies;
 
       // Check if there are any changes
-      const devDepsChanged =
-        JSON.stringify(oldDevDeps, Object.keys(oldDevDeps).sort()) !==
-        JSON.stringify(newDevDeps, Object.keys(newDevDeps).sort());
+      const devDepsChanged = !objectsAreEqual(oldDevDeps, newDevDeps);
 
       if (devDepsChanged) {
         updatedPackageJson.devDependencies = newDevDeps;
@@ -804,9 +813,7 @@ export async function syncPackageJson(
       const newScripts = sourcePackageJson.scripts;
 
       // Check if there are any changes
-      const scriptsChanged =
-        JSON.stringify(oldScripts, Object.keys(oldScripts).sort()) !==
-        JSON.stringify(newScripts, Object.keys(newScripts).sort());
+      const scriptsChanged = !objectsAreEqual(oldScripts, newScripts);
 
       if (scriptsChanged) {
         updatedPackageJson.scripts = newScripts;
@@ -967,10 +974,9 @@ export async function syncPackageJson(
 
       const { execSync } = await import('child_process');
       const path = await import('path');
-      const os = await import('os');
 
-      // Create a temporary directory
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-install-'));
+      // Create a secure temporary directory
+      const tmpDir = fs.mkdtempSync(path.join('/tmp', 'npm-install-'));
 
       try {
         // Write the updated package.json to temp directory
@@ -979,10 +985,19 @@ export async function syncPackageJson(
 
         // Run npm install to generate package-lock.json
         core.info(`  📦 Running npm install in temporary directory...`);
-        execSync('npm install --package-lock-only', {
-          cwd: tmpDir,
-          stdio: 'pipe'
-        });
+        try {
+          execSync('npm install --package-lock-only', {
+            cwd: tmpDir,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            encoding: 'utf8'
+          });
+        } catch (execError) {
+          core.warning(`  ⚠️  npm install failed: ${execError.message}`);
+          if (execError.stderr) {
+            core.warning(`  npm stderr: ${execError.stderr}`);
+          }
+          throw execError;
+        }
 
         // Read the generated package-lock.json
         const tmpPackageLockPath = path.join(tmpDir, 'package-lock.json');
