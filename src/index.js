@@ -780,15 +780,31 @@ export async function syncPackageJson(
     const updatedPackageJson = { ...existingPackageJson };
     const changes = [];
 
-    // Helper function for comparing objects
+    // Helper function for deep comparing objects
     const objectsAreEqual = (obj1, obj2) => {
+      // Handle null/undefined
+      if (!obj1 || !obj2) return obj1 === obj2;
+      if (obj1 === obj2) return true;
+
       const keys1 = Object.keys(obj1).sort();
       const keys2 = Object.keys(obj2).sort();
 
       if (keys1.length !== keys2.length) return false;
       if (keys1.join(',') !== keys2.join(',')) return false;
 
-      return keys1.every(key => obj1[key] === obj2[key]);
+      // Deep comparison for nested objects
+      return keys1.every(key => {
+        const val1 = obj1[key];
+        const val2 = obj2[key];
+
+        // If both values are objects, recurse
+        if (typeof val1 === 'object' && val1 !== null && typeof val2 === 'object' && val2 !== null) {
+          return objectsAreEqual(val1, val2);
+        }
+
+        // Otherwise, simple equality
+        return val1 === val2;
+      });
     };
 
     if (syncDevDependencies && sourcePackageJson.devDependencies) {
@@ -974,9 +990,10 @@ export async function syncPackageJson(
 
       const { execSync } = await import('child_process');
       const path = await import('path');
+      const os = await import('os');
 
       // Create a secure temporary directory
-      const tmpDir = fs.mkdtempSync(path.join('/tmp', 'npm-install-'));
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-install-'));
 
       try {
         // Write the updated package.json to temp directory
