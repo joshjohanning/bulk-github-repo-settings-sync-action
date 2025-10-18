@@ -16,6 +16,10 @@
  *    export INPUT_ALLOW_UPDATE_BRANCH="true"
  *    export INPUT_DEPENDABOT_YML="./path/to/dependabot.yml"
  *    export INPUT_DEPENDABOT_PR_TITLE="chore: update dependabot.yml"
+ *    export INPUT_PACKAGE_JSON_FILE="./path/to/package.json"
+ *    export INPUT_SYNC_DEV_DEPENDENCIES="true"
+ *    export INPUT_SYNC_SCRIPTS="true"
+ *    export INPUT_PACKAGE_JSON_PR_TITLE="chore: update package.json"
  *
  * 2. Run locally:
  *    node src/index.js
@@ -683,6 +687,387 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Sync package.json devDependencies and/or scripts to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} packageJsonPath - Path to local package.json file
+ * @param {boolean} syncDevDependencies - Whether to sync devDependencies
+ * @param {boolean} syncScripts - Whether to sync scripts
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncPackageJson(
+  octokit,
+  repo,
+  packageJsonPath,
+  syncDevDependencies,
+  syncScripts,
+  prTitle,
+  dryRun
+) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = 'package.json';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  if (!syncDevDependencies && !syncScripts) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'At least one of syncDevDependencies or syncScripts must be enabled',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source package.json file
+    let sourcePackageJson;
+    try {
+      const sourceContent = fs.readFileSync(packageJsonPath, 'utf8');
+      sourcePackageJson = JSON.parse(sourceContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse package.json file at ${packageJsonPath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if package.json exists in the target repo
+    let existingPackageJson = null;
+    let existingSha = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      const existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+      existingPackageJson = JSON.parse(existingContent);
+    } catch (error) {
+      if (error.status === 404) {
+        return {
+          repository: repo,
+          success: false,
+          error: `${targetPath} does not exist in ${repo}. This action only updates existing package.json files.`,
+          dryRun
+        };
+      } else {
+        throw error;
+      }
+    }
+
+    // Create updated package.json by merging selected fields
+    const updatedPackageJson = { ...existingPackageJson };
+    const changes = [];
+
+    if (syncDevDependencies && sourcePackageJson.devDependencies) {
+      const oldDevDeps = existingPackageJson.devDependencies || {};
+      const newDevDeps = sourcePackageJson.devDependencies;
+
+      // Check if there are any changes
+      const devDepsChanged =
+        JSON.stringify(oldDevDeps, Object.keys(oldDevDeps).sort()) !==
+        JSON.stringify(newDevDeps, Object.keys(newDevDeps).sort());
+
+      if (devDepsChanged) {
+        updatedPackageJson.devDependencies = newDevDeps;
+        changes.push({
+          field: 'devDependencies',
+          from: oldDevDeps,
+          to: newDevDeps
+        });
+      }
+    }
+
+    if (syncScripts && sourcePackageJson.scripts) {
+      const oldScripts = existingPackageJson.scripts || {};
+      const newScripts = sourcePackageJson.scripts;
+
+      // Check if there are any changes
+      const scriptsChanged =
+        JSON.stringify(oldScripts, Object.keys(oldScripts).sort()) !==
+        JSON.stringify(newScripts, Object.keys(newScripts).sort());
+
+      if (scriptsChanged) {
+        updatedPackageJson.scripts = newScripts;
+        changes.push({
+          field: 'scripts',
+          from: oldScripts,
+          to: newScripts
+        });
+      }
+    }
+
+    // If no changes needed
+    if (changes.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = 'package-json-sync';
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        changes,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'would-update',
+        message: `Would update ${targetPath} via PR`,
+        changes,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Prepare the updated package.json content with proper formatting
+    const updatedContent = `${JSON.stringify(updatedPackageJson, null, 2)}\n`;
+
+    // Step 1: Update package.json
+    const commitMessage = `chore: update ${targetPath}`;
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: commitMessage,
+      content: Buffer.from(updatedContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Step 2: Get package-lock.json if it exists
+    let packageLockSha = null;
+    let packageLockExists = false;
+    const packageLockPath = 'package-lock.json';
+
+    try {
+      const { data: packageLockData } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: packageLockPath,
+        ref: branchName
+      });
+      packageLockSha = packageLockData.sha;
+      packageLockExists = true;
+    } catch (error) {
+      if (error.status === 404) {
+        core.info(`  📄 ${packageLockPath} does not exist, skipping lock file update`);
+      } else {
+        core.warning(`  ⚠️  Could not check for ${packageLockPath}: ${error.message}`);
+      }
+    }
+
+    // Step 3: If package-lock.json exists, generate an updated version
+    if (packageLockExists && syncDevDependencies) {
+      core.info(`  🔄 Generating updated ${packageLockPath}...`);
+
+      // We need to run npm install to generate the lock file
+      // Since we can't run npm install remotely, we'll use a workaround:
+      // Clone the updated package.json, run npm install locally, and push the result
+
+      const { execSync } = await import('child_process');
+      const path = await import('path');
+      const os = await import('os');
+
+      // Create a temporary directory
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-install-'));
+
+      try {
+        // Write the updated package.json to temp directory
+        const tmpPackageJsonPath = path.join(tmpDir, 'package.json');
+        fs.writeFileSync(tmpPackageJsonPath, updatedContent);
+
+        // Run npm install to generate package-lock.json
+        core.info(`  📦 Running npm install in temporary directory...`);
+        execSync('npm install --package-lock-only', {
+          cwd: tmpDir,
+          stdio: 'pipe'
+        });
+
+        // Read the generated package-lock.json
+        const tmpPackageLockPath = path.join(tmpDir, 'package-lock.json');
+        if (fs.existsSync(tmpPackageLockPath)) {
+          const updatedPackageLock = fs.readFileSync(tmpPackageLockPath, 'utf8');
+
+          // Commit the updated package-lock.json
+          await octokit.rest.repos.createOrUpdateFileContents({
+            owner,
+            repo: repoName,
+            path: packageLockPath,
+            message: 'chore: update package-lock.json',
+            content: Buffer.from(updatedPackageLock).toString('base64'),
+            branch: branchName,
+            sha: packageLockSha
+          });
+
+          core.info(`  ✍️  Committed changes to ${packageLockPath}`);
+        } else {
+          core.warning(`  ⚠️  npm install did not generate ${packageLockPath}`);
+        }
+      } catch (error) {
+        core.warning(`  ⚠️  Failed to update ${packageLockPath}: ${error.message}`);
+      } finally {
+        // Clean up temporary directory
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to clean up temporary directory: ${error.message}`);
+        }
+      }
+    }
+
+    // Prepare PR body content
+    let prBody = `This PR updates \`package.json\``;
+    if (syncDevDependencies && syncScripts) {
+      prBody += ` to sync devDependencies and scripts.\n\n`;
+    } else if (syncDevDependencies) {
+      prBody += ` to sync devDependencies.\n\n`;
+    } else if (syncScripts) {
+      prBody += ` to sync scripts.\n\n`;
+    }
+
+    prBody += '**Changes:**\n';
+    for (const change of changes) {
+      prBody += `- Updated ${change.field}\n`;
+    }
+
+    if (packageLockExists && syncDevDependencies) {
+      prBody += '- Updated package-lock.json\n';
+    }
+
+    // Create PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+
+    return {
+      repository: repo,
+      success: true,
+      packageJson: 'updated',
+      prNumber,
+      prUrl: pr.html_url,
+      message: `Updated ${targetPath} via PR #${prNumber}`,
+      changes,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync package.json: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
@@ -695,7 +1080,11 @@ function hasRepositoryChanges(result) {
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged')
+      result.dependabotSync.dependabotYml !== 'unchanged') ||
+    (result.packageJsonSync &&
+      result.packageJsonSync.success &&
+      result.packageJsonSync.packageJson &&
+      result.packageJsonSync.packageJson !== 'unchanged')
   );
 }
 
@@ -735,7 +1124,13 @@ export async function run() {
 
     // Get dependabot.yml settings
     const dependabotYml = getInput('dependabot-yml');
-    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
+    // Get package.json sync settings
+    const packageJsonFile = getInput('package-json-file');
+    const syncDevDependencies = getBooleanInput('sync-dev-dependencies');
+    const syncScripts = getBooleanInput('sync-scripts');
+    const packageJsonPrTitle = getInput('package-json-pr-title') || 'chore: update package.json';
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
@@ -749,10 +1144,14 @@ export async function run() {
 
     // Check if any settings are specified
     const hasSettings =
-      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
+      Object.values(settings).some(value => value !== null) ||
+      enableCodeScanning ||
+      topics !== null ||
+      dependabotYml ||
+      (packageJsonFile && (syncDevDependencies || syncScripts));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or package-json-file with sync-dev-dependencies/sync-scripts must be specified)'
       );
     }
 
@@ -775,6 +1174,15 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (packageJsonFile && (syncDevDependencies || syncScripts)) {
+      core.info(`Package.json will be synced from: ${packageJsonFile}`);
+      if (syncDevDependencies) {
+        core.info('  - devDependencies will be synced');
+      }
+      if (syncScripts) {
+        core.info('  - scripts will be synced');
+      }
     }
 
     // Update repositories
@@ -851,7 +1259,7 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Syncing dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -869,6 +1277,67 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Handle repo-specific package.json settings
+      let repoPackageJsonFile = packageJsonFile;
+      let repoSyncDevDependencies = syncDevDependencies;
+      let repoSyncScripts = syncScripts;
+      if (repoConfig['package-json-file'] !== undefined) {
+        repoPackageJsonFile = repoConfig['package-json-file'];
+      }
+      if (repoConfig['sync-dev-dependencies'] !== undefined) {
+        repoSyncDevDependencies = repoConfig['sync-dev-dependencies'];
+      }
+      if (repoConfig['sync-scripts'] !== undefined) {
+        repoSyncScripts = repoConfig['sync-scripts'];
+      }
+
+      // Sync package.json if specified
+      if (repoPackageJsonFile && (repoSyncDevDependencies || repoSyncScripts)) {
+        core.info(`  📦 Syncing package.json...`);
+        const packageJsonResult = await syncPackageJson(
+          octokit,
+          repo,
+          repoPackageJsonFile,
+          repoSyncDevDependencies,
+          repoSyncScripts,
+          packageJsonPrTitle,
+          dryRun
+        );
+
+        // Add package.json result to the main result
+        result.packageJsonSync = packageJsonResult;
+
+        if (packageJsonResult.success) {
+          if (packageJsonResult.packageJson === 'unchanged') {
+            core.info(`  📦 ${packageJsonResult.message}`);
+          } else if (packageJsonResult.packageJson === 'pr-exists') {
+            core.info(`  📦 ${packageJsonResult.message}`);
+            if (packageJsonResult.prUrl) {
+              core.info(`  🔗 PR URL: ${packageJsonResult.prUrl}`);
+            }
+          } else if (dryRun) {
+            core.info(`  📦 ${packageJsonResult.message}`);
+            if (packageJsonResult.changes) {
+              for (const change of packageJsonResult.changes) {
+                core.info(`     - Would update ${change.field}`);
+              }
+            }
+          } else {
+            core.info(`  📦 ${packageJsonResult.message}`);
+            if (packageJsonResult.prUrl) {
+              core.info(`  🔗 PR URL: ${packageJsonResult.prUrl}`);
+            }
+            if (packageJsonResult.changes) {
+              for (const change of packageJsonResult.changes) {
+                core.info(`     - Updated ${change.field}`);
+              }
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${packageJsonResult.error}`);
         }
       }
 
