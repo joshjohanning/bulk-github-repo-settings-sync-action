@@ -8,5 +8,6 @@ repos:
     allow-update-branch: false
     enable-default-code-scanning: false
     topics: 'javascript,github-actions,automation,different'
+    gitignore: './example-gitignore'
   - repo: joshjohanning/other-repo
     # This repo will use the defaults from the action inputs
