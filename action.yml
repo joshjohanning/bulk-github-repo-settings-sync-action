@@ -9,6 +9,10 @@ inputs:
   github-token:
     description: 'GitHub token for API access (requires repo scope)'
     required: true
+  github-api-url:
+    description: 'GitHub API URL (e.g., https://api.github.com for GitHub.com or https://ghes.domain.com/api/v3 for GHES). Instance URL is auto-derived.'
+    required: false
+    default: '${{ github.api_url }}'
   repositories:
     description: 'Comma-separated list of repositories (owner/repo format) or "all" for all repos in the organization/user'
     required: false
