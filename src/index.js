@@ -6,6 +6,7 @@
  *
  * 1. Set environment variables to simulate GitHub Actions inputs:
  *    export INPUT_GITHUB_TOKEN="ghp_your_token_here"
+ *    export INPUT_GITHUB_API_URL="https://api.github.com"  # Optional, defaults to github.api_url
  *    export INPUT_REPOSITORIES="owner/repo1,owner/repo2"
  *    export INPUT_ALLOW_SQUASH_MERGE="true"
  *    export INPUT_ALLOW_MERGE_COMMIT="false"
@@ -705,6 +706,7 @@ export async function run() {
   try {
     // Get inputs
     const githubToken = getInput('github-token');
+    const githubApiUrl = getInput('github-api-url') || 'https://api.github.com';
     const repositories = getInput('repositories');
     const repositoriesFile = getInput('repositories-file');
     const owner = getInput('owner');
@@ -755,7 +757,10 @@ export async function run() {
     }
 
     // Initialize Octokit
-    const octokit = new Octokit({ auth: githubToken });
+    const octokit = new Octokit({
+      auth: githubToken,
+      baseUrl: githubApiUrl
+    });
 
     // Parse repository list
     const repoList = await parseRepositories(repositories, repositoriesFile, owner, octokit);

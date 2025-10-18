@@ -112,6 +112,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockCore.getInput.mockImplementation(name => {
       const inputs = {
         'github-token': 'test-token',
+        'github-api-url': '',
         repositories: '',
         'repositories-file': '',
         owner: '',
@@ -691,6 +692,82 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results');
       expect(mockCore.summary.addTable).toHaveBeenCalled();
       expect(mockCore.summary.write).toHaveBeenCalled();
+    });
+
+    test('should use custom GitHub API URL when provided', async () => {
+      const customApiUrl = 'https://ghes.example.com/api/v3';
+
+      // Import Octokit mock to verify constructor was called with correct params
+      const { Octokit } = await import('@octokit/rest');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': customApiUrl,
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(Octokit).toHaveBeenCalledWith({
+        auth: 'test-token',
+        baseUrl: customApiUrl
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+
+    test('should default to https://api.github.com when no API URL provided', async () => {
+      const { Octokit } = await import('@octokit/rest');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': '',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(Octokit).toHaveBeenCalledWith({
+        auth: 'test-token',
+        baseUrl: 'https://api.github.com'
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+
+    test('should work with GHEC-DR (GHE) URL', async () => {
+      const gheUrl = 'https://api.octocorp.ghe.com';
+      const { Octokit } = await import('@octokit/rest');
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'github-api-url': gheUrl,
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(Octokit).toHaveBeenCalledWith({
+        auth: 'test-token',
+        baseUrl: gheUrl
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
   });
 

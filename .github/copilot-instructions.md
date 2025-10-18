@@ -138,6 +138,12 @@ const { functionToTest } = await import('../src/index.js');
 - Cache API responses when appropriate
 - Use pagination when necessary
 
+### GitHub Instance Support
+
+- **Always support GitHub.com, GHES, and GHEC-DR** using `github-api-url` input with default `${{ github.api_url }}`
+- Initialize Octokit with a fallback `baseUrl`: `new Octokit({ auth: token, baseUrl: apiUrl || 'https://api.github.com' })`
+- GHES/GHE documentation doesn't typically need to be called out separately in the README unless there are specific differences to highlight
+
 ## Performance Considerations
 
 - Avoid unnecessary API calls (respect rate limits)
