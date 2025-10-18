@@ -683,6 +683,29 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Create a safe Git branch name from a file path
+ * @param {string} filePath - File path to convert
+ * @returns {string} Safe branch name (max 100 chars to stay well under Git's 255 char limit)
+ */
+function createSafeBranchName(filePath) {
+  // Remove leading dots and slashes, replace special chars with dashes
+  let safeName = filePath.replace(/^[./]+/, '').replace(/[^a-zA-Z0-9]/g, '-');
+
+  // Truncate if too long and add hash for uniqueness
+  if (safeName.length > 80) {
+    // Use a simple hash of the full path for uniqueness
+    const hash = filePath
+      .split('')
+      .reduce((acc, char) => ((acc << 5) - acc + char.charCodeAt(0)) | 0, 0)
+      .toString(16)
+      .slice(-8);
+    safeName = `${safeName.substring(0, 80)}-${hash}`;
+  }
+
+  return `custom-files-sync-${safeName}`;
+}
+
+/**
  * Sync custom file to target repository
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
@@ -761,7 +784,7 @@ export async function syncCustomFile(octokit, repo, sourceFilePath, targetFilePa
     }
 
     // Check if there's already an open PR for this update
-    const branchName = `custom-files-sync-${targetFilePath.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    const branchName = createSafeBranchName(targetFilePath);
     let existingPR = null;
 
     try {
@@ -867,32 +890,17 @@ export async function syncCustomFile(octokit, repo, sourceFilePath, targetFilePa
       ? `This PR updates \`${targetFilePath}\` to the latest version.\n\n**Changes:**\n- Updated file content`
       : `This PR adds \`${targetFilePath}\`.\n\n**Changes:**\n- Added file`;
 
-    // Create or update PR
-    let prNumber;
-    if (existingPR) {
-      // Update existing PR
-      await octokit.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: existingPR.number,
-        title: prTitle,
-        body: prBody
-      });
-      prNumber = existingPR.number;
-      core.info(`  🔄 Updated existing PR #${prNumber}`);
-    } else {
-      // Create new PR
-      const { data: pr } = await octokit.rest.pulls.create({
-        owner,
-        repo: repoName,
-        title: prTitle,
-        head: branchName,
-        base: defaultBranch,
-        body: prBody
-      });
-      prNumber = pr.number;
-      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
-    }
+    // Create PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
 
     return {
       repository: repo,
