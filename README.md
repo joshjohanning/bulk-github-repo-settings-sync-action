@@ -16,8 +16,9 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
-- � **Sync dependabot.yml files** across repositories via pull requests
-- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📦 **Sync dependabot.yml files** across repositories via pull requests
+- 📁 **Sync custom files** (workflows, configs, etc.) across repositories via pull requests
+- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -92,7 +93,7 @@ repos:
   - repo: owner/repo2
     dependabot-yml: './config/dependabot/python.yml'
   - repo: owner/repo3
-    dependabot.yml: './github/dependabot.yml' # use the same config that this repo is using
+    dependabot-yml: './.github/dependabot.yml' # use the same config that this repo is using
 ```
 
 **Behavior:**
@@ -102,6 +103,45 @@ repos:
 - If content is identical, no PR is created
 - PRs are created/updated using the GitHub API so commits are verified
 - Updates existing open PRs instead of creating duplicates
+
+### Syncing Custom Files (Workflows, Configs, etc.)
+
+Sync multiple custom files across repositories via pull requests. This is perfect for standardizing workflows, configuration files, or any other files you want to keep consistent across repositories.
+
+```yml
+- name: Sync Custom Files
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2'
+    source-files: '.github/workflows/ci.yml,.github/workflows/release.yml'
+    target-files: '.github/workflows/ci.yml,.github/workflows/release.yml'
+    custom-files-pr-title: 'chore: sync workflows'
+```
+
+With repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    source-files: '.github/workflows/ci.yml,.github/workflows/release.yml'
+    target-files: '.github/workflows/ci.yml,.github/workflows/release.yml'
+  - repo: owner/repo2
+    source-files: '.github/workflows/ci.yml'
+    target-files: '.github/workflows/ci.yml'
+  - repo: owner/repo3
+    # Uses global defaults if specified
+```
+
+**Behavior:**
+
+- `source-files` and `target-files` must be comma-separated lists with matching lengths
+- Files are matched by position (first source → first target, etc.)
+- If a file doesn't exist in the target repo, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- If content is identical, no PR is created
+- Each file sync creates a separate branch and PR to avoid conflicts
+- PRs are created/updated using the GitHub API so commits are verified
 
 ### Organization-wide Updates
 
@@ -161,6 +201,9 @@ Output shows what would change:
 | `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
 | `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
+| `source-files`                 | Comma-separated list of source file paths to sync (e.g., `.github/workflows/ci.yml,.github/workflows/release.yml`)                         | No       | -                              |
+| `target-files`                 | Comma-separated list of target file paths in repositories (must match order of source-files)                                               | No       | -                              |
+| `custom-files-pr-title`        | Title for pull requests when syncing custom files                                                                                          | No       | `chore: sync files`            |
 | `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
 
 \* Either `repositories` or `repositories-file` must be provided
@@ -237,7 +280,9 @@ repos:
   - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
-    dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+    dependabot-yml: './.github/dependabot-configs/custom-dependabot.yml'
+    source-files: '.github/workflows/custom-ci.yml'
+    target-files: '.github/workflows/ci.yml'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
