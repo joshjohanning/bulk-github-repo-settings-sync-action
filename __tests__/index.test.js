@@ -63,12 +63,31 @@ const mockOctokit = {
 
 // Mock fs module
 const mockFs = {
-  readFileSync: jest.fn()
+  readFileSync: jest.fn(),
+  writeFileSync: jest.fn(),
+  existsSync: jest.fn(),
+  mkdtempSync: jest.fn(() => '/tmp/npm-install-test'),
+  rmSync: jest.fn()
 };
 
 // Mock yaml module
 const mockYaml = {
   load: jest.fn()
+};
+
+// Mock child_process module
+const mockChildProcess = {
+  execSync: jest.fn()
+};
+
+// Mock path module
+const mockPath = {
+  join: jest.fn((...args) => args.join('/'))
+};
+
+// Mock os module
+const mockOs = {
+  tmpdir: jest.fn(() => '/tmp')
 };
 
 // Mock the modules before importing the main module
@@ -79,6 +98,9 @@ jest.unstable_mockModule('@octokit/rest', () => ({
 }));
 jest.unstable_mockModule('fs', () => mockFs);
 jest.unstable_mockModule('js-yaml', () => mockYaml);
+jest.unstable_mockModule('child_process', () => mockChildProcess);
+jest.unstable_mockModule('path', () => mockPath);
+jest.unstable_mockModule('os', () => mockOs);
 
 // Import the main module and helper functions after mocking
 const {
@@ -627,7 +649,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or package-json-file with sync-dev-dependencies/sync-scripts must be specified)'
       );
     });
 
@@ -768,6 +790,509 @@ describe('Bulk GitHub Repository Settings Action', () => {
         baseUrl: gheUrl
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+  });
+
+  describe('syncPackageJson', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should sync devDependencies when requested', async () => {
+      const sourcePackageJson = {
+        name: 'source-package',
+        devDependencies: {
+          eslint: '^9.0.0',
+          prettier: '^3.0.0'
+        },
+        scripts: {
+          test: 'jest'
+        }
+      };
+
+      const targetPackageJson = {
+        name: 'target-package',
+        devDependencies: {
+          eslint: '^8.0.0',
+          jest: '^29.0.0'
+        },
+        scripts: {
+          test: 'jest'
+        }
+      };
+
+      const packageLockJson = {
+        name: 'target-package',
+        lockfileVersion: 3,
+        packages: {}
+      };
+
+      // Mock file system operations for npm install
+      mockFs.readFileSync
+        .mockReturnValueOnce(JSON.stringify(sourcePackageJson)) // Reading source package.json
+        .mockReturnValueOnce(JSON.stringify(packageLockJson)); // Reading generated package-lock.json
+
+      mockFs.existsSync.mockReturnValue(true);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          // First call: get package.json
+          data: {
+            sha: 'package-sha-123',
+            content: Buffer.from(JSON.stringify(targetPackageJson)).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          // Second call: get package-lock.json
+          data: {
+            sha: 'package-lock-sha-123',
+            content: Buffer.from(JSON.stringify(packageLockJson)).toString('base64')
+          }
+        });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 10,
+          html_url: 'https://github.com/owner/repo/pull/10'
+        }
+      });
+
+      mockChildProcess.execSync.mockReturnValue(undefined);
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true, // syncDevDependencies
+        false, // syncScripts
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('updated');
+      expect(result.prNumber).toBe(10);
+      expect(result.changes).toHaveLength(1);
+      expect(result.changes[0].field).toBe('devDependencies');
+    });
+
+    test('should sync scripts when requested', async () => {
+      const sourcePackageJson = {
+        name: 'source-package',
+        devDependencies: {
+          eslint: '^9.0.0'
+        },
+        scripts: {
+          test: 'jest',
+          lint: 'eslint .',
+          build: 'tsc'
+        }
+      };
+
+      const targetPackageJson = {
+        name: 'target-package',
+        devDependencies: {
+          eslint: '^9.0.0'
+        },
+        scripts: {
+          test: 'jest',
+          old: 'old-script'
+        }
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'package-sha-456',
+          content: Buffer.from(JSON.stringify(targetPackageJson)).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 11,
+          html_url: 'https://github.com/owner/repo/pull/11'
+        }
+      });
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        false, // syncDevDependencies
+        true, // syncScripts
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('updated');
+      expect(result.prNumber).toBe(11);
+      expect(result.changes).toHaveLength(1);
+      expect(result.changes[0].field).toBe('scripts');
+    });
+
+    test('should sync both devDependencies and scripts when requested', async () => {
+      const sourcePackageJson = {
+        name: 'source-package',
+        devDependencies: {
+          eslint: '^9.0.0',
+          prettier: '^3.0.0'
+        },
+        scripts: {
+          test: 'jest',
+          lint: 'eslint .'
+        }
+      };
+
+      const targetPackageJson = {
+        name: 'target-package',
+        devDependencies: {
+          eslint: '^8.0.0'
+        },
+        scripts: {
+          test: 'mocha'
+        }
+      };
+
+      const packageLockJson = {
+        name: 'target-package',
+        lockfileVersion: 3,
+        packages: {}
+      };
+
+      // Mock file system operations for npm install
+      mockFs.readFileSync
+        .mockReturnValueOnce(JSON.stringify(sourcePackageJson)) // Reading source package.json
+        .mockReturnValueOnce(JSON.stringify(packageLockJson)); // Reading generated package-lock.json
+
+      mockFs.existsSync.mockReturnValue(true);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          // First call: get package.json
+          data: {
+            sha: 'package-sha-789',
+            content: Buffer.from(JSON.stringify(targetPackageJson)).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          // Second call: get package-lock.json
+          data: {
+            sha: 'package-lock-sha-789',
+            content: Buffer.from(JSON.stringify(packageLockJson)).toString('base64')
+          }
+        });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 12,
+          html_url: 'https://github.com/owner/repo/pull/12'
+        }
+      });
+
+      mockChildProcess.execSync.mockReturnValue(undefined);
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true, // syncDevDependencies
+        true, // syncScripts
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('updated');
+      expect(result.prNumber).toBe(12);
+      expect(result.changes).toHaveLength(2);
+      expect(result.changes[0].field).toBe('devDependencies');
+      expect(result.changes[1].field).toBe('scripts');
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const packageJson = {
+        name: 'package',
+        devDependencies: {
+          eslint: '^9.0.0'
+        },
+        scripts: {
+          test: 'jest'
+        }
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(packageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'package-sha-999',
+          content: Buffer.from(JSON.stringify(packageJson)).toString('base64')
+        }
+      });
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        true,
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode', async () => {
+      const sourcePackageJson = {
+        name: 'source-package',
+        devDependencies: {
+          eslint: '^9.0.0'
+        }
+      };
+
+      const targetPackageJson = {
+        name: 'target-package',
+        devDependencies: {
+          eslint: '^8.0.0'
+        }
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'package-sha-dry',
+          content: Buffer.from(JSON.stringify(targetPackageJson)).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(result.changes).toHaveLength(1);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle missing package.json in target repo', async () => {
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', devDependencies: {} }));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('does not exist');
+    });
+
+    test('should handle invalid repository format', async () => {
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'invalid-repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle when neither syncDevDependencies nor syncScripts is enabled', async () => {
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        false, // syncDevDependencies
+        false, // syncScripts
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('At least one of syncDevDependencies or syncScripts must be enabled');
+    });
+
+    test('should return pr-exists when open PR already exists', async () => {
+      const sourcePackageJson = {
+        name: 'source-package',
+        devDependencies: {
+          eslint: '^9.0.0'
+        }
+      };
+
+      const targetPackageJson = {
+        name: 'target-package',
+        devDependencies: {
+          eslint: '^8.0.0'
+        }
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'package-sha-pr',
+          content: Buffer.from(JSON.stringify(targetPackageJson)).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 99,
+            html_url: 'https://github.com/owner/repo/pull/99'
+          }
+        ]
+      });
+
+      const { syncPackageJson } = await import('../src/index.js');
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('pr-exists');
+      expect(result.prNumber).toBe(99);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
   });
 

@@ -16,8 +16,9 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
-- � **Sync dependabot.yml files** across repositories via pull requests
-- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📦 **Sync dependabot.yml files** across repositories via pull requests
+- 📦 **Sync package.json devDependencies and npm scripts** across repositories via pull requests
+- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -103,6 +104,59 @@ repos:
 - PRs are created/updated using the GitHub API so commits are verified
 - Updates existing open PRs instead of creating duplicates
 
+### Syncing Package.json DevDependencies and Scripts
+
+Sync `devDependencies` and/or `scripts` from a template `package.json` file to target repositories via pull requests:
+
+```yml
+- name: Sync Package.json Dependencies
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    package-json-file: './templates/package.json'
+    sync-dev-dependencies: true
+    sync-scripts: true
+    package-json-pr-title: 'chore: update package.json'
+```
+
+You can sync just devDependencies or just scripts:
+
+```yml
+- name: Sync Only DevDependencies
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories: 'owner/repo1,owner/repo2'
+    package-json-file: './templates/package.json'
+    sync-dev-dependencies: true
+    sync-scripts: false
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    package-json-file: './templates/node-project.json'
+    sync-dev-dependencies: true
+    sync-scripts: true
+  - repo: owner/repo2
+    package-json-file: './templates/typescript-project.json'
+    sync-dev-dependencies: true
+    sync-scripts: false
+```
+
+**Behavior:**
+
+- Only updates existing `package.json` files (does not create new ones)
+- Replaces entire `devDependencies` and/or `scripts` sections from the template
+- Automatically runs `npm install` to update `package-lock.json` (when syncing devDependencies)
+- Both files are committed in separate commits in the same PR
+- PRs are created/updated using the GitHub API so commits are verified
+- If content is identical, no PR is created
+- Updates existing open PRs instead of creating duplicates
+
 ### Organization-wide Updates
 
 ```yml
@@ -161,6 +215,10 @@ Output shows what would change:
 | `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
 | `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
+| `package-json-file`            | Path to a package.json file to use as source for syncing devDependencies and/or scripts                                                    | No       | -                              |
+| `sync-dev-dependencies`        | Sync devDependencies from package-json-file to target repositories                                                                         | No       | `false`                        |
+| `sync-scripts`                 | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `false`                        |
+| `package-json-pr-title`        | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`   |
 | `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
 
 \* Either `repositories` or `repositories-file` must be provided
@@ -238,6 +296,10 @@ repos:
   - repo: owner/repo3
     enable-default-code-scanning: false
     dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+  - repo: owner/repo4
+    package-json-file: './templates/typescript-project.json'
+    sync-dev-dependencies: true
+    sync-scripts: true
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -248,9 +310,14 @@ repos:
 - Topics **replace** all existing repository topics
 - Dependabot.yml syncing creates pull requests for review before merging
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
+- Package.json syncing **replaces** the entire `devDependencies` and/or `scripts` sections
+- Package.json syncing only updates existing package.json files (does not create new ones)
+- Package-lock.json is automatically updated when syncing devDependencies
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions
+  - Contents: Read and write (if syncing dependabot.yml or package.json)
+  - Pull Requests: Read and write (if syncing dependabot.yml or package.json)
   - Is installed on all target repositories
 - CodeQL scanning may not be available for all languages
 
