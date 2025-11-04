@@ -20,12 +20,12 @@ updates:
     directory: '/'
     schedule:
       interval: 'weekly'
-    versioning-strategy: increase
+    versioning-strategy: 'increase'
     commit-message:
       prefix: 'chore'
       include: 'scope'
     groups:
-      github-actions:
+      github:
         patterns:
           - '@actions/*'
           - '@octokit/*'
