@@ -683,6 +683,273 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Sync .gitignore file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} gitignorePath - Path to local .gitignore file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = '.gitignore';
+  const repoSpecificMarker = '# Repository-specific entries (preserved during sync)';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source .gitignore file
+    let sourceContent;
+    try {
+      sourceContent = fs.readFileSync(gitignorePath, 'utf8');
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read .gitignore file at ${gitignorePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if .gitignore exists in the target repo
+    let existingSha = null;
+    let existingContent = null;
+    let repoSpecificContent = '';
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+
+      // Extract repo-specific content (after the marker)
+      const markerIndex = existingContent.indexOf(repoSpecificMarker);
+      if (markerIndex !== -1) {
+        repoSpecificContent = existingContent.substring(markerIndex);
+      }
+    } catch (error) {
+      if (error.status === 404) {
+        // File doesn't exist - this is fine, we'll create it
+        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Build the new content
+    let newContent = sourceContent.trim();
+
+    // If there's repo-specific content, append it
+    if (repoSpecificContent) {
+      // Ensure there's a blank line before the repo-specific section
+      if (!newContent.endsWith('\n')) {
+        newContent += '\n';
+      }
+      if (!newContent.endsWith('\n\n')) {
+        newContent += '\n';
+      }
+      newContent += repoSpecificContent;
+    }
+
+    // Ensure file ends with a newline
+    if (!newContent.endsWith('\n')) {
+      newContent += '\n';
+    }
+
+    // Compare content
+    const needsUpdate = !existingContent || existingContent.trim() !== newContent.trim();
+
+    if (!needsUpdate) {
+      return {
+        repository: repo,
+        success: true,
+        gitignore: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = 'gitignore-sync';
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        gitignore: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        gitignore: existingContent ? 'would-update' : 'would-create',
+        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update the file
+    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: commitMessage,
+      content: Buffer.from(newContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha || undefined
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Prepare PR body content
+    let prBody;
+    if (existingContent) {
+      prBody = `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration`;
+      if (repoSpecificContent) {
+        prBody += `\n- Repository-specific entries have been preserved`;
+      }
+    } else {
+      prBody = `This PR adds \`.gitignore\` to the repository.\n\n**Changes:**\n- Added .gitignore configuration`;
+    }
+
+    // Create or update PR
+    let prNumber;
+    if (existingPR) {
+      // Update existing PR
+      await octokit.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: existingPR.number,
+        title: prTitle,
+        body: prBody
+      });
+      prNumber = existingPR.number;
+      core.info(`  🔄 Updated existing PR #${prNumber}`);
+    } else {
+      // Create new PR
+      const { data: pr } = await octokit.rest.pulls.create({
+        owner,
+        repo: repoName,
+        title: prTitle,
+        head: branchName,
+        base: defaultBranch,
+        body: prBody
+      });
+      prNumber = pr.number;
+      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      gitignore: existingContent ? 'updated' : 'created',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: existingContent
+        ? `Updated ${targetPath} via PR #${prNumber}`
+        : `Created ${targetPath} via PR #${prNumber}`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync .gitignore: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
@@ -695,7 +962,11 @@ function hasRepositoryChanges(result) {
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged')
+      result.dependabotSync.dependabotYml !== 'unchanged') ||
+    (result.gitignoreSync &&
+      result.gitignoreSync.success &&
+      result.gitignoreSync.gitignore &&
+      result.gitignoreSync.gitignore !== 'unchanged')
   );
 }
 
@@ -735,7 +1006,11 @@ export async function run() {
 
     // Get dependabot.yml settings
     const dependabotYml = getInput('dependabot-yml');
-    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
+    // Get .gitignore settings
+    const gitignore = getInput('gitignore');
+    const gitignorePrTitle = getInput('gitignore-pr-title') || 'chore: update .gitignore';
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
@@ -749,10 +1024,14 @@ export async function run() {
 
     // Check if any settings are specified
     const hasSettings =
-      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
+      Object.values(settings).some(value => value !== null) ||
+      enableCodeScanning ||
+      topics !== null ||
+      dependabotYml ||
+      gitignore;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified)'
       );
     }
 
@@ -775,6 +1054,9 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (gitignore) {
+      core.info(`.gitignore will be synced from: ${gitignore}`);
     }
 
     // Update repositories
@@ -838,6 +1120,12 @@ export async function run() {
         repoDependabotYml = repoConfig['dependabot-yml'];
       }
 
+      // Handle repo-specific .gitignore
+      let repoGitignore = gitignore;
+      if (repoConfig['gitignore'] !== undefined) {
+        repoGitignore = repoConfig['gitignore'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -851,7 +1139,7 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Syncing dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -869,6 +1157,30 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Sync .gitignore if specified
+      if (repoGitignore) {
+        core.info(`  📝 Syncing .gitignore...`);
+        const gitignoreResult = await syncGitignore(octokit, repo, repoGitignore, gitignorePrTitle, dryRun);
+
+        // Add gitignore result to the main result
+        result.gitignoreSync = gitignoreResult;
+
+        if (gitignoreResult.success) {
+          if (gitignoreResult.gitignore === 'unchanged') {
+            core.info(`  📝 ${gitignoreResult.message}`);
+          } else if (dryRun) {
+            core.info(`  📝 ${gitignoreResult.message}`);
+          } else {
+            core.info(`  📝 ${gitignoreResult.message}`);
+            if (gitignoreResult.prUrl) {
+              core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${gitignoreResult.error}`);
         }
       }
 
