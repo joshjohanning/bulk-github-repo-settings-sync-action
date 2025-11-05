@@ -572,6 +572,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     }
 
     // Create or get reference to the branch
+    core.info(`  🔍 Checking for existing branch ${branchName}...`);
     let branchExists = false;
     try {
       await octokit.rest.git.getRef({
@@ -580,8 +581,11 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
         ref: `heads/${branchName}`
       });
       branchExists = true;
+      core.info(`  ✓ Branch ${branchName} exists`);
     } catch (error) {
-      if (error.status !== 404) {
+      if (error.status === 404) {
+        core.info(`  ✓ Branch ${branchName} does not exist`);
+      } else {
         throw error;
       }
     }
