@@ -572,6 +572,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     }
 
     // Create or get reference to the branch
+    core.info(`  🔍 Checking for existing branch ${branchName}...`);
     let branchExists = false;
     try {
       await octokit.rest.git.getRef({
@@ -580,8 +581,11 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
         ref: `heads/${branchName}`
       });
       branchExists = true;
+      core.info(`  ✓ Branch ${branchName} exists`);
     } catch (error) {
-      if (error.status !== 404) {
+      if (error.status === 404) {
+        core.info(`  ✓ Branch ${branchName} does not exist`);
+      } else {
         throw error;
       }
     }
@@ -850,7 +854,7 @@ export async function run() {
 
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
-        core.info(`  📦 Syncing dependabot.yml...`);
+        core.info(`  📦 Checking dependabot.yml...`);
         const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
 
         // Add dependabot result to the main result
@@ -885,11 +889,7 @@ export async function run() {
           core.info(`  📝 Settings changes:`);
           for (const change of result.changes) {
             const settingName = change.setting.replace(/_/g, '-');
-            if (dryRun) {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            } else {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            }
+            core.info(`     ${settingName}: ${change.from} → ${change.to}`);
           }
         }
 

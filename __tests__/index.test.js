@@ -941,6 +941,76 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
     });
 
+    test('should update existing branch when branch already exists', async () => {
+      const newContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
+      const oldContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-777',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch already exists
+      mockOctokit.rest.git.getRef
+        .mockResolvedValueOnce({
+          // Branch exists
+          data: { object: { sha: 'branch-sha-123' } }
+        })
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'main-sha-456' } }
+        });
+
+      mockOctokit.rest.git.updateRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 44,
+          html_url: 'https://github.com/owner/repo/pull/44'
+        }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('updated');
+      expect(result.prNumber).toBe(44);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/dependabot-yml-sync',
+        sha: 'main-sha-456',
+        force: true
+      });
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
     test('should update existing PR when one exists', async () => {
       const newContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';

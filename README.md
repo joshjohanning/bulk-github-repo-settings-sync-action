@@ -16,8 +16,8 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
-- � **Sync dependabot.yml files** across repositories via pull requests
-- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 🔄 **Sync dependabot.yml files** across repositories via pull requests
+- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -92,7 +92,7 @@ repos:
   - repo: owner/repo2
     dependabot-yml: './config/dependabot/python.yml'
   - repo: owner/repo3
-    dependabot.yml: './github/dependabot.yml' # use the same config that this repo is using
+    dependabot-yml: './.github/dependabot.yml' # use the same config that this repo is using
 ```
 
 **Behavior:**
