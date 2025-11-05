@@ -634,32 +634,17 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
       : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`;
 
-    // Create or update PR
-    let prNumber;
-    if (existingPR) {
-      // Update existing PR
-      await octokit.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: existingPR.number,
-        title: prTitle,
-        body: prBody
-      });
-      prNumber = existingPR.number;
-      core.info(`  🔄 Updated existing PR #${prNumber}`);
-    } else {
-      // Create new PR
-      const { data: pr } = await octokit.rest.pulls.create({
-        owner,
-        repo: repoName,
-        title: prTitle,
-        head: branchName,
-        base: defaultBranch,
-        body: prBody
-      });
-      prNumber = pr.number;
-      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
-    }
+    // Create new PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
 
     return {
       repository: repo,
