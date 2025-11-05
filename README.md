@@ -92,7 +92,7 @@ repos:
   - repo: owner/repo2
     dependabot-yml: './config/dependabot/python.yml'
   - repo: owner/repo3
-    dependabot.yml: './github/dependabot.yml' # use the same config that this repo is using
+    dependabot-yml: './.github/dependabot.yml' # use the same config that this repo is using
 ```
 
 **Behavior:**
