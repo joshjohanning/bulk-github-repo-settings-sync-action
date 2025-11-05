@@ -885,11 +885,7 @@ export async function run() {
           core.info(`  📝 Settings changes:`);
           for (const change of result.changes) {
             const settingName = change.setting.replace(/_/g, '-');
-            if (dryRun) {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            } else {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            }
+            core.info(`     ${settingName}: ${change.from} → ${change.to}`);
           }
         }
 
