@@ -850,7 +850,7 @@ export async function run() {
 
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
-        core.info(`  📦 Syncing dependabot.yml...`);
+        core.info(`  📦 Checking dependabot.yml...`);
         const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
 
         // Add dependabot result to the main result
