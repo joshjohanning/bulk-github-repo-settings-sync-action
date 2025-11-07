@@ -39,7 +39,10 @@ const mockOctokit = {
       replaceAllTopics: jest.fn(),
       getAllTopics: jest.fn(),
       getContent: jest.fn(),
-      createOrUpdateFileContents: jest.fn()
+      createOrUpdateFileContents: jest.fn(),
+      getRepoRulesets: jest.fn(),
+      createRepoRuleset: jest.fn(),
+      updateRepoRuleset: jest.fn()
     },
     codeScanning: {
       updateDefaultSetup: jest.fn(),
@@ -85,7 +88,8 @@ const {
   default: run,
   parseRepositories,
   updateRepositorySettings,
-  syncDependabotYml
+  syncDependabotYml,
+  syncRepositoryRuleset
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -99,6 +103,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.replaceAllTopics.mockClear();
     mockOctokit.rest.repos.getContent.mockClear();
     mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+    mockOctokit.rest.repos.getRepoRulesets.mockClear();
+    mockOctokit.rest.repos.createRepoRuleset.mockClear();
+    mockOctokit.rest.repos.updateRepoRuleset.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
     mockOctokit.rest.orgs.get.mockClear();
     mockOctokit.rest.git.getRef.mockClear();
@@ -126,6 +133,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         topics: '',
         'dependabot-yml': '',
         'dependabot-pr-title': '',
+        'rulesets-file': '',
         'dry-run': ''
       };
       return inputs[name] || '';
@@ -627,7 +635,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
       );
     });
 
@@ -1142,6 +1150,188 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync dependabot.yml');
+    });
+  });
+
+  describe('syncRepositoryRuleset', () => {
+    test('should create ruleset when it does not exist', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 123, name: 'ci' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('created');
+      expect(result.rulesetId).toBe(123);
+      expect(mockOctokit.rest.repos.getRepoRulesets).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo'
+      });
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ...rulesetConfig
+      });
+    });
+
+    test('should update existing ruleset when content differs', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({
+        data: { id: 456, name: 'ci' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('updated');
+      expect(result.rulesetId).toBe(456);
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ruleset_id: 456,
+        ...rulesetConfig
+      });
+    });
+
+    test('should handle dry-run mode for creation', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', true);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode for update', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', true);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncRepositoryRuleset(mockOctokit, 'invalid-repo-format', './ruleset.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing ruleset file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './nonexistent.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read or parse ruleset file');
+    });
+
+    test('should handle invalid JSON in ruleset file', async () => {
+      mockFs.readFileSync.mockReturnValue('{ invalid json }');
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './invalid.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read or parse ruleset file');
+    });
+
+    test('should handle ruleset without name', async () => {
+      const rulesetConfig = {
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Ruleset configuration must include a "name" field');
+    });
+
+    test('should handle API errors', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync ruleset');
+    });
+
+    test('should handle 404 errors when rulesets are not enabled', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      const error404 = new Error('Not Found');
+      error404.status = 404;
+      mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(error404);
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 123, name: 'ci' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('created');
     });
   });
 });
