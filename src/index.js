@@ -726,7 +726,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
       return {
         repository: repo,
         success: false,
-        error: `Ruleset configuration must include a "name" field`,
+        error: 'Ruleset configuration must include a "name" field.',
         dryRun
       };
     }
