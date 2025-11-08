@@ -56,6 +56,10 @@ inputs:
   rulesets-file:
     description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
     required: false
+  force-sync-rulesets:
+    description: 'Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)'
+    required: false
+    default: 'false'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

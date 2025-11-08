@@ -691,10 +691,11 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} rulesetFilePath - Path to local ruleset JSON file
+ * @param {boolean} forceSync - Delete rulesets that don't match the synced ruleset
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryRun) {
+export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, forceSync, dryRun) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -777,7 +778,8 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
-        return {
+
+        const result = {
           repository: repo,
           success: true,
           ruleset: 'unchanged',
@@ -785,6 +787,53 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
           message: `Ruleset "${rulesetName}" is already up to date`,
           dryRun
         };
+
+        // Handle force sync - delete rulesets that don't match
+        if (forceSync) {
+          const rulesetsToDelete = existingRulesets.filter(r => r.name !== rulesetName);
+
+          if (rulesetsToDelete.length > 0) {
+            result.deletedRulesets = [];
+
+            for (const rulesetToDelete of rulesetsToDelete) {
+              if (dryRun) {
+                core.info(`  🗑️  Would delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+                result.deletedRulesets.push({
+                  name: rulesetToDelete.name,
+                  id: rulesetToDelete.id,
+                  deleted: false,
+                  wouldDelete: true
+                });
+              } else {
+                try {
+                  await octokit.rest.repos.deleteRepoRuleset({
+                    owner,
+                    repo: repoName,
+                    ruleset_id: rulesetToDelete.id
+                  });
+                  core.info(`  🗑️  Deleted ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+                  result.deletedRulesets.push({
+                    name: rulesetToDelete.name,
+                    id: rulesetToDelete.id,
+                    deleted: true
+                  });
+                } catch (deleteError) {
+                  core.warning(
+                    `  ⚠️  Failed to delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id}): ${deleteError.message}`
+                  );
+                  result.deletedRulesets.push({
+                    name: rulesetToDelete.name,
+                    id: rulesetToDelete.id,
+                    deleted: false,
+                    error: deleteError.message
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        return result;
       }
 
       if (dryRun) {
@@ -808,7 +857,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
 
       core.info(`  📋 Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`);
 
-      return {
+      const result = {
         repository: repo,
         success: true,
         ruleset: 'updated',
@@ -816,6 +865,53 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
         message: `Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
         dryRun
       };
+
+      // Handle force sync - delete rulesets that don't match
+      if (forceSync) {
+        const rulesetsToDelete = existingRulesets.filter(r => r.name !== rulesetName);
+
+        if (rulesetsToDelete.length > 0) {
+          result.deletedRulesets = [];
+
+          for (const rulesetToDelete of rulesetsToDelete) {
+            if (dryRun) {
+              core.info(`  🗑️  Would delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+              result.deletedRulesets.push({
+                name: rulesetToDelete.name,
+                id: rulesetToDelete.id,
+                deleted: false,
+                wouldDelete: true
+              });
+            } else {
+              try {
+                await octokit.rest.repos.deleteRepoRuleset({
+                  owner,
+                  repo: repoName,
+                  ruleset_id: rulesetToDelete.id
+                });
+                core.info(`  🗑️  Deleted ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+                result.deletedRulesets.push({
+                  name: rulesetToDelete.name,
+                  id: rulesetToDelete.id,
+                  deleted: true
+                });
+              } catch (deleteError) {
+                core.warning(
+                  `  ⚠️  Failed to delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id}): ${deleteError.message}`
+                );
+                result.deletedRulesets.push({
+                  name: rulesetToDelete.name,
+                  id: rulesetToDelete.id,
+                  deleted: false,
+                  error: deleteError.message
+                });
+              }
+            }
+          }
+        }
+      }
+
+      return result;
     }
 
     if (dryRun) {
@@ -837,7 +933,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
 
     core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
 
-    return {
+    const result = {
       repository: repo,
       success: true,
       ruleset: 'created',
@@ -845,6 +941,53 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
       message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
       dryRun
     };
+
+    // Handle force sync - delete rulesets that don't match
+    if (forceSync) {
+      const rulesetsToDelete = existingRulesets.filter(r => r.name !== rulesetName);
+
+      if (rulesetsToDelete.length > 0) {
+        result.deletedRulesets = [];
+
+        for (const rulesetToDelete of rulesetsToDelete) {
+          if (dryRun) {
+            core.info(`  🗑️  Would delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+            result.deletedRulesets.push({
+              name: rulesetToDelete.name,
+              id: rulesetToDelete.id,
+              deleted: false,
+              wouldDelete: true
+            });
+          } else {
+            try {
+              await octokit.rest.repos.deleteRepoRuleset({
+                owner,
+                repo: repoName,
+                ruleset_id: rulesetToDelete.id
+              });
+              core.info(`  🗑️  Deleted ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+              result.deletedRulesets.push({
+                name: rulesetToDelete.name,
+                id: rulesetToDelete.id,
+                deleted: true
+              });
+            } catch (deleteError) {
+              core.warning(
+                `  ⚠️  Failed to delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id}): ${deleteError.message}`
+              );
+              result.deletedRulesets.push({
+                name: rulesetToDelete.name,
+                id: rulesetToDelete.id,
+                deleted: false,
+                error: deleteError.message
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return result;
   } catch (error) {
     return {
       repository: repo,
@@ -916,6 +1059,7 @@ export async function run() {
 
     // Get rulesets settings
     const rulesetsFile = getInput('rulesets-file');
+    const forceSyncRulesets = getBooleanInput('force-sync-rulesets');
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
@@ -1068,7 +1212,7 @@ export async function run() {
       // Sync repository ruleset if specified
       if (repoRulesetsFile) {
         core.info(`  📋 Checking repository ruleset...`);
-        const rulesetResult = await syncRepositoryRuleset(octokit, repo, repoRulesetsFile, dryRun);
+        const rulesetResult = await syncRepositoryRuleset(octokit, repo, repoRulesetsFile, forceSyncRulesets, dryRun);
 
         // Add ruleset result to the main result
         result.rulesetSync = rulesetResult;
