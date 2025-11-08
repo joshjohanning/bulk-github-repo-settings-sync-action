@@ -687,6 +687,175 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Sync repository ruleset to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} rulesetFilePath - Path to local ruleset JSON file
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source ruleset JSON file
+    let rulesetConfig;
+    try {
+      const fileContent = fs.readFileSync(rulesetFilePath, 'utf8');
+      rulesetConfig = JSON.parse(fileContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse ruleset file at ${rulesetFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Validate that the ruleset has a name
+    if (!rulesetConfig.name) {
+      return {
+        repository: repo,
+        success: false,
+        error: 'Ruleset configuration must include a "name" field.',
+        dryRun
+      };
+    }
+
+    const rulesetName = rulesetConfig.name;
+
+    // Get existing rulesets for the repository
+    let existingRulesets = [];
+    try {
+      const { data } = await octokit.rest.repos.getRepoRulesets({
+        owner,
+        repo: repoName
+      });
+      existingRulesets = data;
+    } catch (error) {
+      // If we get a 404, the repository might not have rulesets enabled
+      if (error.status === 404) {
+        core.info(`  📋 Repository ${repo} does not have rulesets enabled or accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Check if a ruleset with the same name already exists
+    const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
+
+    if (existingRuleset) {
+      // Fetch full ruleset details to compare
+      const { data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
+        owner,
+        repo: repoName,
+        ruleset_id: existingRuleset.id
+      });
+
+      // Compare the existing ruleset with the new configuration
+      // Remove fields that are returned by the API but not part of the input config
+      const existingConfig = {
+        name: fullRuleset.name,
+        target: fullRuleset.target,
+        enforcement: fullRuleset.enforcement,
+        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
+        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
+        rules: fullRuleset.rules
+      };
+
+      // Deep comparison of the configurations
+      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(rulesetConfig);
+
+      if (configsMatch) {
+        core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+        return {
+          repository: repo,
+          success: true,
+          ruleset: 'unchanged',
+          rulesetId: existingRuleset.id,
+          message: `Ruleset "${rulesetName}" is already up to date`,
+          dryRun
+        };
+      }
+
+      if (dryRun) {
+        return {
+          repository: repo,
+          success: true,
+          ruleset: 'would-update',
+          rulesetId: existingRuleset.id,
+          message: `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
+          dryRun
+        };
+      }
+
+      // Update existing ruleset
+      await octokit.rest.repos.updateRepoRuleset({
+        owner,
+        repo: repoName,
+        ruleset_id: existingRuleset.id,
+        ...rulesetConfig
+      });
+
+      core.info(`  📋 Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`);
+
+      return {
+        repository: repo,
+        success: true,
+        ruleset: 'updated',
+        rulesetId: existingRuleset.id,
+        message: `Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        ruleset: 'would-create',
+        message: `Would create ruleset "${rulesetName}"`,
+        dryRun
+      };
+    }
+
+    // Create new ruleset
+    const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+      owner,
+      repo: repoName,
+      ...rulesetConfig
+    });
+
+    core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
+
+    return {
+      repository: repo,
+      success: true,
+      ruleset: 'created',
+      rulesetId: newRuleset.id,
+      message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync ruleset: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
@@ -699,7 +868,11 @@ function hasRepositoryChanges(result) {
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged')
+      result.dependabotSync.dependabotYml !== 'unchanged') ||
+    (result.rulesetSync &&
+      result.rulesetSync.success &&
+      result.rulesetSync.ruleset &&
+      result.rulesetSync.ruleset !== 'unchanged')
   );
 }
 
@@ -741,6 +914,9 @@ export async function run() {
     const dependabotYml = getInput('dependabot-yml');
     const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
 
+    // Get rulesets settings
+    const rulesetsFile = getInput('rulesets-file');
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -753,10 +929,14 @@ export async function run() {
 
     // Check if any settings are specified
     const hasSettings =
-      Object.values(settings).some(value => value !== null) || enableCodeScanning || topics !== null || dependabotYml;
+      Object.values(settings).some(value => value !== null) ||
+      enableCodeScanning ||
+      topics !== null ||
+      dependabotYml ||
+      rulesetsFile;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
       );
     }
 
@@ -779,6 +959,9 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (rulesetsFile) {
+      core.info(`Repository ruleset will be synced from: ${rulesetsFile}`);
     }
 
     // Update repositories
@@ -842,6 +1025,12 @@ export async function run() {
         repoDependabotYml = repoConfig['dependabot-yml'];
       }
 
+      // Handle repo-specific rulesets-file
+      let repoRulesetsFile = rulesetsFile;
+      if (repoConfig['rulesets-file'] !== undefined) {
+        repoRulesetsFile = repoConfig['rulesets-file'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -873,6 +1062,21 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Sync repository ruleset if specified
+      if (repoRulesetsFile) {
+        core.info(`  📋 Checking repository ruleset...`);
+        const rulesetResult = await syncRepositoryRuleset(octokit, repo, repoRulesetsFile, dryRun);
+
+        // Add ruleset result to the main result
+        result.rulesetSync = rulesetResult;
+
+        if (rulesetResult.success) {
+          core.info(`  📋 ${rulesetResult.message}`);
+        } else {
+          core.warning(`  ⚠️  ${rulesetResult.error}`);
         }
       }
 

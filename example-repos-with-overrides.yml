@@ -8,5 +8,7 @@ repos:
     allow-update-branch: false
     enable-default-code-scanning: false
     topics: 'javascript,github-actions,automation,different'
+    dependabot-yml: './config/dependabot/npm-actions.yml'
+    rulesets-file: './config/rulesets/prod-ruleset.json'
   - repo: joshjohanning/other-repo
     # This repo will use the defaults from the action inputs

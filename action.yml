@@ -53,6 +53,9 @@ inputs:
     description: 'Title for pull requests when updating dependabot.yml'
     required: false
     default: 'chore: update dependabot.yml'
+  rulesets-file:
+    description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
+    required: false
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

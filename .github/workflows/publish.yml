@@ -22,3 +22,4 @@ jobs:
           commit_node_modules: false
           publish_minor_version: false
           publish_release_branch: false
+          create_release_as_draft: true

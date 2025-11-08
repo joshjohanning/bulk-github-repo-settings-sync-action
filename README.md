@@ -1,6 +1,7 @@
 # Bulk GitHub Repository Settings Sync Action
 
 [![GitHub release](https://img.shields.io/github/release/joshjohanning/bulk-github-repo-settings-sync-action.svg?labelColor=333)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/releases)
+[![Immutable releases](https://img.shields.io/badge/releases-immutable-blue?labelColor=333)](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/immutable-releases)
 [![GitHub marketplace](https://img.shields.io/badge/marketplace-Bulk%20GitHub%20Repository%20Settings%20Sync-blue?logo=github)](https://github.com/marketplace/actions/bulk-github-repository-settings-sync)
 [![CI](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/ci.yml)
 [![Publish GitHub Action](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml/badge.svg?branch=main&event=push)](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/actions/workflows/publish.yml)
@@ -17,6 +18,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 📊 Enable default CodeQL code scanning
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
+- 📋 **Sync repository rulesets** across repositories
 - 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
@@ -36,6 +38,8 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-merge-commit: false
     delete-branch-on-merge: true
     enable-default-code-scanning: true
+    dependabot-yml: './config/dependabot/npm-actions.yml'
+    rulesets-file: './config/rulesets/prod-ruleset.json'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -103,6 +107,82 @@ repos:
 - PRs are created/updated using the GitHub API so commits are verified
 - Updates existing open PRs instead of creating duplicates
 
+### Syncing Repository Rulesets
+
+Sync repository rulesets across multiple repositories:
+
+```yml
+- name: Sync Repository Rulesets
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    rulesets-file: './config/rulesets/ci-ruleset.json'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    rulesets-file: './config/rulesets/ci-ruleset.json'
+  - repo: owner/repo2
+    rulesets-file: './config/rulesets/prod-ruleset.json'
+  - repo: owner/repo3
+    # Skip ruleset sync for this repo
+```
+
+**Behavior:**
+
+- Creates the ruleset if it doesn't exist in the repository
+- Updates the ruleset if a ruleset with the same name already exists
+- Ruleset is identified by the `name` field in the JSON configuration
+- The JSON file should contain a valid ruleset configuration matching the [GitHub Rulesets API schema](https://docs.github.com/en/rest/repos/rules)
+
+**Example Ruleset JSON (`ci-ruleset.json`):**
+
+```json
+{
+  "name": "ci",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          {
+            "context": "test",
+            "integration_id": 15368
+          }
+        ]
+      }
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ]
+}
+```
+
+For more information on ruleset configuration, see the [GitHub Rulesets documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets).
+
 ### Organization-wide Updates
 
 ```yml
@@ -161,6 +241,7 @@ Output shows what would change:
 | `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
 | `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
+| `rulesets-file`                | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                              |
 | `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
 
 \* Either `repositories` or `repositories-file` must be provided
@@ -180,7 +261,7 @@ Output shows what would change:
 For better security and rate limits, use a GitHub App:
 
 1. Create a GitHub App with the following permissions:
-   - **Repository Administration**: Read and write (required for updating repository settings)
+   - **Repository Administration**: Read and write (required for updating repository settings and rulesets)
    - **Contents**: Read and write (required if syncing `dependabot.yml`)
    - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
 2. Install it to your organization/repositories
@@ -237,7 +318,8 @@ repos:
   - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
-    dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+    dependabot-yml: './config/dependabot/npm-actions.yml'
+    rulesets-file: './config/rulesets/custom-ruleset.json'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
