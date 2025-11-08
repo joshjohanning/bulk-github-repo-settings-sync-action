@@ -38,6 +38,8 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-merge-commit: false
     delete-branch-on-merge: true
     enable-default-code-scanning: true
+    dependabot-yml: './config/dependabot/npm-actions.yml'
+    rulesets-file: './config/rulesets/prod-ruleset.json'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -316,7 +318,7 @@ repos:
   - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
     enable-default-code-scanning: false
-    dependabot-yml: './github/dependabot-configs/custom-dependabot.yml'
+    dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/custom-ruleset.json'
 ```
 
