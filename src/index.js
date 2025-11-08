@@ -753,20 +753,51 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
     // Check if a ruleset with the same name already exists
     const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
 
-    if (dryRun) {
-      return {
-        repository: repo,
-        success: true,
-        ruleset: existingRuleset ? 'would-update' : 'would-create',
-        message: existingRuleset
-          ? `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`
-          : `Would create ruleset "${rulesetName}"`,
-        dryRun
-      };
-    }
-
-    // Create or update the ruleset
     if (existingRuleset) {
+      // Fetch full ruleset details to compare
+      const { data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
+        owner,
+        repo: repoName,
+        ruleset_id: existingRuleset.id
+      });
+
+      // Compare the existing ruleset with the new configuration
+      // Remove fields that are returned by the API but not part of the input config
+      const existingConfig = {
+        name: fullRuleset.name,
+        target: fullRuleset.target,
+        enforcement: fullRuleset.enforcement,
+        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
+        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
+        rules: fullRuleset.rules
+      };
+
+      // Deep comparison of the configurations
+      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(rulesetConfig);
+
+      if (configsMatch) {
+        core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+        return {
+          repository: repo,
+          success: true,
+          ruleset: 'unchanged',
+          rulesetId: existingRuleset.id,
+          message: `Ruleset "${rulesetName}" is already up to date`,
+          dryRun
+        };
+      }
+
+      if (dryRun) {
+        return {
+          repository: repo,
+          success: true,
+          ruleset: 'would-update',
+          rulesetId: existingRuleset.id,
+          message: `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
+          dryRun
+        };
+      }
+
       // Update existing ruleset
       await octokit.rest.repos.updateRepoRuleset({
         owner,
@@ -785,25 +816,35 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
         message: `Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
         dryRun
       };
-    } else {
-      // Create new ruleset
-      const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
-        owner,
-        repo: repoName,
-        ...rulesetConfig
-      });
+    }
 
-      core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
-
+    if (dryRun) {
       return {
         repository: repo,
         success: true,
-        ruleset: 'created',
-        rulesetId: newRuleset.id,
-        message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
+        ruleset: 'would-create',
+        message: `Would create ruleset "${rulesetName}"`,
         dryRun
       };
     }
+
+    // Create new ruleset
+    const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+      owner,
+      repo: repoName,
+      ...rulesetConfig
+    });
+
+    core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
+
+    return {
+      repository: repo,
+      success: true,
+      ruleset: 'created',
+      rulesetId: newRuleset.id,
+      message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
+      dryRun
+    };
   } catch (error) {
     return {
       repository: repo,

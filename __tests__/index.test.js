@@ -41,6 +41,7 @@ const mockOctokit = {
       getContent: jest.fn(),
       createOrUpdateFileContents: jest.fn(),
       getRepoRulesets: jest.fn(),
+      getRepoRuleset: jest.fn(),
       createRepoRuleset: jest.fn(),
       updateRepoRuleset: jest.fn()
     },
@@ -104,6 +105,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.getContent.mockClear();
     mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
     mockOctokit.rest.repos.getRepoRulesets.mockClear();
+    mockOctokit.rest.repos.getRepoRuleset.mockClear();
     mockOctokit.rest.repos.createRepoRuleset.mockClear();
     mockOctokit.rest.repos.updateRepoRuleset.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
@@ -1192,9 +1194,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
+      const existingRuleset = {
+        id: 456,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'disabled', // Different from config
+        rules: [{ type: 'deletion' }]
+      };
+
       mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
       });
       mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({
         data: { id: 456, name: 'ci' }
@@ -1205,12 +1218,57 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('updated');
       expect(result.rulesetId).toBe(456);
+      expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ruleset_id: 456
+      });
       expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
         ruleset_id: 456,
         ...rulesetConfig
       });
+    });
+
+    test('should not update ruleset when content is unchanged', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      const existingRuleset = {
+        id: 789,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        // These fields are returned by API but should be ignored in comparison
+        source_type: 'Repository',
+        source: 'owner/repo',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z'
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 789, name: 'ci' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('unchanged');
+      expect(result.rulesetId).toBe(789);
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode for creation', async () => {
@@ -1240,9 +1298,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
+      const existingRuleset = {
+        id: 456,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'disabled', // Different from config
+        rules: [{ type: 'deletion' }]
+      };
+
       mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
       });
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', true);
@@ -1250,6 +1319,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('would-update');
       expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
     });
 
