@@ -1321,7 +1321,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dryRun).toBe(true);
       expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
     test('should handle invalid repository format', async () => {
