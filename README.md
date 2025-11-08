@@ -183,6 +183,29 @@ repos:
 
 For more information on ruleset configuration, see the [GitHub Rulesets documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets).
 
+### Force Sync Rulesets
+
+By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To force sync and delete rulesets that don't match the one being synced, use the `force-sync-rulesets` parameter:
+
+```yml
+- name: Force Sync Repository Rulesets
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    rulesets-file: './config/rulesets/ci-ruleset.json'
+    force-sync-rulesets: true
+```
+
+**Behavior with `force-sync-rulesets: true`:**
+
+- Creates the ruleset if it doesn't exist
+- Updates the ruleset if a ruleset with the same name already exists
+- **Deletes all other rulesets that don't match the synced ruleset name**
+- In dry-run mode, shows which rulesets would be deleted without actually deleting them
+
+**Use case:** This is useful when you rename a ruleset and want to ensure only the new ruleset exists, or when you want to enforce that repositories have exactly one specific ruleset configuration.
+
 ### Organization-wide Updates
 
 ```yml
@@ -242,6 +265,7 @@ Output shows what would change:
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
 | `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
 | `rulesets-file`                | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                              |
+| `force-sync-rulesets`          | Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)                                   | No       | `false`                        |
 | `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
 
 \* Either `repositories` or `repositories-file` must be provided
