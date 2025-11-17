@@ -174,11 +174,20 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
  * @param {string} repo - Repository in "owner/repo" format
  * @param {Object} settings - Settings to update
  * @param {boolean} enableCodeScanning - Enable default CodeQL scanning
+ * @param {boolean|null} immutableReleases - Enable or disable immutable releases
  * @param {Array<string>|null} topics - Topics to set on repository
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics, dryRun) {
+export async function updateRepositorySettings(
+  octokit,
+  repo,
+  settings,
+  enableCodeScanning,
+  immutableReleases,
+  topics,
+  dryRun
+) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -435,6 +444,70 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       } catch (error) {
         // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
         result.codeScanningWarning = `Could not process CodeQL: ${error.message}`;
+      }
+    }
+
+    // Handle immutable releases
+    if (immutableReleases !== null) {
+      try {
+        // Check current immutable releases status
+        let currentImmutableReleases = false;
+        try {
+          await octokit.request('GET /repos/{owner}/{repo}/immutable-releases', {
+            owner,
+            repo: repoName,
+            headers: {
+              'X-GitHub-Api-Version': '2022-11-28'
+            }
+          });
+          currentImmutableReleases = true;
+        } catch (error) {
+          // 404 means immutable releases are not enabled
+          if (error.status === 404) {
+            currentImmutableReleases = false;
+          } else {
+            throw error;
+          }
+        }
+
+        result.currentImmutableReleases = currentImmutableReleases;
+
+        if (currentImmutableReleases !== immutableReleases) {
+          result.immutableReleasesChange = {
+            from: currentImmutableReleases,
+            to: immutableReleases
+          };
+
+          if (!dryRun) {
+            if (immutableReleases) {
+              // Enable immutable releases
+              await octokit.request('PUT /repos/{owner}/{repo}/immutable-releases', {
+                owner,
+                repo: repoName,
+                headers: {
+                  'X-GitHub-Api-Version': '2022-11-28'
+                }
+              });
+            } else {
+              // Disable immutable releases
+              await octokit.request('DELETE /repos/{owner}/{repo}/immutable-releases', {
+                owner,
+                repo: repoName,
+                headers: {
+                  'X-GitHub-Api-Version': '2022-11-28'
+                }
+              });
+            }
+            result.immutableReleasesUpdated = true;
+          } else {
+            result.immutableReleasesWouldUpdate = true;
+          }
+        } else {
+          result.immutableReleasesUnchanged = true;
+        }
+      } catch (error) {
+        // Immutable releases might fail for various reasons (insufficient permissions, not available, etc.)
+        result.immutableReleasesWarning = `Could not process immutable releases: ${error.message}`;
       }
     }
 
@@ -858,13 +931,14 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
 /**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, or dependabot)
  */
 function hasRepositoryChanges(result) {
   return (
     (result.changes && result.changes.length > 0) ||
     result.topicsChange ||
     result.codeScanningChange ||
+    result.immutableReleasesChange ||
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
@@ -899,6 +973,7 @@ export async function run() {
     };
 
     const enableCodeScanning = getBooleanInput('enable-default-code-scanning');
+    const immutableReleases = getBooleanInput('immutable-releases');
     const dryRun = getBooleanInput('dry-run');
 
     // Parse topics if provided
@@ -931,12 +1006,13 @@ export async function run() {
     const hasSettings =
       Object.values(settings).some(value => value !== null) ||
       enableCodeScanning ||
+      immutableReleases !== null ||
       topics !== null ||
       dependabotYml ||
       rulesetsFile;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
       );
     }
 
@@ -953,6 +1029,9 @@ export async function run() {
     core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);
     if (enableCodeScanning) {
       core.info('CodeQL scanning will be enabled');
+    }
+    if (immutableReleases !== null) {
+      core.info(`Immutable releases will be ${immutableReleases ? 'enabled' : 'disabled'}`);
     }
     if (topics !== null) {
       core.info(`Topics to set: ${topics.join(', ')}`);
@@ -1004,6 +1083,10 @@ export async function run() {
           ? repoConfig['enable-default-code-scanning']
           : enableCodeScanning;
 
+      // Handle repo-specific immutable releases
+      const repoImmutableReleases =
+        repoConfig['immutable-releases'] !== undefined ? repoConfig['immutable-releases'] : immutableReleases;
+
       // Handle repo-specific topics
       let repoTopics = topics;
       if (repoConfig.topics !== undefined) {
@@ -1036,6 +1119,7 @@ export async function run() {
         repo,
         repoSettings,
         repoEnableCodeScanning,
+        repoImmutableReleases,
         repoTopics,
         dryRun
       );
@@ -1142,8 +1226,32 @@ export async function run() {
           core.warning(`  ⚠️ ${result.codeScanningWarning}`);
         }
 
+        // Log immutable releases changes
+        if (result.immutableReleasesChange) {
+          if (dryRun) {
+            core.info(
+              `  🔒 Would ${result.immutableReleasesChange.to ? 'enable' : 'disable'} immutable releases: ${result.immutableReleasesChange.from} → ${result.immutableReleasesChange.to}`
+            );
+          } else {
+            core.info(
+              `  🔒 Immutable releases ${result.immutableReleasesChange.to ? 'enabled' : 'disabled'}: ${result.immutableReleasesChange.from} → ${result.immutableReleasesChange.to}`
+            );
+          }
+        } else if (result.immutableReleasesUnchanged) {
+          core.info(`  🔒 Immutable releases unchanged: ${result.currentImmutableReleases ? 'enabled' : 'disabled'}`);
+        }
+
+        if (result.immutableReleasesWarning) {
+          core.warning(`  ⚠️ ${result.immutableReleasesWarning}`);
+        }
+
         // Log if no changes were needed
-        if ((!result.changes || result.changes.length === 0) && !result.topicsChange && !result.codeScanningChange) {
+        if (
+          (!result.changes || result.changes.length === 0) &&
+          !result.topicsChange &&
+          !result.codeScanningChange &&
+          !result.immutableReleasesChange
+        ) {
           core.info(`  ℹ️  No changes needed - all settings already match desired state`);
         }
       } else {
