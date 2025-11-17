@@ -40,6 +40,9 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
+  immutable-releases:
+    description: 'Enable immutable releases to prevent release deletion and modification'
+    required: false
   enable-default-code-scanning:
     description: 'Enable default code scanning setup'
     required: false

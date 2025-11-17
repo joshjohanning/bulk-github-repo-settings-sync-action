@@ -16,6 +16,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🗑️ Enable automatic branch deletion after merge
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
+- 🔒 **Enable or disable immutable releases** to prevent release deletion and modification
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 📋 **Sync repository rulesets** across repositories
@@ -38,6 +39,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-merge-commit: false
     delete-branch-on-merge: true
     enable-default-code-scanning: true
+    immutable-releases: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     topics: 'javascript,github-actions,automation'
@@ -237,6 +239,7 @@ Output shows what would change:
 | `allow-auto-merge`             | Allow auto-merge on pull requests                                                                                                          | No       | -                              |
 | `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                                                          | No       | -                              |
 | `allow-update-branch`          | Always suggest updating pull request branches                                                                                              | No       | -                              |
+| `immutable-releases`           | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                              |
 | `enable-default-code-scanning` | Enable default code scanning setup                                                                                                         | No       | -                              |
 | `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
 | `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
