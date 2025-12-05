@@ -62,7 +62,8 @@ const mockOctokit = {
       create: jest.fn(),
       update: jest.fn()
     }
-  }
+  },
+  request: jest.fn()
 };
 
 // Mock fs module
@@ -116,6 +117,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.pulls.list.mockClear();
     mockOctokit.rest.pulls.create.mockClear();
     mockOctokit.rest.pulls.update.mockClear();
+    mockOctokit.request.mockClear();
 
     // Set default inputs
     mockCore.getInput.mockImplementation(name => {
@@ -132,6 +134,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'delete-branch-on-merge': '',
         'allow-update-branch': '',
         'enable-default-code-scanning': '',
+        'immutable-releases': '',
         topics: '',
         'dependabot-yml': '',
         'dependabot-pr-title': '',
@@ -254,7 +257,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: true
       };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
@@ -284,7 +287,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningEnabled).toBe(true);
@@ -309,7 +312,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningWarning).toContain('Could not process CodeQL');
@@ -332,7 +335,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'github-actions', 'automation'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, topics, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
 
       expect(result.success).toBe(true);
       expect(result.topicsUpdated).toBe(true);
@@ -361,7 +364,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, topics, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
 
       expect(result.success).toBe(true);
       expect(result.topicsWarning).toContain('Could not process topics');
@@ -378,11 +381,139 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(mockOctokit.rest.repos.getAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
+    });
+
+    test('should enable immutable releases when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return 404 (not enabled)
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(false);
+      expect(result.immutableReleasesChange.to).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+    });
+
+    test('should disable immutable releases when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success (enabled)
+      mockOctokit.request.mockResolvedValueOnce({});
+      // Mock DELETE to disable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, false, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(true);
+      expect(result.immutableReleasesChange.to).toBe(false);
+      expect(mockOctokit.request).toHaveBeenCalledWith('DELETE /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+    });
+
+    test('should handle immutable releases already in desired state', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success (already enabled)
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUnchanged).toBe(true);
+      expect(result.currentImmutableReleases).toBe(true);
+      // Should only call GET, not PUT
+      expect(mockOctokit.request).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle immutable releases failures gracefully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.request.mockRejectedValue(new Error('Insufficient permissions'));
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesWarning).toContain('Could not process immutable releases');
+      expect(result.immutableReleasesWarning).toContain('Insufficient permissions');
+    });
+
+    test('should not check immutable releases when null', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+
+      expect(result.success).toBe(true);
+      // request should not be called at all when immutableReleases is null
+      expect(mockOctokit.request).not.toHaveBeenCalled();
     });
 
     test('should only update specified settings', async () => {
@@ -408,7 +539,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: null
       };
 
-      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
@@ -420,7 +551,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
@@ -430,7 +561,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('API Error');
@@ -442,7 +573,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(error403);
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.accessDenied).toBe(true);
@@ -461,7 +592,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -488,7 +619,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -513,7 +644,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.changes).toHaveLength(1);
@@ -535,7 +666,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, true); // dry-run
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, true); // dry-run
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -554,20 +685,42 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { names: [] }
       });
       mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      // Mock immutable releases GET request (404 = not enabled)
+      mockOctokit.request.mockImplementation(method => {
+        if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
+          const error = new Error('Not Found');
+          error.status = 404;
+          return Promise.reject(error);
+        }
+        return Promise.reject(new Error('Unexpected request'));
+      });
 
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, topics, true);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, true, topics, true);
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
       expect(result.topicsWouldUpdate).toBe(true);
       expect(result.codeScanningWouldEnable).toBe(true);
+      expect(result.immutableReleasesWouldUpdate).toBe(true);
       expect(mockOctokit.rest.repos.get).toHaveBeenCalled(); // Should fetch current state
       expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+      // Verify immutable releases API was checked but not called for updates
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'GET /repos/{owner}/{repo}/immutable-releases',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo'
+        })
+      );
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/immutable-releases',
+        expect.any(Object)
+      );
     });
   });
 
@@ -637,7 +790,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
       );
     });
 
@@ -682,7 +835,39 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
-      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should allow immutable releases as the only setting', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'immutable-releases': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 }); // GET returns 404 (not enabled)
+      mockOctokit.request.mockResolvedValueOnce({}); // PUT to enable
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo1',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
     });
 
     test('should create summary table', async () => {
