@@ -1247,12 +1247,7 @@ export async function run() {
         }
 
         // Log if no changes were needed
-        if (
-          (!result.changes || result.changes.length === 0) &&
-          !result.topicsChange &&
-          !result.codeScanningChange &&
-          !result.immutableReleasesChange
-        ) {
+        if (!hasRepositoryChanges(result)) {
           core.info(`  ℹ️  No changes needed - all settings already match desired state`);
         }
       } else {
