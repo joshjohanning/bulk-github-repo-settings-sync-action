@@ -1199,15 +1199,9 @@ export async function run() {
         result.dependabotSync = dependabotResult;
 
         if (dependabotResult.success) {
-          if (dependabotResult.dependabotYml === 'unchanged') {
-            core.info(`  📦 ${dependabotResult.message}`);
-          } else if (dryRun) {
-            core.info(`  📦 ${dependabotResult.message}`);
-          } else {
-            core.info(`  📦 ${dependabotResult.message}`);
-            if (dependabotResult.prUrl) {
-              core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
-            }
+          core.info(`  📦 ${dependabotResult.message}`);
+          if (dependabotResult.prUrl) {
+            core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
@@ -1244,15 +1238,9 @@ export async function run() {
         result.pullRequestTemplateSync = templateResult;
 
         if (templateResult.success) {
-          if (templateResult.pullRequestTemplate === 'unchanged') {
-            core.info(`  📝 ${templateResult.message}`);
-          } else if (dryRun) {
-            core.info(`  📝 ${templateResult.message}`);
-          } else {
-            core.info(`  📝 ${templateResult.message}`);
-            if (templateResult.prUrl) {
-              core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
-            }
+          core.info(`  📝 ${templateResult.message}`);
+          if (templateResult.prUrl) {
+            core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
           }
         } else {
           core.warning(`  ⚠️  ${templateResult.error}`);
