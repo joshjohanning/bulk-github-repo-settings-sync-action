@@ -685,20 +685,40 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { names: [] }
       });
       mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      // Mock immutable releases GET request (404 = not enabled)
+      mockOctokit.request.mockImplementation(method => {
+        if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
+          return Promise.reject({ status: 404 });
+        }
+        return Promise.reject(new Error('Unexpected request'));
+      });
 
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, topics, true);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, true, topics, true);
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
       expect(result.topicsWouldUpdate).toBe(true);
       expect(result.codeScanningWouldEnable).toBe(true);
+      expect(result.immutableReleasesWouldUpdate).toBe(true);
       expect(mockOctokit.rest.repos.get).toHaveBeenCalled(); // Should fetch current state
       expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+      // Verify immutable releases API was checked but not called for updates
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'GET /repos/{owner}/{repo}/immutable-releases',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo'
+        })
+      );
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/immutable-releases',
+        expect.any(Object)
+      );
     });
   });
 
