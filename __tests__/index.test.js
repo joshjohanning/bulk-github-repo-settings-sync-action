@@ -688,7 +688,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // Mock immutable releases GET request (404 = not enabled)
       mockOctokit.request.mockImplementation(method => {
         if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
-          return Promise.reject({ status: 404 });
+          const error = new Error('Not Found');
+          error.status = 404;
+          return Promise.reject(error);
         }
         return Promise.reject(new Error('Unexpected request'));
       });
