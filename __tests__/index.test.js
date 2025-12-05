@@ -498,6 +498,31 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.immutableReleasesWarning).toContain('Insufficient permissions');
     });
 
+    test('should handle immutable releases when API returns enabled: false', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success with enabled: false (not enabled)
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: false, enforced_by_owner: false } });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.currentImmutableReleases).toBe(false);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(false);
+      expect(result.immutableReleasesChange.to).toBe(true);
+    });
+
     test('should not check immutable releases when null', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
