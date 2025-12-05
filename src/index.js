@@ -524,17 +524,26 @@ export async function updateRepositorySettings(
 }
 
 /**
- * Sync dependabot.yml file to target repository
+ * Generic function to sync a file to a target repository via pull request
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
- * @param {string} dependabotYmlPath - Path to local dependabot.yml file
- * @param {string} prTitle - Title for the pull request
+ * @param {Object} options - Sync options
+ * @param {string} options.sourceFilePath - Path to local source file
+ * @param {string} options.targetPath - Target path in the repository
+ * @param {string} options.branchName - Branch name for the PR
+ * @param {string} options.prTitle - Title for the pull request
+ * @param {string} options.prBodyCreate - PR body when creating new file
+ * @param {string} options.prBodyUpdate - PR body when updating existing file
+ * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate')
+ * @param {string} options.fileDescription - Human-readable description of the file (for error messages)
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
+  const { sourceFilePath, targetPath, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } =
+    options;
+
   const [owner, repoName] = repo.split('/');
-  const targetPath = '.github/dependabot.yml';
 
   if (!owner || !repoName) {
     return {
@@ -546,15 +555,15 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
   }
 
   try {
-    // Read the source dependabot.yml file
+    // Read the source file
     let sourceContent;
     try {
-      sourceContent = fs.readFileSync(dependabotYmlPath, 'utf8');
+      sourceContent = fs.readFileSync(sourceFilePath, 'utf8');
     } catch (error) {
       return {
         repository: repo,
         success: false,
-        error: `Failed to read dependabot.yml file at ${dependabotYmlPath}: ${error.message}`,
+        error: `Failed to read ${fileDescription} file at ${sourceFilePath}: ${error.message}`,
         dryRun
       };
     }
@@ -566,7 +575,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     });
     const defaultBranch = repoData.default_branch;
 
-    // Check if dependabot.yml exists in the target repo
+    // Check if file exists in the target repo
     let existingSha = null;
     let existingContent = null;
 
@@ -595,14 +604,13 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       return {
         repository: repo,
         success: true,
-        dependabotYml: 'unchanged',
+        [resultKey]: 'unchanged',
         message: `${targetPath} is already up to date`,
         dryRun
       };
     }
 
     // Check if there's already an open PR for this update
-    const branchName = 'dependabot-yml-sync';
     let existingPR = null;
 
     try {
@@ -627,7 +635,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       return {
         repository: repo,
         success: true,
-        dependabotYml: 'pr-exists',
+        [resultKey]: 'pr-exists',
         message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
@@ -639,7 +647,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       return {
         repository: repo,
         success: true,
-        dependabotYml: existingContent ? 'would-update' : 'would-create',
+        [resultKey]: existingContent ? 'would-update' : 'would-create',
         message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
         dryRun
       };
@@ -708,9 +716,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     core.info(`  ✍️  Committed changes to ${targetPath}`);
 
     // Prepare PR body content
-    const prBody = existingContent
-      ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
-      : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`;
+    const prBody = existingContent ? prBodyUpdate : prBodyCreate;
 
     // Create new PR (we only reach here if no existing PR was found)
     const { data: pr } = await octokit.rest.pulls.create({
@@ -727,7 +733,7 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     return {
       repository: repo,
       success: true,
-      dependabotYml: existingContent ? 'updated' : 'created',
+      [resultKey]: existingContent ? 'updated' : 'created',
       prNumber,
       prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
       message: existingContent
@@ -739,10 +745,37 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     return {
       repository: repo,
       success: false,
-      error: `Failed to sync dependabot.yml: ${error.message}`,
+      error: `Failed to sync ${fileDescription}: ${error.message}`,
       dryRun
     };
   }
+}
+
+/**
+ * Sync dependabot.yml file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} dependabotYmlPath - Path to local dependabot.yml file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: dependabotYmlPath,
+      targetPath: '.github/dependabot.yml',
+      branchName: 'dependabot-yml-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`,
+      prBodyUpdate: `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`,
+      resultKey: 'dependabotYml',
+      fileDescription: 'dependabot.yml'
+    },
+    dryRun
+  );
 }
 
 /**
@@ -924,216 +957,21 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
  * @returns {Promise<Object>} Result object
  */
 export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun) {
-  const [owner, repoName] = repo.split('/');
-  const targetPath = '.github/pull_request_template.md';
-
-  if (!owner || !repoName) {
-    return {
-      repository: repo,
-      success: false,
-      error: 'Invalid repository format. Expected "owner/repo"',
-      dryRun
-    };
-  }
-
-  try {
-    // Read the source template file
-    let sourceContent;
-    try {
-      sourceContent = fs.readFileSync(templatePath, 'utf8');
-    } catch (error) {
-      return {
-        repository: repo,
-        success: false,
-        error: `Failed to read pull request template file at ${templatePath}: ${error.message}`,
-        dryRun
-      };
-    }
-
-    // Get default branch
-    const { data: repoData } = await octokit.rest.repos.get({
-      owner,
-      repo: repoName
-    });
-    const defaultBranch = repoData.default_branch;
-
-    // Check if pull_request_template.md exists in the target repo
-    let existingSha = null;
-    let existingContent = null;
-
-    try {
-      const { data } = await octokit.rest.repos.getContent({
-        owner,
-        repo: repoName,
-        path: targetPath,
-        ref: defaultBranch
-      });
-      existingSha = data.sha;
-      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
-    } catch (error) {
-      if (error.status === 404) {
-        // File doesn't exist - this is fine, we'll create it
-        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
-      } else {
-        throw error;
-      }
-    }
-
-    // Compare content
-    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
-
-    if (!needsUpdate) {
-      return {
-        repository: repo,
-        success: true,
-        pullRequestTemplate: 'unchanged',
-        message: `${targetPath} is already up to date`,
-        dryRun
-      };
-    }
-
-    // Check if there's already an open PR for this update
-    const branchName = 'pull-request-template-sync';
-    let existingPR = null;
-
-    try {
-      const { data: pulls } = await octokit.rest.pulls.list({
-        owner,
-        repo: repoName,
-        state: 'open',
-        head: `${owner}:${branchName}`
-      });
-
-      if (pulls.length > 0) {
-        existingPR = pulls[0];
-        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
-      }
-    } catch (error) {
-      // Non-fatal, continue
-      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
-    }
-
-    // If there's already an open PR, don't create/update another one
-    if (existingPR) {
-      return {
-        repository: repo,
-        success: true,
-        pullRequestTemplate: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
-        prNumber: existingPR.number,
-        prUrl: existingPR.html_url,
-        dryRun
-      };
-    }
-
-    if (dryRun) {
-      return {
-        repository: repo,
-        success: true,
-        pullRequestTemplate: existingContent ? 'would-update' : 'would-create',
-        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
-        dryRun
-      };
-    }
-
-    // Create or get reference to the branch
-    core.info(`  🔍 Checking for existing branch ${branchName}...`);
-    let branchExists = false;
-    try {
-      await octokit.rest.git.getRef({
-        owner,
-        repo: repoName,
-        ref: `heads/${branchName}`
-      });
-      branchExists = true;
-      core.info(`  ✓ Branch ${branchName} exists`);
-    } catch (error) {
-      if (error.status === 404) {
-        core.info(`  ✓ Branch ${branchName} does not exist`);
-      } else {
-        throw error;
-      }
-    }
-
-    // Get the SHA of the default branch to create new branch from
-    const { data: defaultRef } = await octokit.rest.git.getRef({
-      owner,
-      repo: repoName,
-      ref: `heads/${defaultBranch}`
-    });
-
-    if (!branchExists) {
-      // Create new branch
-      await octokit.rest.git.createRef({
-        owner,
-        repo: repoName,
-        ref: `refs/heads/${branchName}`,
-        sha: defaultRef.object.sha
-      });
-      core.info(`  🌿 Created branch ${branchName}`);
-    } else {
-      // Update existing branch to latest from default branch
-      await octokit.rest.git.updateRef({
-        owner,
-        repo: repoName,
-        ref: `heads/${branchName}`,
-        sha: defaultRef.object.sha,
-        force: true
-      });
-      core.info(`  🌿 Updated branch ${branchName}`);
-    }
-
-    // Create or update the file
-    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
-
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
-      repo: repoName,
-      path: targetPath,
-      message: commitMessage,
-      content: Buffer.from(sourceContent).toString('base64'),
-      branch: branchName,
-      sha: existingSha || undefined
-    });
-
-    core.info(`  ✍️  Committed changes to ${targetPath}`);
-
-    // Prepare PR body content
-    const prBody = existingContent
-      ? `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`
-      : `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`;
-
-    // Create new PR (we only reach here if no existing PR was found)
-    const { data: pr } = await octokit.rest.pulls.create({
-      owner,
-      repo: repoName,
-      title: prTitle,
-      head: branchName,
-      base: defaultBranch,
-      body: prBody
-    });
-    const prNumber = pr.number;
-    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
-
-    return {
-      repository: repo,
-      success: true,
-      pullRequestTemplate: existingContent ? 'updated' : 'created',
-      prNumber,
-      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
-      message: existingContent
-        ? `Updated ${targetPath} via PR #${prNumber}`
-        : `Created ${targetPath} via PR #${prNumber}`,
-      dryRun
-    };
-  } catch (error) {
-    return {
-      repository: repo,
-      success: false,
-      error: `Failed to sync pull request template: ${error.message}`,
-      dryRun
-    };
-  }
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: templatePath,
+      targetPath: '.github/pull_request_template.md',
+      branchName: 'pull-request-template-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`,
+      prBodyUpdate: `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`,
+      resultKey: 'pullRequestTemplate',
+      fileDescription: 'pull request template'
+    },
+    dryRun
+  );
 }
 
 /**
