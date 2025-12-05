@@ -453,14 +453,15 @@ export async function updateRepositorySettings(
         // Check current immutable releases status
         let currentImmutableReleases = false;
         try {
-          await octokit.request('GET /repos/{owner}/{repo}/immutable-releases', {
+          const response = await octokit.request('GET /repos/{owner}/{repo}/immutable-releases', {
             owner,
             repo: repoName,
             headers: {
               'X-GitHub-Api-Version': '2022-11-28'
             }
           });
-          currentImmutableReleases = true;
+          // Check the 'enabled' property in the response
+          currentImmutableReleases = response.data.enabled === true;
         } catch (error) {
           // 404 means immutable releases are not enabled
           if (error.status === 404) {
