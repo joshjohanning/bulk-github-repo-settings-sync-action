@@ -1232,7 +1232,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
     });
 
-    test('should update existing PR when one exists', async () => {
+    test('should report existing open PR when one exists', async () => {
       const newContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
       const oldContent =
