@@ -434,8 +434,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      // Mock GET to return success (enabled)
-      mockOctokit.request.mockResolvedValueOnce({});
+      // Mock GET to return success with enabled: true
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: true, enforced_by_owner: false } });
       // Mock DELETE to disable
       mockOctokit.request.mockResolvedValueOnce({});
 
@@ -465,8 +465,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      // Mock GET to return success (already enabled)
-      mockOctokit.request.mockResolvedValueOnce({});
+      // Mock GET to return success with enabled: true (already enabled)
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: true, enforced_by_owner: false } });
 
       const settings = { allow_squash_merge: true };
 
