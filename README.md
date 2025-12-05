@@ -20,6 +20,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 📋 **Sync repository rulesets** across repositories
+- 📝 **Sync pull request templates** across repositories via pull requests
 - 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
@@ -42,6 +43,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     immutable-releases: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
+    pull-request-template: './config/templates/pull_request_template.md'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -185,6 +187,42 @@ repos:
 
 For more information on ruleset configuration, see the [GitHub Rulesets documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets).
 
+### Syncing Pull Request Templates
+
+Sync a pull request template file to `.github/pull_request_template.md` in target repositories via pull requests:
+
+```yml
+- name: Sync Pull Request Template
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    pull-request-template: './config/templates/pull_request_template.md'
+    pull-request-template-pr-title: 'chore: update pull request template'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    pull-request-template: './config/templates/standard-template.md'
+  - repo: owner/repo2
+    pull-request-template: './config/templates/feature-template.md'
+  - repo: owner/repo3
+    # Skip pull request template sync for this repo
+```
+
+**Behavior:**
+
+- If `.github/pull_request_template.md` doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- If content is identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Updates existing open PRs instead of creating duplicates
+
+For more information on pull request templates, see the [GitHub documentation](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
+
 ### Organization-wide Updates
 
 ```yml
@@ -226,26 +264,28 @@ Output shows what would change:
 
 ## Action Inputs
 
-| Input                          | Description                                                                                                                                | Required | Default                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------ |
-| `github-token`                 | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                              |
-| `github-api-url`               | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`        |
-| `repositories`                 | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                              |
-| `repositories-file`            | Path to YAML file containing repository list                                                                                               | No\*     | -                              |
-| `owner`                        | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                              |
-| `allow-squash-merge`           | Allow squash merging pull requests                                                                                                         | No       | -                              |
-| `allow-merge-commit`           | Allow merge commits for pull requests                                                                                                      | No       | -                              |
-| `allow-rebase-merge`           | Allow rebase merging pull requests                                                                                                         | No       | -                              |
-| `allow-auto-merge`             | Allow auto-merge on pull requests                                                                                                          | No       | -                              |
-| `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                                                          | No       | -                              |
-| `allow-update-branch`          | Always suggest updating pull request branches                                                                                              | No       | -                              |
-| `immutable-releases`           | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                              |
-| `enable-default-code-scanning` | Enable default code scanning setup                                                                                                         | No       | -                              |
-| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
-| `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
-| `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
-| `rulesets-file`                | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                              |
-| `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
+| Input                            | Description                                                                                                                                | Required | Default                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------------- |
+| `github-token`                   | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                                     |
+| `github-api-url`                 | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`               |
+| `repositories`                   | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                     |
+| `repositories-file`              | Path to YAML file containing repository list                                                                                               | No\*     | -                                     |
+| `owner`                          | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                                     |
+| `allow-squash-merge`             | Allow squash merging pull requests                                                                                                         | No       | -                                     |
+| `allow-merge-commit`             | Allow merge commits for pull requests                                                                                                      | No       | -                                     |
+| `allow-rebase-merge`             | Allow rebase merging pull requests                                                                                                         | No       | -                                     |
+| `allow-auto-merge`               | Allow auto-merge on pull requests                                                                                                          | No       | -                                     |
+| `delete-branch-on-merge`         | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                     |
+| `allow-update-branch`            | Always suggest updating pull request branches                                                                                              | No       | -                                     |
+| `immutable-releases`             | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                                     |
+| `enable-default-code-scanning`   | Enable default code scanning setup                                                                                                         | No       | -                                     |
+| `topics`                         | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                     |
+| `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                     |
+| `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`        |
+| `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                     |
+| `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                     |
+| `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template` |
+| `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                               |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -323,6 +363,7 @@ repos:
     enable-default-code-scanning: false
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/custom-ruleset.json'
+    pull-request-template: './config/templates/feature-template.md'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -333,6 +374,8 @@ repos:
 - Topics **replace** all existing repository topics
 - Dependabot.yml syncing creates pull requests for review before merging
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
+- Pull request template syncing creates pull requests for review before merging
+- Pull request templates are synced to `.github/pull_request_template.md` (standard location)
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions

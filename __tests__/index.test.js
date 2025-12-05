@@ -91,7 +91,8 @@ const {
   parseRepositories,
   updateRepositorySettings,
   syncDependabotYml,
-  syncRepositoryRuleset
+  syncRepositoryRuleset,
+  syncPullRequestTemplate
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -815,7 +816,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified)'
       );
     });
 
@@ -1613,6 +1614,373 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('created');
+    });
+  });
+
+  describe('syncPullRequestTemplate', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should create pull request template when it does not exist', async () => {
+      const testTemplateContent = '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added';
+
+      mockFs.readFileSync.mockReturnValue(testTemplateContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 }) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 42,
+          html_url: 'https://github.com/owner/repo/pull/42'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: add pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.github/pull_request_template.md',
+          branch: 'pull-request-template-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update pull request template when content differs', async () => {
+      const newContent =
+        '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added\n- [ ] Docs updated';
+      const oldContent = '## Description\n\nDescribe your changes here';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 43,
+          html_url: 'https://github.com/owner/repo/pull/43'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('updated');
+      expect(result.prNumber).toBe(43);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sha: 'file-sha-456'
+        })
+      );
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const content = '## Description\n\nDescribe your changes here';
+
+      mockFs.readFileSync.mockReturnValue(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    });
+
+    test('should update existing branch when branch already exists', async () => {
+      const newContent = '## Description\n\nNew content';
+      const oldContent = '## Description\n\nOld content';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-777',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch already exists
+      mockOctokit.rest.git.getRef
+        .mockResolvedValueOnce({
+          // Branch exists
+          data: { object: { sha: 'branch-sha-123' } }
+        })
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'main-sha-456' } }
+        });
+
+      mockOctokit.rest.git.updateRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 44,
+          html_url: 'https://github.com/owner/repo/pull/44'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('updated');
+      expect(result.prNumber).toBe(44);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/pull-request-template-sync',
+        sha: 'main-sha-456',
+        force: true
+      });
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should report existing open PR when one exists', async () => {
+      const newContent = '## Description\n\nNew content';
+      const oldContent = '## Description\n\nOld content';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-999',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('pr-exists');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode', async () => {
+      const newContent = '## Description\n\nNew template';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PR
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: add pull request template',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'invalid-repo-format',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing template file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './nonexistent.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read pull request template file');
+    });
+
+    test('should handle API errors', async () => {
+      mockFs.readFileSync.mockReturnValue('## Description');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync pull request template');
     });
   });
 });

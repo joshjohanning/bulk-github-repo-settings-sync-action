@@ -930,9 +930,246 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
 }
 
 /**
+ * Sync pull request template file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} templatePath - Path to local pull request template file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = '.github/pull_request_template.md';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source template file
+    let sourceContent;
+    try {
+      sourceContent = fs.readFileSync(templatePath, 'utf8');
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read pull request template file at ${templatePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if pull_request_template.md exists in the target repo
+    let existingSha = null;
+    let existingContent = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) {
+      if (error.status === 404) {
+        // File doesn't exist - this is fine, we'll create it
+        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare content
+    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
+
+    if (!needsUpdate) {
+      return {
+        repository: repo,
+        success: true,
+        pullRequestTemplate: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    const branchName = 'pull-request-template-sync';
+    let existingPR = null;
+
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        pullRequestTemplate: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        pullRequestTemplate: existingContent ? 'would-update' : 'would-create',
+        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    core.info(`  🔍 Checking for existing branch ${branchName}...`);
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+      core.info(`  ✓ Branch ${branchName} exists`);
+    } catch (error) {
+      if (error.status === 404) {
+        core.info(`  ✓ Branch ${branchName} does not exist`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update the file
+    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: commitMessage,
+      content: Buffer.from(sourceContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha || undefined
+    });
+
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Prepare PR body content
+    const prBody = existingContent
+      ? `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`
+      : `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`;
+
+    // Create or update PR
+    let prNumber;
+    if (existingPR) {
+      // Update existing PR
+      await octokit.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: existingPR.number,
+        title: prTitle,
+        body: prBody
+      });
+      prNumber = existingPR.number;
+      core.info(`  🔄 Updated existing PR #${prNumber}`);
+    } else {
+      // Create new PR
+      const { data: pr } = await octokit.rest.pulls.create({
+        owner,
+        repo: repoName,
+        title: prTitle,
+        head: branchName,
+        base: defaultBranch,
+        body: prBody
+      });
+      prNumber = pr.number;
+      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      pullRequestTemplate: existingContent ? 'updated' : 'created',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: existingContent
+        ? `Updated ${targetPath} via PR #${prNumber}`
+        : `Created ${targetPath} via PR #${prNumber}`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync pull request template: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, or dependabot)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, or pull request template)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -947,7 +1184,11 @@ function hasRepositoryChanges(result) {
     (result.rulesetSync &&
       result.rulesetSync.success &&
       result.rulesetSync.ruleset &&
-      result.rulesetSync.ruleset !== 'unchanged')
+      result.rulesetSync.ruleset !== 'unchanged') ||
+    (result.pullRequestTemplateSync &&
+      result.pullRequestTemplateSync.success &&
+      result.pullRequestTemplateSync.pullRequestTemplate &&
+      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged')
   );
 }
 
@@ -993,6 +1234,11 @@ export async function run() {
     // Get rulesets settings
     const rulesetsFile = getInput('rulesets-file');
 
+    // Get pull request template settings
+    const pullRequestTemplate = getInput('pull-request-template');
+    const pullRequestTemplatePrTitle =
+      getInput('pull-request-template-pr-title') || 'chore: update pull request template';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1010,10 +1256,11 @@ export async function run() {
       immutableReleases !== null ||
       topics !== null ||
       dependabotYml ||
-      rulesetsFile;
+      rulesetsFile ||
+      pullRequestTemplate;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified)'
       );
     }
 
@@ -1042,6 +1289,9 @@ export async function run() {
     }
     if (rulesetsFile) {
       core.info(`Repository ruleset will be synced from: ${rulesetsFile}`);
+    }
+    if (pullRequestTemplate) {
+      core.info(`Pull request template will be synced from: ${pullRequestTemplate}`);
     }
 
     // Update repositories
@@ -1115,6 +1365,12 @@ export async function run() {
         repoRulesetsFile = repoConfig['rulesets-file'];
       }
 
+      // Handle repo-specific pull-request-template
+      let repoPullRequestTemplate = pullRequestTemplate;
+      if (repoConfig['pull-request-template'] !== undefined) {
+        repoPullRequestTemplate = repoConfig['pull-request-template'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -1162,6 +1418,36 @@ export async function run() {
           core.info(`  📋 ${rulesetResult.message}`);
         } else {
           core.warning(`  ⚠️  ${rulesetResult.error}`);
+        }
+      }
+
+      // Sync pull request template if specified
+      if (repoPullRequestTemplate) {
+        core.info(`  📝 Checking pull request template...`);
+        const templateResult = await syncPullRequestTemplate(
+          octokit,
+          repo,
+          repoPullRequestTemplate,
+          pullRequestTemplatePrTitle,
+          dryRun
+        );
+
+        // Add pull request template result to the main result
+        result.pullRequestTemplateSync = templateResult;
+
+        if (templateResult.success) {
+          if (templateResult.pullRequestTemplate === 'unchanged') {
+            core.info(`  📝 ${templateResult.message}`);
+          } else if (dryRun) {
+            core.info(`  📝 ${templateResult.message}`);
+          } else {
+            core.info(`  📝 ${templateResult.message}`);
+            if (templateResult.prUrl) {
+              core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${templateResult.error}`);
         }
       }
 

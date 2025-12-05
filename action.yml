@@ -59,6 +59,13 @@ inputs:
   rulesets-file:
     description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
     required: false
+  pull-request-template:
+    description: 'Path to a pull request template file to sync to .github/pull_request_template.md in target repositories'
+    required: false
+  pull-request-template-pr-title:
+    description: 'Title for pull requests when updating pull request template'
+    required: false
+    default: 'chore: update pull request template'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
