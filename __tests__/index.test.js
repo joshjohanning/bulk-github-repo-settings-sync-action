@@ -1482,6 +1482,70 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
+    test('should not update ruleset when source config contains API-only fields', async () => {
+      // Source config that looks like a raw API response export (has API-only fields)
+      const rulesetConfig = {
+        id: 9620349,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        conditions: {
+          ref_name: {
+            exclude: [],
+            include: ['~DEFAULT_BRANCH']
+          }
+        },
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        node_id: 'RRS_lACqUmVwb3NpdG9yec4uPAeNzgCTID8',
+        created_at: '2025-11-08T08:49:56.048-06:00',
+        updated_at: '2025-11-08T08:49:56.128-06:00',
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+        current_user_can_bypass: 'always',
+        _links: {
+          self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9620349' },
+          html: { href: 'https://github.com/some-owner/some-repo/rules/9620349' }
+        }
+      };
+
+      // Existing ruleset from API (matches the relevant fields)
+      const existingRuleset = {
+        id: 456,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'owner/repo',
+        enforcement: 'active',
+        conditions: {
+          ref_name: {
+            exclude: [],
+            include: ['~DEFAULT_BRANCH']
+          }
+        },
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+        current_user_can_bypass: 'always'
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 456, name: 'ci' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('unchanged');
+      expect(result.rulesetId).toBe(456);
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+    });
+
     test('should handle dry-run mode for creation', async () => {
       const rulesetConfig = {
         name: 'ci',
