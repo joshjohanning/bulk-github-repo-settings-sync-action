@@ -1542,6 +1542,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.ruleset).toBe('unchanged');
       expect(result.rulesetId).toBe(456);
       expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
