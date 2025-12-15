@@ -864,8 +864,19 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dryR
         rules: fullRuleset.rules
       };
 
+      // Normalize the source config by removing API-only fields that shouldn't be compared
+      // This allows users to use raw API response JSON as their source config
+      const normalizedSourceConfig = {
+        name: rulesetConfig.name,
+        target: rulesetConfig.target,
+        enforcement: rulesetConfig.enforcement,
+        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
+        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
+        rules: rulesetConfig.rules
+      };
+
       // Deep comparison of the configurations
-      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(rulesetConfig);
+      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
