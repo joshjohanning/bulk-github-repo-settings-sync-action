@@ -33,6 +33,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 /**
@@ -1107,7 +1108,7 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
   // Build files array - extract filename from source path and use as target
   const files = workflowFilePaths.map(filePath => ({
     sourceFilePath: filePath,
-    targetPath: `.github/workflows/${filePath.split('/').pop()}`
+    targetPath: `.github/workflows/${path.basename(filePath)}`
   }));
 
   return syncFilesViaPullRequest(
