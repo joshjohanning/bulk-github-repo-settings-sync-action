@@ -235,7 +235,7 @@ Sync one or more workflow files to `.github/workflows/` in target repositories v
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
     workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
-    workflow-files-pr-title: 'chore: update workflow files'
+    workflow-files-pr-title: 'chore: sync workflow configuration'
 ```
 
 Or with repo-specific overrides in `repos.yml`:
