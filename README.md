@@ -21,8 +21,8 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 📋 **Sync repository rulesets** across repositories
 - 📝 **Sync pull request templates** across repositories via pull requests
-- � **Sync workflow files** across repositories via pull requests
-- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 🔧 **Sync workflow files** across repositories via pull requests
+- 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
