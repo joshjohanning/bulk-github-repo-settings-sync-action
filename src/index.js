@@ -566,7 +566,7 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         return {
           repository: repo,
           success: false,
-          error: `Failed to read ${fileDescription} file at ${file.sourceFilePath}: ${error.message}`,
+          error: `Failed to read file at ${file.sourceFilePath} for ${fileDescription}: ${error.message}`,
           dryRun
         };
       }
