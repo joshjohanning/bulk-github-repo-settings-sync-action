@@ -2385,7 +2385,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.workflowFiles).toBe('would-update');
+      expect(result.workflowFiles).toBe('would-create');
       expect(result.dryRun).toBe(true);
       expect(result.filesWouldCreate).toContain('.github/workflows/ci.yml');
       expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
