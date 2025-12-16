@@ -1094,6 +1094,16 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
  * @returns {Promise<Object>} Result object
  */
 export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+  // Validate that workflow files array is non-empty
+  if (!workflowFilePaths || workflowFilePaths.length === 0) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'No workflow files specified',
+      dryRun
+    };
+  }
+
   // Build files array - extract filename from source path and use as target
   const files = workflowFilePaths.map(filePath => ({
     sourceFilePath: filePath,

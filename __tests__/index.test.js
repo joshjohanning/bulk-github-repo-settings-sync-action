@@ -2532,6 +2532,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.error).toContain('Invalid repository format');
     });
 
+    test('should handle empty workflow files array', async () => {
+      const result = await syncWorkflowFiles(mockOctokit, 'owner/repo', [], 'chore: update workflow files', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('No workflow files specified');
+    });
+
+    test('should handle null workflow files array', async () => {
+      const result = await syncWorkflowFiles(mockOctokit, 'owner/repo', null, 'chore: update workflow files', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('No workflow files specified');
+    });
+
     test('should handle missing workflow file', async () => {
       mockFs.readFileSync.mockImplementation(() => {
         throw new Error('ENOENT: no such file or directory');
