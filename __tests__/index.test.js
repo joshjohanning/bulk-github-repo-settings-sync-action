@@ -2363,7 +2363,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
-    test('should handle dry-run mode', async () => {
+    test('should handle dry-run mode for new file creation', async () => {
       const newContent = 'name: CI\non: [push]';
 
       mockFs.readFileSync.mockReturnValue(newContent);
@@ -2388,6 +2388,132 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.workflowFiles).toBe('would-create');
       expect(result.dryRun).toBe(true);
       expect(result.filesWouldCreate).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode for file update', async () => {
+      const newContent = 'name: CI\non: [push, pull_request]';
+      const oldContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'existing-sha',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(result.filesWouldUpdate).toContain('.github/workflows/ci.yml');
+      expect(result.filesWouldCreate).toBeUndefined();
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode with multiple files', async () => {
+      const ciContent = 'name: CI\non: [push]';
+      const releaseContent = 'name: Release\non: [release]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Both files don't exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: sync workflows',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(result.message).toBe('Would sync 2 file(s) via PR');
+      expect(result.filesWouldCreate).toContain('.github/workflows/ci.yml');
+      expect(result.filesWouldCreate).toContain('.github/workflows/release.yml');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode with mixed create and update', async () => {
+      const ciContent = 'name: CI\non: [push, pull_request]';
+      const releaseContent = 'name: Release\non: [release]';
+      const oldCiContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // ci.yml exists with different content, release.yml does not exist
+      mockOctokit.rest.repos.getContent.mockImplementation(({ path }) => {
+        if (path === '.github/workflows/ci.yml') {
+          return Promise.resolve({
+            data: {
+              sha: 'ci-sha',
+              content: Buffer.from(oldCiContent).toString('base64')
+            }
+          });
+        }
+        const error = new Error('Not Found');
+        error.status = 404;
+        return Promise.reject(error);
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: sync workflows',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-create'); // would-create because at least one file is new
+      expect(result.dryRun).toBe(true);
+      expect(result.message).toBe('Would sync 2 file(s) via PR');
+      expect(result.filesWouldCreate).toContain('.github/workflows/release.yml');
+      expect(result.filesWouldUpdate).toContain('.github/workflows/ci.yml');
       expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
