@@ -17,6 +17,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Check npm version compatibility
+        uses: joshjohanning/npm-version-check-action@v1
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -25,9 +28,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Check npm version compatibility
-        uses: joshjohanning/npm-version-check-action@v1
 
       - name: Run linting
         run: npm run lint
