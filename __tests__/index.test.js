@@ -1346,7 +1346,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read dependabot.yml file');
+      expect(result.error).toContain('Failed to read file at');
     });
 
     test('should handle API errors', async () => {
@@ -2029,7 +2029,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read pull request template file');
+      expect(result.error).toContain('Failed to read file at');
     });
 
     test('should handle API errors', async () => {
@@ -2560,7 +2560,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read workflow file');
+      expect(result.error).toContain('Failed to read file at');
     });
 
     test('should handle API errors', async () => {
