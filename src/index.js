@@ -1220,7 +1220,7 @@ export async function run() {
       dependabotYml ||
       rulesetsFile ||
       pullRequestTemplate ||
-      workflowFiles;
+      (workflowFiles && workflowFiles.length > 0);
     if (!hasSettings) {
       throw new Error(
         'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified)'
