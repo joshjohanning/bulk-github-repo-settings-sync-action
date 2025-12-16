@@ -986,9 +986,279 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
 }
 
 /**
+ * Sync workflow files to target repository via a single pull request
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Array<string>} workflowFilePaths - Array of local workflow file paths to sync
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read all workflow files
+    const workflowFiles = [];
+    for (const filePath of workflowFilePaths) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        // Extract just the filename for the target path
+        const filename = filePath.split('/').pop();
+        workflowFiles.push({
+          sourcePath: filePath,
+          targetPath: `.github/workflows/${filename}`,
+          content
+        });
+      } catch (error) {
+        return {
+          repository: repo,
+          success: false,
+          error: `Failed to read workflow file at ${filePath}: ${error.message}`,
+          dryRun
+        };
+      }
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check each workflow file and determine which need updates
+    const filesToUpdate = [];
+    for (const workflow of workflowFiles) {
+      let existingSha = null;
+      let existingContent = null;
+
+      try {
+        const { data } = await octokit.rest.repos.getContent({
+          owner,
+          repo: repoName,
+          path: workflow.targetPath,
+          ref: defaultBranch
+        });
+        existingSha = data.sha;
+        existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+      } catch (error) {
+        if (error.status === 404) {
+          // File doesn't exist - needs to be created
+          core.info(`  📄 ${workflow.targetPath} does not exist in ${repo}, will create it`);
+        } else {
+          throw error;
+        }
+      }
+
+      // Compare content
+      const needsUpdate = !existingContent || existingContent.trim() !== workflow.content.trim();
+
+      if (needsUpdate) {
+        filesToUpdate.push({
+          ...workflow,
+          existingSha,
+          isNew: !existingContent
+        });
+      }
+    }
+
+    // If no files need updates, return early
+    if (filesToUpdate.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        workflowFiles: 'unchanged',
+        message: 'All workflow files are already up to date',
+        filesProcessed: workflowFiles.map(w => w.targetPath),
+        dryRun
+      };
+    }
+
+    const branchName = 'workflow-files-sync';
+
+    // Check if there's already an open PR for this update
+    let existingPR = null;
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for workflow files`);
+      }
+    } catch (error) {
+      // Non-fatal, continue
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    // If there's already an open PR, don't create/update another one
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        workflowFiles: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for workflow files`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        filesProcessed: workflowFiles.map(w => w.targetPath),
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      const newFiles = filesToUpdate.filter(f => f.isNew).map(f => f.targetPath);
+      const updatedFiles = filesToUpdate.filter(f => !f.isNew).map(f => f.targetPath);
+      return {
+        repository: repo,
+        success: true,
+        workflowFiles: 'would-update',
+        message: `Would sync ${filesToUpdate.length} workflow file(s) via PR`,
+        filesWouldCreate: newFiles,
+        filesWouldUpdate: updatedFiles,
+        filesProcessed: workflowFiles.map(w => w.targetPath),
+        dryRun
+      };
+    }
+
+    // Create or get reference to the branch
+    core.info(`  🔍 Checking for existing branch ${branchName}...`);
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+      core.info(`  ✓ Branch ${branchName} exists`);
+    } catch (error) {
+      if (error.status === 404) {
+        core.info(`  ✓ Branch ${branchName} does not exist`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Get the SHA of the default branch to create new branch from
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      // Create new branch
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      // Update existing branch to latest from default branch
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Create or update each workflow file
+    const createdFiles = [];
+    const updatedFiles = [];
+
+    for (const file of filesToUpdate) {
+      const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
+
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo: repoName,
+        path: file.targetPath,
+        message: commitMessage,
+        content: Buffer.from(file.content).toString('base64'),
+        branch: branchName,
+        sha: file.existingSha || undefined
+      });
+
+      if (file.isNew) {
+        createdFiles.push(file.targetPath);
+      } else {
+        updatedFiles.push(file.targetPath);
+      }
+
+      core.info(`  ✍️  Committed changes to ${file.targetPath}`);
+    }
+
+    // Prepare PR body content
+    let prBody = 'This PR syncs workflow files to the latest versions.\n\n**Changes:**\n';
+    if (createdFiles.length > 0) {
+      prBody += `\n**Added:**\n${createdFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+    }
+    if (updatedFiles.length > 0) {
+      prBody += `\n**Updated:**\n${updatedFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+    }
+
+    // Create new PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+
+    return {
+      repository: repo,
+      success: true,
+      workflowFiles:
+        filesToUpdate.some(f => f.isNew) && filesToUpdate.some(f => !f.isNew)
+          ? 'mixed'
+          : filesToUpdate.every(f => f.isNew)
+            ? 'created'
+            : 'updated',
+      prNumber,
+      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
+      message: `Synced ${filesToUpdate.length} workflow file(s) via PR #${prNumber}`,
+      filesCreated: createdFiles,
+      filesUpdated: updatedFiles,
+      filesProcessed: workflowFiles.map(w => w.targetPath),
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync workflow files: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, or pull request template)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, or workflow files)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1007,7 +1277,11 @@ function hasRepositoryChanges(result) {
     (result.pullRequestTemplateSync &&
       result.pullRequestTemplateSync.success &&
       result.pullRequestTemplateSync.pullRequestTemplate &&
-      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged')
+      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged') ||
+    (result.workflowFilesSync &&
+      result.workflowFilesSync.success &&
+      result.workflowFilesSync.workflowFiles &&
+      result.workflowFilesSync.workflowFiles !== 'unchanged')
   );
 }
 
@@ -1058,6 +1332,16 @@ export async function run() {
     const pullRequestTemplatePrTitle =
       getInput('pull-request-template-pr-title') || 'chore: update pull request template';
 
+    // Get workflow files settings
+    const workflowFilesInput = getInput('workflow-files');
+    const workflowFiles = workflowFilesInput
+      ? workflowFilesInput
+          .split(',')
+          .map(f => f.trim())
+          .filter(f => f.length > 0)
+      : null;
+    const workflowFilesPrTitle = getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1076,10 +1360,11 @@ export async function run() {
       topics !== null ||
       dependabotYml ||
       rulesetsFile ||
-      pullRequestTemplate;
+      pullRequestTemplate ||
+      workflowFiles;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified)'
       );
     }
 
@@ -1111,6 +1396,9 @@ export async function run() {
     }
     if (pullRequestTemplate) {
       core.info(`Pull request template will be synced from: ${pullRequestTemplate}`);
+    }
+    if (workflowFiles) {
+      core.info(`Workflow files will be synced from: ${workflowFiles.join(', ')}`);
     }
 
     // Update repositories
@@ -1190,6 +1478,21 @@ export async function run() {
         repoPullRequestTemplate = repoConfig['pull-request-template'];
       }
 
+      // Handle repo-specific workflow-files
+      let repoWorkflowFiles = workflowFiles;
+      if (repoConfig['workflow-files'] !== undefined) {
+        if (typeof repoConfig['workflow-files'] === 'string') {
+          repoWorkflowFiles = repoConfig['workflow-files']
+            .split(',')
+            .map(f => f.trim())
+            .filter(f => f.length > 0);
+        } else if (Array.isArray(repoConfig['workflow-files'])) {
+          repoWorkflowFiles = repoConfig['workflow-files'];
+        } else {
+          repoWorkflowFiles = null;
+        }
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -1255,6 +1558,24 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${templateResult.error}`);
+        }
+      }
+
+      // Sync workflow files if specified
+      if (repoWorkflowFiles && repoWorkflowFiles.length > 0) {
+        core.info(`  🔧 Checking workflow files...`);
+        const workflowResult = await syncWorkflowFiles(octokit, repo, repoWorkflowFiles, workflowFilesPrTitle, dryRun);
+
+        // Add workflow files result to the main result
+        result.workflowFilesSync = workflowResult;
+
+        if (workflowResult.success) {
+          core.info(`  🔧 ${workflowResult.message}`);
+          if (workflowResult.prUrl) {
+            core.info(`  🔗 PR URL: ${workflowResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${workflowResult.error}`);
         }
       }
 

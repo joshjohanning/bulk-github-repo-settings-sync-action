@@ -21,7 +21,8 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 📋 **Sync repository rulesets** across repositories
 - 📝 **Sync pull request templates** across repositories via pull requests
-- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- � **Sync workflow files** across repositories via pull requests
+- �📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -223,6 +224,46 @@ repos:
 
 For more information on pull request templates, see the [GitHub documentation](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
 
+### Syncing Workflow Files
+
+Sync one or more workflow files to `.github/workflows/` in target repositories via pull requests:
+
+```yml
+- name: Sync Workflow Files
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
+    workflow-files-pr-title: 'chore: update workflow files'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    workflow-files: './config/workflows/ci.yml'
+  - repo: owner/repo2
+    workflow-files:
+      - './config/workflows/ci.yml'
+      - './config/workflows/release.yml'
+  - repo: owner/repo3
+    # Skip workflow files sync for this repo
+```
+
+**Behavior:**
+
+- Syncs multiple workflow files in a single PR
+- If a workflow file doesn't exist, it creates it
+- If it exists but differs, it updates it via PR
+- If all files are identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Updates existing open PRs instead of creating duplicates
+- Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
+
+For more information on GitHub Actions workflows, see the [GitHub Actions documentation](https://docs.github.com/en/actions/using-workflows).
+
 ### Organization-wide Updates
 
 ```yml
@@ -285,6 +326,8 @@ Output shows what would change:
 | `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                     |
 | `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                     |
 | `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template` |
+| `workflow-files`                 | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                     |
+| `workflow-files-pr-title`        | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`  |
 | `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                               |
 
 \* Either `repositories` or `repositories-file` must be provided
@@ -364,6 +407,9 @@ repos:
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/custom-ruleset.json'
     pull-request-template: './config/templates/feature-template.md'
+    workflow-files:
+      - './config/workflows/ci.yml'
+      - './config/workflows/release.yml'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -376,6 +422,8 @@ repos:
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
 - Pull request template syncing creates pull requests for review before merging
 - Pull request templates are synced to `.github/pull_request_template.md` (standard location)
+- Workflow files syncing creates pull requests for review before merging
+- Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions
