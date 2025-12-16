@@ -66,6 +66,13 @@ inputs:
     description: 'Title for pull requests when updating pull request template'
     required: false
     default: 'chore: update pull request template'
+  workflow-files:
+    description: 'Comma-separated list of workflow file paths to sync to .github/workflows/ in target repositories (e.g., "./workflows/ci.yml,./workflows/release.yml")'
+    required: false
+  workflow-files-pr-title:
+    description: 'Title for pull requests when updating workflow files'
+    required: false
+    default: 'chore: sync workflow configuration'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

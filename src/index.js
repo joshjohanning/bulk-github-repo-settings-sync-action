@@ -33,6 +33,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 /**
@@ -524,24 +525,24 @@ export async function updateRepositorySettings(
 }
 
 /**
- * Generic function to sync a file to a target repository via pull request
+ * Generic function to sync one or more files to a target repository via pull request.
+ * If an open PR already exists for the same branch, returns early with 'pr-exists' status
+ * to avoid creating duplicate PRs. The existing PR is not updated with new file changes.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {Object} options - Sync options
- * @param {string} options.sourceFilePath - Path to local source file
- * @param {string} options.targetPath - Target path in the repository
+ * @param {Array<{sourceFilePath: string, targetPath: string}>} options.files - Array of file mappings (sourceFilePath -> targetPath)
  * @param {string} options.branchName - Branch name for the PR
  * @param {string} options.prTitle - Title for the pull request
- * @param {string} options.prBodyCreate - PR body when creating new file
- * @param {string} options.prBodyUpdate - PR body when updating existing file
- * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate')
- * @param {string} options.fileDescription - Human-readable description of the file (for error messages)
+ * @param {string} options.prBodyCreate - PR body when creating new file(s)
+ * @param {string} options.prBodyUpdate - PR body when updating existing file(s)
+ * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate', 'workflowFiles')
+ * @param {string} options.fileDescription - Human-readable description of the file(s) (for error messages)
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
-  const { sourceFilePath, targetPath, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } =
-    options;
+export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
+  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } = options;
 
   const [owner, repoName] = repo.split('/');
 
@@ -555,17 +556,25 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
   }
 
   try {
-    // Read the source file
-    let sourceContent;
-    try {
-      sourceContent = fs.readFileSync(sourceFilePath, 'utf8');
-    } catch (error) {
-      return {
-        repository: repo,
-        success: false,
-        error: `Failed to read ${fileDescription} file at ${sourceFilePath}: ${error.message}`,
-        dryRun
-      };
+    // Read all source files and build file info array
+    const fileInfos = [];
+    for (const file of files) {
+      let sourceContent;
+      try {
+        sourceContent = fs.readFileSync(file.sourceFilePath, 'utf8');
+      } catch (error) {
+        return {
+          repository: repo,
+          success: false,
+          error: `Failed to read file at ${file.sourceFilePath} for ${fileDescription}: ${error.message}`,
+          dryRun
+        };
+      }
+      fileInfos.push({
+        sourceFilePath: file.sourceFilePath,
+        targetPath: file.targetPath,
+        content: sourceContent
+      });
     }
 
     // Get default branch
@@ -575,44 +584,59 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
     });
     const defaultBranch = repoData.default_branch;
 
-    // Check if file exists in the target repo
-    let existingSha = null;
-    let existingContent = null;
+    // Check each file and determine which need updates
+    const filesToUpdate = [];
+    for (const fileInfo of fileInfos) {
+      let existingSha = null;
+      let existingContent = null;
 
-    try {
-      const { data } = await octokit.rest.repos.getContent({
-        owner,
-        repo: repoName,
-        path: targetPath,
-        ref: defaultBranch
-      });
-      existingSha = data.sha;
-      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
-    } catch (error) {
-      if (error.status === 404) {
-        // File doesn't exist - this is fine, we'll create it
-        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
-      } else {
-        throw error;
+      try {
+        const { data } = await octokit.rest.repos.getContent({
+          owner,
+          repo: repoName,
+          path: fileInfo.targetPath,
+          ref: defaultBranch
+        });
+        existingSha = data.sha;
+        existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+      } catch (error) {
+        if (error.status === 404) {
+          // File doesn't exist - this is fine, we'll create it
+          core.info(`  📄 ${fileInfo.targetPath} does not exist in ${repo}, will create it`);
+        } else {
+          throw error;
+        }
+      }
+
+      // Compare content
+      const needsUpdate = !existingContent || existingContent.trim() !== fileInfo.content.trim();
+
+      if (needsUpdate) {
+        filesToUpdate.push({
+          ...fileInfo,
+          existingSha,
+          isNew: !existingContent
+        });
       }
     }
 
-    // Compare content
-    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
-
-    if (!needsUpdate) {
+    // If no files need updates, return early
+    if (filesToUpdate.length === 0) {
+      const targetPaths = fileInfos.map(f => f.targetPath);
+      const message =
+        fileInfos.length === 1 ? `${targetPaths[0]} is already up to date` : 'All files are already up to date';
       return {
         repository: repo,
         success: true,
         [resultKey]: 'unchanged',
-        message: `${targetPath} is already up to date`,
+        message,
+        filesProcessed: targetPaths,
         dryRun
       };
     }
 
     // Check if there's already an open PR for this update
     let existingPR = null;
-
     try {
       const { data: pulls } = await octokit.rest.pulls.list({
         owner,
@@ -623,7 +647,8 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
 
       if (pulls.length > 0) {
         existingPR = pulls[0];
-        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+        const targetDesc = fileInfos.length === 1 ? fileInfos[0].targetPath : fileDescription;
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetDesc}`);
       }
     } catch (error) {
       // Non-fatal, continue
@@ -632,23 +657,38 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
 
     // If there's already an open PR, don't create/update another one
     if (existingPR) {
+      const targetDesc = fileInfos.length === 1 ? fileInfos[0].targetPath : fileDescription;
       return {
         repository: repo,
         success: true,
         [resultKey]: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        message: `Open PR #${existingPR.number} already exists for ${targetDesc}`,
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
+        filesProcessed: fileInfos.map(f => f.targetPath),
         dryRun
       };
     }
 
     if (dryRun) {
+      const newFiles = filesToUpdate.filter(f => f.isNew).map(f => f.targetPath);
+      const updatedFiles = filesToUpdate.filter(f => !f.isNew).map(f => f.targetPath);
+      let message;
+      if (fileInfos.length === 1) {
+        message = filesToUpdate[0].isNew
+          ? `Would create ${filesToUpdate[0].targetPath} via PR`
+          : `Would update ${filesToUpdate[0].targetPath} via PR`;
+      } else {
+        message = `Would sync ${filesToUpdate.length} file(s) via PR`;
+      }
       return {
         repository: repo,
         success: true,
-        [resultKey]: existingContent ? 'would-update' : 'would-create',
-        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        [resultKey]: filesToUpdate.some(f => f.isNew) ? 'would-create' : 'would-update',
+        message,
+        filesWouldCreate: newFiles.length > 0 ? newFiles : undefined,
+        filesWouldUpdate: updatedFiles.length > 0 ? updatedFiles : undefined,
+        filesProcessed: fileInfos.map(f => f.targetPath),
         dryRun
       };
     }
@@ -700,23 +740,45 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
       core.info(`  🌿 Updated branch ${branchName}`);
     }
 
-    // Create or update the file
-    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+    // Create or update each file
+    const createdFiles = [];
+    const updatedFiles = [];
 
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
-      repo: repoName,
-      path: targetPath,
-      message: commitMessage,
-      content: Buffer.from(sourceContent).toString('base64'),
-      branch: branchName,
-      sha: existingSha || undefined
-    });
+    for (const file of filesToUpdate) {
+      const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
 
-    core.info(`  ✍️  Committed changes to ${targetPath}`);
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo: repoName,
+        path: file.targetPath,
+        message: commitMessage,
+        content: Buffer.from(file.content).toString('base64'),
+        branch: branchName,
+        sha: file.existingSha || undefined
+      });
 
-    // Prepare PR body content
-    const prBody = existingContent ? prBodyUpdate : prBodyCreate;
+      if (file.isNew) {
+        createdFiles.push(file.targetPath);
+      } else {
+        updatedFiles.push(file.targetPath);
+      }
+
+      core.info(`  ✍️  Committed changes to ${file.targetPath}`);
+    }
+
+    // Prepare PR body content - use dynamic body for multiple files, or simple body for single file
+    let prBody;
+    if (fileInfos.length === 1) {
+      prBody = filesToUpdate[0].isNew ? prBodyCreate : prBodyUpdate;
+    } else {
+      prBody = `This PR syncs ${fileDescription} to the latest versions.\n\n**Changes:**\n`;
+      if (createdFiles.length > 0) {
+        prBody += `\n**Added:**\n${createdFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+      }
+      if (updatedFiles.length > 0) {
+        prBody += `\n**Updated:**\n${updatedFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+      }
+    }
 
     // Create new PR (we only reach here if no existing PR was found)
     const { data: pr } = await octokit.rest.pulls.create({
@@ -730,15 +792,36 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
     const prNumber = pr.number;
     core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
 
+    // Determine status
+    let status;
+    if (createdFiles.length > 0 && updatedFiles.length > 0) {
+      status = 'mixed';
+    } else if (createdFiles.length > 0) {
+      status = 'created';
+    } else {
+      status = 'updated';
+    }
+
+    // Build message
+    let message;
+    if (fileInfos.length === 1) {
+      message = filesToUpdate[0].isNew
+        ? `Created ${filesToUpdate[0].targetPath} via PR #${prNumber}`
+        : `Updated ${filesToUpdate[0].targetPath} via PR #${prNumber}`;
+    } else {
+      message = `Synced ${filesToUpdate.length} file(s) via PR #${prNumber}`;
+    }
+
     return {
       repository: repo,
       success: true,
-      [resultKey]: existingContent ? 'updated' : 'created',
+      [resultKey]: status,
       prNumber,
       prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
-      message: existingContent
-        ? `Updated ${targetPath} via PR #${prNumber}`
-        : `Created ${targetPath} via PR #${prNumber}`,
+      message,
+      filesCreated: createdFiles.length > 0 ? createdFiles : undefined,
+      filesUpdated: updatedFiles.length > 0 ? updatedFiles : undefined,
+      filesProcessed: fileInfos.map(f => f.targetPath),
       dryRun
     };
   } catch (error) {
@@ -749,6 +832,23 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
       dryRun
     };
   }
+}
+
+/**
+ * Legacy wrapper - sync a single file to a target repository via pull request
+ * @deprecated Use syncFilesViaPullRequest instead
+ */
+export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
+  const { sourceFilePath, targetPath, ...restOptions } = options;
+  return syncFilesViaPullRequest(
+    octokit,
+    repo,
+    {
+      ...restOptions,
+      files: [{ sourceFilePath, targetPath }]
+    },
+    dryRun
+  );
 }
 
 /**
@@ -986,9 +1086,51 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
 }
 
 /**
+ * Sync workflow files to target repository via a single pull request
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Array<string>} workflowFilePaths - Array of local workflow file paths to sync
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+  // Validate that workflow files array is non-empty
+  if (!workflowFilePaths || workflowFilePaths.length === 0) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'No workflow files specified',
+      dryRun
+    };
+  }
+
+  // Build files array - extract filename from source path and use as target
+  const files = workflowFilePaths.map(filePath => ({
+    sourceFilePath: filePath,
+    targetPath: `.github/workflows/${path.basename(filePath)}`
+  }));
+
+  return syncFilesViaPullRequest(
+    octokit,
+    repo,
+    {
+      files,
+      branchName: 'workflow-files-sync',
+      prTitle,
+      prBodyCreate: 'This PR adds workflow files.',
+      prBodyUpdate: 'This PR syncs workflow files to the latest versions.',
+      resultKey: 'workflowFiles',
+      fileDescription: 'workflow files'
+    },
+    dryRun
+  );
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, or pull request template)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, or workflow files)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1007,7 +1149,11 @@ function hasRepositoryChanges(result) {
     (result.pullRequestTemplateSync &&
       result.pullRequestTemplateSync.success &&
       result.pullRequestTemplateSync.pullRequestTemplate &&
-      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged')
+      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged') ||
+    (result.workflowFilesSync &&
+      result.workflowFilesSync.success &&
+      result.workflowFilesSync.workflowFiles &&
+      result.workflowFilesSync.workflowFiles !== 'unchanged')
   );
 }
 
@@ -1058,6 +1204,16 @@ export async function run() {
     const pullRequestTemplatePrTitle =
       getInput('pull-request-template-pr-title') || 'chore: update pull request template';
 
+    // Get workflow files settings
+    const workflowFilesInput = getInput('workflow-files');
+    const workflowFiles = workflowFilesInput
+      ? workflowFilesInput
+          .split(',')
+          .map(f => f.trim())
+          .filter(f => f.length > 0)
+      : null;
+    const workflowFilesPrTitle = getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1076,10 +1232,11 @@ export async function run() {
       topics !== null ||
       dependabotYml ||
       rulesetsFile ||
-      pullRequestTemplate;
+      pullRequestTemplate ||
+      (workflowFiles && workflowFiles.length > 0);
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified)'
       );
     }
 
@@ -1111,6 +1268,9 @@ export async function run() {
     }
     if (pullRequestTemplate) {
       core.info(`Pull request template will be synced from: ${pullRequestTemplate}`);
+    }
+    if (workflowFiles) {
+      core.info(`Workflow files will be synced from: ${workflowFiles.join(', ')}`);
     }
 
     // Update repositories
@@ -1190,6 +1350,21 @@ export async function run() {
         repoPullRequestTemplate = repoConfig['pull-request-template'];
       }
 
+      // Handle repo-specific workflow-files
+      let repoWorkflowFiles = workflowFiles;
+      if (repoConfig['workflow-files'] !== undefined) {
+        if (typeof repoConfig['workflow-files'] === 'string') {
+          repoWorkflowFiles = repoConfig['workflow-files']
+            .split(',')
+            .map(f => f.trim())
+            .filter(f => f.length > 0);
+        } else if (Array.isArray(repoConfig['workflow-files'])) {
+          repoWorkflowFiles = repoConfig['workflow-files'];
+        } else {
+          repoWorkflowFiles = null;
+        }
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -1255,6 +1430,24 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${templateResult.error}`);
+        }
+      }
+
+      // Sync workflow files if specified
+      if (repoWorkflowFiles && repoWorkflowFiles.length > 0) {
+        core.info(`  🔧 Checking workflow files...`);
+        const workflowResult = await syncWorkflowFiles(octokit, repo, repoWorkflowFiles, workflowFilesPrTitle, dryRun);
+
+        // Add workflow files result to the main result
+        result.workflowFilesSync = workflowResult;
+
+        if (workflowResult.success) {
+          core.info(`  🔧 ${workflowResult.message}`);
+          if (workflowResult.prUrl) {
+            core.info(`  🔗 PR URL: ${workflowResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${workflowResult.error}`);
         }
       }
 
