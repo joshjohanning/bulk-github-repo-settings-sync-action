@@ -259,7 +259,7 @@ repos:
 - If it exists but differs, it updates it via PR
 - If all files are identical, no PR is created
 - PRs are created/updated using the GitHub API so commits are verified
-- Updates existing open PRs instead of creating duplicates
+- Avoids creating duplicate PRs when one already exists
 - Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
 
 For more information on GitHub Actions workflows, see the [GitHub Actions documentation](https://docs.github.com/en/actions/using-workflows).
