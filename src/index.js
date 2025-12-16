@@ -524,7 +524,9 @@ export async function updateRepositorySettings(
 }
 
 /**
- * Generic function to sync one or more files to a target repository via pull request
+ * Generic function to sync one or more files to a target repository via pull request.
+ * If an open PR already exists for the same branch, returns early with 'pr-exists' status
+ * to avoid creating duplicate PRs. The existing PR is not updated with new file changes.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {Object} options - Sync options
