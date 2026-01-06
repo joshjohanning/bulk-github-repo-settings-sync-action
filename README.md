@@ -16,10 +16,14 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🗑️ Enable automatic branch deletion after merge
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
+- 🔒 **Enable or disable immutable releases** to prevent release deletion and modification
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 📋 **Sync repository rulesets** across repositories
-- 📝 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📝 **Sync pull request templates** across repositories via pull requests
+- 🔧 **Sync workflow files** across repositories via pull requests
+- 🔗 **Sync autolink references** across repositories
+- 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -38,8 +42,11 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-merge-commit: false
     delete-branch-on-merge: true
     enable-default-code-scanning: true
+    immutable-releases: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
+    pull-request-template: './config/templates/pull_request_template.md'
+    autolinks-file: './config/autolinks/jira-autolinks.json'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -206,6 +213,142 @@ By default, syncing rulesets will create or update the specified ruleset by name
 
 **Use case:** This is useful when you rename a ruleset and want to ensure only the new ruleset exists, or when you want to enforce that repositories have exactly one specific ruleset configuration.
 
+### Syncing Pull Request Templates
+
+Sync a pull request template file to `.github/pull_request_template.md` in target repositories via pull requests:
+
+```yml
+- name: Sync Pull Request Template
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    pull-request-template: './config/templates/pull_request_template.md'
+    pull-request-template-pr-title: 'chore: update pull request template'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    pull-request-template: './config/templates/standard-template.md'
+  - repo: owner/repo2
+    pull-request-template: './config/templates/feature-template.md'
+  - repo: owner/repo3
+    # Skip pull request template sync for this repo
+```
+
+**Behavior:**
+
+- If `.github/pull_request_template.md` doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- If content is identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Updates existing open PRs instead of creating duplicates
+
+For more information on pull request templates, see the [GitHub documentation](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
+
+### Syncing Workflow Files
+
+Sync one or more workflow files to `.github/workflows/` in target repositories via pull requests:
+
+```yml
+- name: Sync Workflow Files
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
+    workflow-files-pr-title: 'chore: sync workflow configuration'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    workflow-files: './config/workflows/ci.yml'
+  - repo: owner/repo2
+    workflow-files:
+      - './config/workflows/ci.yml'
+      - './config/workflows/release.yml'
+  - repo: owner/repo3
+    # Skip workflow files sync for this repo
+```
+
+**Behavior:**
+
+- Syncs multiple workflow files in a single PR
+- If a workflow file doesn't exist, it creates it
+- If it exists but differs, it updates it via PR
+- If all files are identical, no PR is created
+- PRs are created/updated using the GitHub API so commits are verified
+- Avoids creating duplicate PRs when one already exists
+- Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
+
+For more information on GitHub Actions workflows, see the [GitHub Actions documentation](https://docs.github.com/en/actions/using-workflows).
+
+### Syncing Autolink References
+
+Sync autolink references across multiple repositories to automatically link keywords to external URLs (e.g., JIRA issues):
+
+```yml
+- name: Sync Autolinks
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    autolinks-file: './config/autolinks/jira-autolinks.json'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    autolinks-file: './config/autolinks/jira-autolinks.json'
+  - repo: owner/repo2
+    autolinks-file: './config/autolinks/ado-autolinks.json'
+  - repo: owner/repo3
+    # Skip autolinks sync for this repo
+```
+
+**Behavior:**
+
+- Creates autolinks that don't exist in the repository
+- Updates autolinks that have the same key prefix but different URL template or settings
+- Deletes autolinks that exist in the repository but not in the configuration
+- If all autolinks match, no changes are made
+- Autolinks are applied directly via the GitHub API (not via pull request)
+
+**Example Autolinks JSON (`jira-autolinks.json`):**
+
+```json
+{
+  "autolinks": [
+    {
+      "key_prefix": "JIRA-",
+      "url_template": "https://jira.example.com/browse/JIRA-<num>",
+      "is_alphanumeric": false
+    },
+    {
+      "key_prefix": "TICKET-",
+      "url_template": "https://tickets.example.com/view/<num>",
+      "is_alphanumeric": true
+    }
+  ]
+}
+```
+
+| Field             | Description                                                                                  | Required             |
+| ----------------- | -------------------------------------------------------------------------------------------- | -------------------- |
+| `key_prefix`      | The prefix to match in text (e.g., `JIRA-` matches `JIRA-123`)                               | Yes                  |
+| `url_template`    | The URL template with `<num>` placeholder for the reference number                           | Yes                  |
+| `is_alphanumeric` | Whether the reference can include alphanumeric characters (`true`) or only numbers (`false`) | No (default: `true`) |
+
+For more information on autolinks, see the [GitHub documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources).
+
 ### Organization-wide Updates
 
 ```yml
@@ -247,26 +390,32 @@ Output shows what would change:
 
 ## Action Inputs
 
-| Input                          | Description                                                                                                                                | Required | Default                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------ |
-| `github-token`                 | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                              |
-| `github-api-url`               | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`        |
-| `repositories`                 | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                              |
-| `repositories-file`            | Path to YAML file containing repository list                                                                                               | No\*     | -                              |
-| `owner`                        | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                              |
-| `allow-squash-merge`           | Allow squash merging pull requests                                                                                                         | No       | -                              |
-| `allow-merge-commit`           | Allow merge commits for pull requests                                                                                                      | No       | -                              |
-| `allow-rebase-merge`           | Allow rebase merging pull requests                                                                                                         | No       | -                              |
-| `allow-auto-merge`             | Allow auto-merge on pull requests                                                                                                          | No       | -                              |
-| `delete-branch-on-merge`       | Automatically delete head branches after pull requests are merged                                                                          | No       | -                              |
-| `allow-update-branch`          | Always suggest updating pull request branches                                                                                              | No       | -                              |
-| `enable-default-code-scanning` | Enable default code scanning setup                                                                                                         | No       | -                              |
-| `topics`                       | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                              |
-| `dependabot-yml`               | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                              |
-| `dependabot-pr-title`          | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml` |
-| `rulesets-file`                | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                              |
-| `force-sync-rulesets`          | Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)                                   | No       | `false`                        |
-| `dry-run`                      | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                        |
+| Input                            | Description                                                                                                                                | Required | Default                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------------------------------- |
+| `github-token`                   | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                                     |
+| `github-api-url`                 | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`               |
+| `repositories`                   | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                     |
+| `repositories-file`              | Path to YAML file containing repository list                                                                                               | No\*     | -                                     |
+| `owner`                          | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                                     |
+| `allow-squash-merge`             | Allow squash merging pull requests                                                                                                         | No       | -                                     |
+| `allow-merge-commit`             | Allow merge commits for pull requests                                                                                                      | No       | -                                     |
+| `allow-rebase-merge`             | Allow rebase merging pull requests                                                                                                         | No       | -                                     |
+| `allow-auto-merge`               | Allow auto-merge on pull requests                                                                                                          | No       | -                                     |
+| `delete-branch-on-merge`         | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                     |
+| `allow-update-branch`            | Always suggest updating pull request branches                                                                                              | No       | -                                     |
+| `immutable-releases`             | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                                     |
+| `enable-default-code-scanning`   | Enable default code scanning setup                                                                                                         | No       | -                                     |
+| `topics`                         | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                     |
+| `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                     |
+| `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`        |
+| `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                     |
+| `force-sync-rulesets`            | Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)                                   | No       | `false`                               |
+| `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                     |
+| `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template` |
+| `workflow-files`                 | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                     |
+| `workflow-files-pr-title`        | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`  |
+| `autolinks-file`                 | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                     |
+| `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                               |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -344,6 +493,11 @@ repos:
     enable-default-code-scanning: false
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/custom-ruleset.json'
+    pull-request-template: './config/templates/feature-template.md'
+    workflow-files:
+      - './config/workflows/ci.yml'
+      - './config/workflows/release.yml'
+    autolinks-file: './config/autolinks/jira-autolinks.json'
 ```
 
 **Priority:** Repository-specific settings override global defaults from action inputs.
@@ -354,6 +508,11 @@ repos:
 - Topics **replace** all existing repository topics
 - Dependabot.yml syncing creates pull requests for review before merging
 - Dependabot.yml PRs use the GitHub API ensuring verified commits
+- Pull request template syncing creates pull requests for review before merging
+- Pull request templates are synced to `.github/pull_request_template.md` (standard location)
+- Workflow files syncing creates pull requests for review before merging
+- Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
+- Autolink references are synced directly via the API (autolinks not in config are **deleted** from repo)
 - Failed updates are logged as warnings but don't fail the action
 - **Access denied repositories are skipped with warnings** - ensure your GitHub App has:
   - Repository Administration permissions

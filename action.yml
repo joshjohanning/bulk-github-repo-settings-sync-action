@@ -40,6 +40,9 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
+  immutable-releases:
+    description: 'Enable immutable releases to prevent release deletion and modification'
+    required: false
   enable-default-code-scanning:
     description: 'Enable default code scanning setup'
     required: false
@@ -60,6 +63,23 @@ inputs:
     description: 'Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)'
     required: false
     default: 'false'
+  pull-request-template:
+    description: 'Path to a pull request template file to sync to .github/pull_request_template.md in target repositories'
+    required: false
+  pull-request-template-pr-title:
+    description: 'Title for pull requests when updating pull request template'
+    required: false
+    default: 'chore: update pull request template'
+  workflow-files:
+    description: 'Comma-separated list of workflow file paths to sync to .github/workflows/ in target repositories (e.g., "./workflows/ci.yml,./workflows/release.yml")'
+    required: false
+  workflow-files-pr-title:
+    description: 'Title for pull requests when updating workflow files'
+    required: false
+    default: 'chore: sync workflow configuration'
+  autolinks-file:
+    description: 'Path to a JSON file containing autolink references to sync to target repositories'
+    required: false
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

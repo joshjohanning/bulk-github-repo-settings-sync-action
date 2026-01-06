@@ -1,7 +1,7 @@
 {
   "name": "bulk-github-repo-settings-sync-action",
   "description": "Update repository settings in bulk for multiple GitHub repositories",
-  "version": "1.3.0",
+  "version": "1.7.0",
   "type": "module",
   "author": {
     "name": "Josh Johanning",
@@ -45,22 +45,22 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^1.11.1",
+    "@actions/core": "^2.0.1",
     "@actions/github": "^6.0.1",
     "@octokit/rest": "^22.0.1",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@joshjohanning/make-coverage-badge-better": "^1.0.1",
     "@vercel/ncc": "^0.38.4",
-    "eslint": "^9.39.1",
+    "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-github": "^6.0.0",
     "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-jest": "^29.0.1",
+    "eslint-plugin-jest": "^29.12.1",
     "eslint-plugin-prettier": "^5.5.4",
-    "globals": "^16.5.0",
+    "globals": "^17.0.0",
     "jest": "^30.2.0",
-    "prettier": "^3.6.2"
+    "prettier": "^3.7.4"
   }
 }

@@ -44,7 +44,10 @@ const mockOctokit = {
       getRepoRuleset: jest.fn(),
       createRepoRuleset: jest.fn(),
       updateRepoRuleset: jest.fn(),
-      deleteRepoRuleset: jest.fn()
+      deleteRepoRuleset: jest.fn(),
+      listAutolinks: jest.fn(),
+      createAutolink: jest.fn(),
+      deleteAutolink: jest.fn()
     },
     codeScanning: {
       updateDefaultSetup: jest.fn(),
@@ -63,7 +66,8 @@ const mockOctokit = {
       create: jest.fn(),
       update: jest.fn()
     }
-  }
+  },
+  request: jest.fn()
 };
 
 // Mock fs module
@@ -91,7 +95,10 @@ const {
   parseRepositories,
   updateRepositorySettings,
   syncDependabotYml,
-  syncRepositoryRuleset
+  syncRepositoryRuleset,
+  syncPullRequestTemplate,
+  syncWorkflowFiles,
+  syncAutolinks
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -109,6 +116,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.getRepoRuleset.mockClear();
     mockOctokit.rest.repos.createRepoRuleset.mockClear();
     mockOctokit.rest.repos.updateRepoRuleset.mockClear();
+    mockOctokit.rest.repos.listAutolinks.mockClear();
+    mockOctokit.rest.repos.createAutolink.mockClear();
+    mockOctokit.rest.repos.deleteAutolink.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
     mockOctokit.rest.orgs.get.mockClear();
     mockOctokit.rest.git.getRef.mockClear();
@@ -117,6 +127,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.pulls.list.mockClear();
     mockOctokit.rest.pulls.create.mockClear();
     mockOctokit.rest.pulls.update.mockClear();
+    mockOctokit.request.mockClear();
 
     // Set default inputs
     mockCore.getInput.mockImplementation(name => {
@@ -133,6 +144,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'delete-branch-on-merge': '',
         'allow-update-branch': '',
         'enable-default-code-scanning': '',
+        'immutable-releases': '',
         topics: '',
         'dependabot-yml': '',
         'dependabot-pr-title': '',
@@ -255,7 +267,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: true
       };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
@@ -285,7 +297,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningEnabled).toBe(true);
@@ -310,7 +322,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningWarning).toContain('Could not process CodeQL');
@@ -333,7 +345,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'github-actions', 'automation'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, topics, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
 
       expect(result.success).toBe(true);
       expect(result.topicsUpdated).toBe(true);
@@ -362,7 +374,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, topics, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
 
       expect(result.success).toBe(true);
       expect(result.topicsWarning).toContain('Could not process topics');
@@ -379,11 +391,164 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(mockOctokit.rest.repos.getAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
+    });
+
+    test('should enable immutable releases when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return 404 (not enabled)
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(false);
+      expect(result.immutableReleasesChange.to).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+    });
+
+    test('should disable immutable releases when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success with enabled: true
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: true, enforced_by_owner: false } });
+      // Mock DELETE to disable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, false, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(true);
+      expect(result.immutableReleasesChange.to).toBe(false);
+      expect(mockOctokit.request).toHaveBeenCalledWith('DELETE /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
+    });
+
+    test('should handle immutable releases already in desired state', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success with enabled: true (already enabled)
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: true, enforced_by_owner: false } });
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesUnchanged).toBe(true);
+      expect(result.currentImmutableReleases).toBe(true);
+      // Should only call GET, not PUT
+      expect(mockOctokit.request).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle immutable releases failures gracefully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.request.mockRejectedValue(new Error('Insufficient permissions'));
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.immutableReleasesWarning).toContain('Could not process immutable releases');
+      expect(result.immutableReleasesWarning).toContain('Insufficient permissions');
+    });
+
+    test('should handle immutable releases when API returns enabled: false', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return success with enabled: false (not enabled)
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: false, enforced_by_owner: false } });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.currentImmutableReleases).toBe(false);
+      expect(result.immutableReleasesUpdated).toBe(true);
+      expect(result.immutableReleasesChange).toBeDefined();
+      expect(result.immutableReleasesChange.from).toBe(false);
+      expect(result.immutableReleasesChange.to).toBe(true);
+    });
+
+    test('should not check immutable releases when null', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+
+      expect(result.success).toBe(true);
+      // request should not be called at all when immutableReleases is null
+      expect(mockOctokit.request).not.toHaveBeenCalled();
     });
 
     test('should only update specified settings', async () => {
@@ -409,7 +574,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: null
       };
 
-      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
@@ -421,7 +586,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
@@ -431,7 +596,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('API Error');
@@ -443,7 +608,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(error403);
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.accessDenied).toBe(true);
@@ -462,7 +627,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -489,7 +654,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -514,7 +679,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.changes).toHaveLength(1);
@@ -536,7 +701,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, true); // dry-run
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, true); // dry-run
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -555,20 +720,42 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { names: [] }
       });
       mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      // Mock immutable releases GET request (404 = not enabled)
+      mockOctokit.request.mockImplementation(method => {
+        if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
+          const error = new Error('Not Found');
+          error.status = 404;
+          return Promise.reject(error);
+        }
+        return Promise.reject(new Error('Unexpected request'));
+      });
 
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, topics, true);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, true, topics, true);
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
       expect(result.topicsWouldUpdate).toBe(true);
       expect(result.codeScanningWouldEnable).toBe(true);
+      expect(result.immutableReleasesWouldUpdate).toBe(true);
       expect(mockOctokit.rest.repos.get).toHaveBeenCalled(); // Should fetch current state
       expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.replaceAllTopics).not.toHaveBeenCalled();
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+      // Verify immutable releases API was checked but not called for updates
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'GET /repos/{owner}/{repo}/immutable-releases',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo'
+        })
+      );
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/immutable-releases',
+        expect.any(Object)
+      );
     });
   });
 
@@ -638,7 +825,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified)'
       );
     });
 
@@ -683,7 +870,39 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
-      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should allow immutable releases as the only setting', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'immutable-releases': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 }); // GET returns 404 (not enabled)
+      mockOctokit.request.mockResolvedValueOnce({}); // PUT to enable
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
+        owner: 'owner',
+        repo: 'repo1',
+        headers: {
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      });
     });
 
     test('should create summary table', async () => {
@@ -1022,7 +1241,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
     });
 
-    test('should update existing PR when one exists', async () => {
+    test('should report existing open PR when one exists', async () => {
       const newContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
       const oldContent =
@@ -1135,7 +1354,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read dependabot.yml file');
+      expect(result.error).toContain('Failed to read file at');
     });
 
     test('should handle API errors', async () => {
@@ -1266,6 +1485,71 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('unchanged');
       expect(result.rulesetId).toBe(789);
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should not update ruleset when source config contains API-only fields', async () => {
+      // Source config that looks like a raw API response export (has API-only fields)
+      const rulesetConfig = {
+        id: 9620349,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        conditions: {
+          ref_name: {
+            exclude: [],
+            include: ['~DEFAULT_BRANCH']
+          }
+        },
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        node_id: 'RRS_lACqUmVwb3NpdG9yec4uPAeNzgCTID8',
+        created_at: '2025-11-08T08:49:56.048-06:00',
+        updated_at: '2025-11-08T08:49:56.128-06:00',
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+        current_user_can_bypass: 'always',
+        _links: {
+          self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9620349' },
+          html: { href: 'https://github.com/some-owner/some-repo/rules/9620349' }
+        }
+      };
+
+      // Existing ruleset from API (matches the relevant fields)
+      const existingRuleset = {
+        id: 456,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'owner/repo',
+        enforcement: 'active',
+        conditions: {
+          ref_name: {
+            exclude: [],
+            include: ['~DEFAULT_BRANCH']
+          }
+        },
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+        current_user_can_bypass: 'always'
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 456, name: 'ci' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('unchanged');
+      expect(result.rulesetId).toBe(456);
       expect(result.message).toContain('already up to date');
       expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
@@ -1566,6 +1850,1363 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.deletedRulesets[0].name).toBe('ci2');
       expect(result.deletedRulesets[0].deleted).toBe(false);
       expect(result.deletedRulesets[0].error).toBe('Permission denied');
+    });
+  });
+
+  describe('syncPullRequestTemplate', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should create pull request template when it does not exist', async () => {
+      const testTemplateContent = '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added';
+
+      mockFs.readFileSync.mockReturnValue(testTemplateContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 }) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 42,
+          html_url: 'https://github.com/owner/repo/pull/42'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: add pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.github/pull_request_template.md',
+          branch: 'pull-request-template-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update pull request template when content differs', async () => {
+      const newContent =
+        '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added\n- [ ] Docs updated';
+      const oldContent = '## Description\n\nDescribe your changes here';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 43,
+          html_url: 'https://github.com/owner/repo/pull/43'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('updated');
+      expect(result.prNumber).toBe(43);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sha: 'file-sha-456'
+        })
+      );
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const content = '## Description\n\nDescribe your changes here';
+
+      mockFs.readFileSync.mockReturnValue(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    });
+
+    test('should update existing branch when branch already exists', async () => {
+      const newContent = '## Description\n\nNew content';
+      const oldContent = '## Description\n\nOld content';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-777',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch already exists
+      mockOctokit.rest.git.getRef
+        .mockResolvedValueOnce({
+          // Branch exists
+          data: { object: { sha: 'branch-sha-123' } }
+        })
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'main-sha-456' } }
+        });
+
+      mockOctokit.rest.git.updateRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 44,
+          html_url: 'https://github.com/owner/repo/pull/44'
+        }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('updated');
+      expect(result.prNumber).toBe(44);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/pull-request-template-sync',
+        sha: 'main-sha-456',
+        force: true
+      });
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should report existing open PR when one exists', async () => {
+      const newContent = '## Description\n\nNew content';
+      const oldContent = '## Description\n\nOld content';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-999',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('pr-exists');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode', async () => {
+      const newContent = '## Description\n\nNew template';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PR
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: add pull request template',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'invalid-repo-format',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing template file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './nonexistent.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read file at');
+    });
+
+    test('should handle API errors', async () => {
+      mockFs.readFileSync.mockReturnValue('## Description');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync pull request template');
+    });
+  });
+
+  describe('syncWorkflowFiles', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should create workflow files when they do not exist', async () => {
+      const testWorkflowContent = 'name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest';
+
+      mockFs.readFileSync.mockReturnValue(testWorkflowContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // Files do not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 }) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 42,
+          html_url: 'https://github.com/owner/repo/pull/42'
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(result.filesCreated).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.github/workflows/ci.yml',
+          branch: 'workflow-files-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update workflow files when content differs', async () => {
+      const newContent = 'name: CI\non: [push, pull_request]\njobs:\n  build:\n    runs-on: ubuntu-latest';
+      const oldContent = 'name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 43,
+          html_url: 'https://github.com/owner/repo/pull/43'
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('updated');
+      expect(result.prNumber).toBe(43);
+      expect(result.filesUpdated).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sha: 'file-sha-456'
+        })
+      );
+    });
+
+    test('should handle multiple workflow files', async () => {
+      const ciContent = 'name: CI\non: [push]';
+      const releaseContent = 'name: Release\non: [release]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Files do not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 44,
+          html_url: 'https://github.com/owner/repo/pull/44'
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('created');
+      expect(result.prNumber).toBe(44);
+      expect(result.filesCreated).toContain('.github/workflows/ci.yml');
+      expect(result.filesCreated).toContain('.github/workflows/release.yml');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledTimes(2);
+    });
+
+    test('should not create PR when all files are unchanged', async () => {
+      const content = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    });
+
+    test('should update existing branch when branch already exists', async () => {
+      const newContent = 'name: CI\non: [push, pull_request]';
+      const oldContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-777',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      // Branch already exists
+      mockOctokit.rest.git.getRef
+        .mockResolvedValueOnce({ data: { object: { sha: 'branch-sha-123' } } })
+        .mockResolvedValueOnce({ data: { object: { sha: 'main-sha-456' } } });
+
+      mockOctokit.rest.git.updateRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 45,
+          html_url: 'https://github.com/owner/repo/pull/45'
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('updated');
+      expect(result.prNumber).toBe(45);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/workflow-files-sync',
+        sha: 'main-sha-456',
+        force: true
+      });
+    });
+
+    test('should report existing open PR when one exists', async () => {
+      const newContent = 'name: CI\non: [push, pull_request]';
+      const oldContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-999',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('pr-exists');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode for new file creation', async () => {
+      const newContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(result.filesWouldCreate).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode for file update', async () => {
+      const newContent = 'name: CI\non: [push, pull_request]';
+      const oldContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'existing-sha',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(result.filesWouldUpdate).toContain('.github/workflows/ci.yml');
+      expect(result.filesWouldCreate).toBeUndefined();
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode with multiple files', async () => {
+      const ciContent = 'name: CI\non: [push]';
+      const releaseContent = 'name: Release\non: [release]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Both files don't exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: sync workflows',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(result.message).toBe('Would sync 2 file(s) via PR');
+      expect(result.filesWouldCreate).toContain('.github/workflows/ci.yml');
+      expect(result.filesWouldCreate).toContain('.github/workflows/release.yml');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode with mixed create and update', async () => {
+      const ciContent = 'name: CI\non: [push, pull_request]';
+      const releaseContent = 'name: Release\non: [release]';
+      const oldCiContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // ci.yml exists with different content, release.yml does not exist
+      mockOctokit.rest.repos.getContent.mockImplementation(({ path }) => {
+        if (path === '.github/workflows/ci.yml') {
+          return Promise.resolve({
+            data: {
+              sha: 'ci-sha',
+              content: Buffer.from(oldCiContent).toString('base64')
+            }
+          });
+        }
+        const error = new Error('Not Found');
+        error.status = 404;
+        return Promise.reject(error);
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: sync workflows',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('would-create'); // would-create because at least one file is new
+      expect(result.dryRun).toBe(true);
+      expect(result.message).toBe('Would sync 2 file(s) via PR');
+      expect(result.filesWouldCreate).toContain('.github/workflows/release.yml');
+      expect(result.filesWouldUpdate).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'invalid-repo-format',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle empty workflow files array', async () => {
+      const result = await syncWorkflowFiles(mockOctokit, 'owner/repo', [], 'chore: update workflow files', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('No workflow files specified');
+    });
+
+    test('should handle null workflow files array', async () => {
+      const result = await syncWorkflowFiles(mockOctokit, 'owner/repo', null, 'chore: update workflow files', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('No workflow files specified');
+    });
+
+    test('should handle missing workflow file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./nonexistent.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read file at');
+    });
+
+    test('should handle API errors', async () => {
+      mockFs.readFileSync.mockReturnValue('name: CI');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync workflow files');
+    });
+
+    test('should handle mixed create and update scenario', async () => {
+      const ciContent = 'name: CI\non: [push, pull_request]';
+      const releaseContent = 'name: Release\non: [release]';
+      const oldCiContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // ci.yml exists with different content, release.yml does not exist
+      mockOctokit.rest.repos.getContent.mockImplementation(({ path }) => {
+        if (path === '.github/workflows/ci.yml') {
+          return Promise.resolve({
+            data: {
+              sha: 'ci-sha',
+              content: Buffer.from(oldCiContent).toString('base64')
+            }
+          });
+        }
+        const error = new Error('Not Found');
+        error.status = 404;
+        return Promise.reject(error);
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 46,
+          html_url: 'https://github.com/owner/repo/pull/46'
+        }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('mixed');
+      expect(result.prNumber).toBe(46);
+      expect(result.filesCreated).toContain('.github/workflows/release.yml');
+      expect(result.filesUpdated).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('syncAutolinks', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.listAutolinks.mockClear();
+      mockOctokit.rest.repos.createAutolink.mockClear();
+      mockOctokit.rest.repos.deleteAutolink.mockClear();
+    });
+
+    test('should create autolinks when none exist', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('updated');
+      expect(result.autolinksCreated).toContain('JIRA-');
+      expect(mockOctokit.rest.repos.listAutolinks).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo'
+      });
+      expect(mockOctokit.rest.repos.createAutolink).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        key_prefix: 'JIRA-',
+        url_template: 'https://jira.example.com/browse/JIRA-<num>',
+        is_alphanumeric: false
+      });
+    });
+
+    test('should delete autolinks not in config', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      const existingAutolinks = [
+        {
+          id: 123,
+          key_prefix: 'JIRA-',
+          url_template: 'https://jira.example.com/browse/JIRA-<num>',
+          is_alphanumeric: false
+        },
+        {
+          id: 456,
+          key_prefix: 'OLD-',
+          url_template: 'https://old.example.com/<num>',
+          is_alphanumeric: true
+        }
+      ];
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
+      mockOctokit.rest.repos.deleteAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('updated');
+      expect(result.autolinksDeleted).toContain('OLD-');
+      expect(result.autolinksUnchanged).toBe(1);
+      expect(mockOctokit.rest.repos.deleteAutolink).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        autolink_id: 456
+      });
+      expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
+    });
+
+    test('should update autolink with same prefix but different settings', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira-new.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      const existingAutolinks = [
+        {
+          id: 123,
+          key_prefix: 'JIRA-',
+          url_template: 'https://jira-old.example.com/browse/JIRA-<num>',
+          is_alphanumeric: false
+        }
+      ];
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
+      mockOctokit.rest.repos.deleteAutolink.mockResolvedValue({});
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('updated');
+      expect(result.autolinksDeleted).toContain('JIRA-');
+      expect(result.autolinksCreated).toContain('JIRA-');
+      expect(mockOctokit.rest.repos.deleteAutolink).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        autolink_id: 123
+      });
+      expect(mockOctokit.rest.repos.createAutolink).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        key_prefix: 'JIRA-',
+        url_template: 'https://jira-new.example.com/browse/JIRA-<num>',
+        is_alphanumeric: false
+      });
+    });
+
+    test('should not change when autolinks are already up to date', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      const existingAutolinks = [
+        {
+          id: 123,
+          key_prefix: 'JIRA-',
+          url_template: 'https://jira.example.com/browse/JIRA-<num>',
+          is_alphanumeric: false
+        }
+      ];
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('unchanged');
+      expect(result.autolinksUnchanged).toBe(1);
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
+    });
+
+    test('should handle multiple autolinks', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          },
+          {
+            key_prefix: 'TICKET-',
+            url_template: 'https://tickets.example.com/view/<num>',
+            is_alphanumeric: true
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('updated');
+      expect(result.autolinksCreated).toContain('JIRA-');
+      expect(result.autolinksCreated).toContain('TICKET-');
+      expect(mockOctokit.rest.repos.createAutolink).toHaveBeenCalledTimes(2);
+    });
+
+    test('should handle dry-run mode for creation', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', true);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(result.autolinksWouldCreate).toContain('JIRA-');
+      expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode for deletion', async () => {
+      const autolinksConfig = {
+        autolinks: []
+      };
+
+      const existingAutolinks = [
+        {
+          id: 123,
+          key_prefix: 'OLD-',
+          url_template: 'https://old.example.com/<num>',
+          is_alphanumeric: true
+        }
+      ];
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', true);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('would-update');
+      expect(result.dryRun).toBe(true);
+      expect(result.autolinksWouldDelete).toContain('OLD-');
+      expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncAutolinks(mockOctokit, 'invalid-repo-format', './autolinks.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing autolinks file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './nonexistent.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read or parse autolinks file');
+    });
+
+    test('should handle invalid JSON in autolinks file', async () => {
+      mockFs.readFileSync.mockReturnValue('not valid json');
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read or parse autolinks file');
+    });
+
+    test('should handle missing autolinks array in config', async () => {
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ links: [] }));
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('must contain an "autolinks" array');
+    });
+
+    test('should handle missing required fields in autolink', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-'
+            // Missing url_template
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('must have "key_prefix" and "url_template" fields');
+    });
+
+    test('should handle 404 error when listing autolinks', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('updated');
+      expect(mockOctokit.rest.repos.createAutolink).toHaveBeenCalled();
+    });
+
+    test('should handle API errors', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>',
+            is_alphanumeric: false
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync autolinks');
+    });
+
+    test('should default is_alphanumeric to true when not specified', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>'
+            // is_alphanumeric not specified
+          }
+        ]
+      };
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.createAutolink).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        key_prefix: 'JIRA-',
+        url_template: 'https://jira.example.com/browse/JIRA-<num>',
+        is_alphanumeric: true
+      });
+    });
+
+    test('should match autolink with default is_alphanumeric as unchanged', async () => {
+      const autolinksConfig = {
+        autolinks: [
+          {
+            key_prefix: 'JIRA-',
+            url_template: 'https://jira.example.com/browse/JIRA-<num>'
+            // is_alphanumeric not specified (defaults to true)
+          }
+        ]
+      };
+
+      const existingAutolinks = [
+        {
+          id: 123,
+          key_prefix: 'JIRA-',
+          url_template: 'https://jira.example.com/browse/JIRA-<num>',
+          is_alphanumeric: true
+        }
+      ];
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
+
+      const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.autolinks).toBe('unchanged');
+      expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
     });
   });
 });
