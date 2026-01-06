@@ -1063,7 +1063,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
       }
 
       if (dryRun) {
-        return {
+        const result = {
           repository: repo,
           success: true,
           ruleset: 'would-update',
@@ -1071,6 +1071,23 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
           message: `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
           dryRun
         };
+
+        // Handle delete unmanaged rulesets in dry-run mode
+        if (deleteUnmanaged) {
+          const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+            octokit,
+            owner,
+            repoName,
+            existingRulesets,
+            rulesetName,
+            dryRun
+          );
+          if (deletedRulesets.length > 0) {
+            result.deletedRulesets = deletedRulesets;
+          }
+        }
+
+        return result;
       }
 
       // Update existing ruleset
@@ -1111,13 +1128,30 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
     }
 
     if (dryRun) {
-      return {
+      const result = {
         repository: repo,
         success: true,
         ruleset: 'would-create',
         message: `Would create ruleset "${rulesetName}"`,
         dryRun
       };
+
+      // Handle delete unmanaged rulesets in dry-run mode
+      if (deleteUnmanaged) {
+        const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+          octokit,
+          owner,
+          repoName,
+          existingRulesets,
+          rulesetName,
+          dryRun
+        );
+        if (deletedRulesets.length > 0) {
+          result.deletedRulesets = deletedRulesets;
+        }
+      }
+
+      return result;
     }
 
     // Create new ruleset

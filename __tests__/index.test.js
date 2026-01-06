@@ -1690,7 +1690,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.ruleset).toBe('created');
     });
 
-    test('should delete non-matching rulesets when force-sync is enabled', async () => {
+    test('should delete unmanaged rulesets when delete-unmanaged-rulesets is enabled', async () => {
       const rulesetConfig = {
         name: 'ci',
         target: 'branch',
@@ -1741,7 +1741,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
-    test('should handle force-sync in dry-run mode', async () => {
+    test('should handle delete-unmanaged-rulesets in dry-run mode', async () => {
       const rulesetConfig = {
         name: 'ci',
         target: 'branch',
@@ -1779,7 +1779,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.deleteRepoRuleset).not.toHaveBeenCalled();
     });
 
-    test('should not delete rulesets when force-sync is disabled', async () => {
+    test('should not delete rulesets when delete-unmanaged-rulesets is disabled', async () => {
       const rulesetConfig = {
         name: 'ci',
         target: 'branch',
@@ -1814,7 +1814,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.deleteRepoRuleset).not.toHaveBeenCalled();
     });
 
-    test('should handle deletion errors gracefully when force-syncing', async () => {
+    test('should handle deletion errors gracefully when deleting unmanaged rulesets', async () => {
       const rulesetConfig = {
         name: 'ci',
         target: 'branch',
