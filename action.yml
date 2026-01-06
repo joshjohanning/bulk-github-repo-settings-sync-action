@@ -59,8 +59,8 @@ inputs:
   rulesets-file:
     description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
     required: false
-  force-sync-rulesets:
-    description: 'Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)'
+  delete-unmanaged-rulesets:
+    description: 'Delete rulesets that are not defined in the rulesets-file (ensures only managed rulesets exist)'
     required: false
     default: 'false'
   pull-request-template:

@@ -190,21 +190,21 @@ repos:
 
 For more information on ruleset configuration, see the [GitHub Rulesets documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets).
 
-### Force Sync Rulesets
+### Delete Unmanaged Rulesets
 
-By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To force sync and delete rulesets that don't match the one being synced, use the `force-sync-rulesets` parameter:
+By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To delete rulesets that aren't defined in your configuration, use the `delete-unmanaged-rulesets` parameter:
 
 ```yml
-- name: Force Sync Repository Rulesets
+- name: Sync Repository Rulesets (delete unmanaged)
   uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
     rulesets-file: './config/rulesets/ci-ruleset.json'
-    force-sync-rulesets: true
+    delete-unmanaged-rulesets: true
 ```
 
-**Behavior with `force-sync-rulesets: true`:**
+**Behavior with `delete-unmanaged-rulesets: true`:**
 
 - Creates the ruleset if it doesn't exist
 - Updates the ruleset if a ruleset with the same name already exists
@@ -409,7 +409,7 @@ Output shows what would change:
 | `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                     |
 | `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`        |
 | `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                     |
-| `force-sync-rulesets`            | Delete rulesets that do not match the synced ruleset (force sync to only have the rulesets being synced)                                   | No       | `false`                               |
+| `delete-unmanaged-rulesets`      | Delete rulesets that are not defined in the rulesets-file (ensures only managed rulesets exist)                                            | No       | `false`                               |
 | `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                     |
 | `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template` |
 | `workflow-files`                 | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                     |
