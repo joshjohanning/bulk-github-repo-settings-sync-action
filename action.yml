@@ -73,6 +73,9 @@ inputs:
     description: 'Title for pull requests when updating workflow files'
     required: false
     default: 'chore: sync workflow configuration'
+  autolinks-file:
+    description: 'Path to a JSON file containing autolink references to sync to target repositories'
+    required: false
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

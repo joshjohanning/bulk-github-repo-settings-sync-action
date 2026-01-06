@@ -1128,9 +1128,200 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
 }
 
 /**
+ * Sync autolink references to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} autolinksFilePath - Path to local autolinks JSON file
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source autolinks JSON file
+    let autolinksConfig;
+    try {
+      const fileContent = fs.readFileSync(autolinksFilePath, 'utf8');
+      autolinksConfig = JSON.parse(fileContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse autolinks file at ${autolinksFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Validate that the config has an autolinks array
+    if (!Array.isArray(autolinksConfig.autolinks)) {
+      return {
+        repository: repo,
+        success: false,
+        error: 'Autolinks configuration must contain an "autolinks" array.',
+        dryRun
+      };
+    }
+
+    // Validate each autolink entry
+    for (const autolink of autolinksConfig.autolinks) {
+      if (!autolink.key_prefix || !autolink.url_template) {
+        return {
+          repository: repo,
+          success: false,
+          error: 'Each autolink must have "key_prefix" and "url_template" fields.',
+          dryRun
+        };
+      }
+    }
+
+    // Get existing autolinks for the repository
+    let existingAutolinks = [];
+    try {
+      const { data } = await octokit.rest.repos.listAutolinks({
+        owner,
+        repo: repoName
+      });
+      existingAutolinks = data;
+    } catch (error) {
+      // If we get a 404, autolinks might not be available or accessible
+      if (error.status === 404) {
+        core.info(`  🔗 Repository ${repo} does not have autolinks accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare existing autolinks with desired configuration
+    const autolinksToCreate = [];
+    const autolinksToDelete = [];
+    const autolinksUnchanged = [];
+
+    // Find autolinks that need to be created or are unchanged
+    for (const desiredAutolink of autolinksConfig.autolinks) {
+      const existing = existingAutolinks.find(
+        e =>
+          e.key_prefix === desiredAutolink.key_prefix &&
+          e.url_template === desiredAutolink.url_template &&
+          (e.is_alphanumeric ?? true) === (desiredAutolink.is_alphanumeric ?? true)
+      );
+
+      if (existing) {
+        autolinksUnchanged.push(desiredAutolink);
+      } else {
+        // Check if there's an existing autolink with the same key_prefix but different settings
+        const existingWithSamePrefix = existingAutolinks.find(e => e.key_prefix === desiredAutolink.key_prefix);
+        if (existingWithSamePrefix) {
+          // Need to delete the old one and create the new one
+          autolinksToDelete.push(existingWithSamePrefix);
+        }
+        autolinksToCreate.push(desiredAutolink);
+      }
+    }
+
+    // Find autolinks that need to be deleted (exist in repo but not in config)
+    for (const existingAutolink of existingAutolinks) {
+      const inConfig = autolinksConfig.autolinks.find(d => d.key_prefix === existingAutolink.key_prefix);
+      if (!inConfig) {
+        autolinksToDelete.push(existingAutolink);
+      }
+    }
+
+    // If no changes needed, return early
+    if (autolinksToCreate.length === 0 && autolinksToDelete.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        autolinks: 'unchanged',
+        message: `All ${autolinksUnchanged.length} autolink(s) are already up to date`,
+        autolinksUnchanged: autolinksUnchanged.length,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      const message = [];
+      if (autolinksToCreate.length > 0) {
+        message.push(`Would create ${autolinksToCreate.length} autolink(s)`);
+      }
+      if (autolinksToDelete.length > 0) {
+        message.push(`Would delete ${autolinksToDelete.length} autolink(s)`);
+      }
+      return {
+        repository: repo,
+        success: true,
+        autolinks: 'would-update',
+        message: message.join(', '),
+        autolinksWouldCreate: autolinksToCreate.map(a => a.key_prefix),
+        autolinksWouldDelete: autolinksToDelete.map(a => a.key_prefix),
+        autolinksUnchanged: autolinksUnchanged.length,
+        dryRun
+      };
+    }
+
+    // Delete autolinks that are no longer needed or have changed
+    for (const autolink of autolinksToDelete) {
+      await octokit.rest.repos.deleteAutolink({
+        owner,
+        repo: repoName,
+        autolink_id: autolink.id
+      });
+      core.info(`  🔗 Deleted autolink: ${autolink.key_prefix}`);
+    }
+
+    // Create new autolinks
+    for (const autolink of autolinksToCreate) {
+      await octokit.rest.repos.createAutolink({
+        owner,
+        repo: repoName,
+        key_prefix: autolink.key_prefix,
+        url_template: autolink.url_template,
+        is_alphanumeric: autolink.is_alphanumeric ?? true
+      });
+      core.info(`  🔗 Created autolink: ${autolink.key_prefix}`);
+    }
+
+    const message = [];
+    if (autolinksToCreate.length > 0) {
+      message.push(`Created ${autolinksToCreate.length} autolink(s)`);
+    }
+    if (autolinksToDelete.length > 0) {
+      message.push(`Deleted ${autolinksToDelete.length} autolink(s)`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      autolinks: 'updated',
+      message: message.join(', '),
+      autolinksCreated: autolinksToCreate.map(a => a.key_prefix),
+      autolinksDeleted: autolinksToDelete.map(a => a.key_prefix),
+      autolinksUnchanged: autolinksUnchanged.length,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync autolinks: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, or workflow files)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, workflow files, or autolinks)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1153,7 +1344,11 @@ function hasRepositoryChanges(result) {
     (result.workflowFilesSync &&
       result.workflowFilesSync.success &&
       result.workflowFilesSync.workflowFiles &&
-      result.workflowFilesSync.workflowFiles !== 'unchanged')
+      result.workflowFilesSync.workflowFiles !== 'unchanged') ||
+    (result.autolinksSync &&
+      result.autolinksSync.success &&
+      result.autolinksSync.autolinks &&
+      result.autolinksSync.autolinks !== 'unchanged')
   );
 }
 
@@ -1214,6 +1409,9 @@ export async function run() {
       : null;
     const workflowFilesPrTitle = getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
 
+    // Get autolinks settings
+    const autolinksFile = getInput('autolinks-file');
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1233,10 +1431,11 @@ export async function run() {
       dependabotYml ||
       rulesetsFile ||
       pullRequestTemplate ||
-      (workflowFiles && workflowFiles.length > 0);
+      (workflowFiles && workflowFiles.length > 0) ||
+      autolinksFile;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified)'
       );
     }
 
@@ -1271,6 +1470,9 @@ export async function run() {
     }
     if (workflowFiles) {
       core.info(`Workflow files will be synced from: ${workflowFiles.join(', ')}`);
+    }
+    if (autolinksFile) {
+      core.info(`Autolinks will be synced from: ${autolinksFile}`);
     }
 
     // Update repositories
@@ -1365,6 +1567,12 @@ export async function run() {
         }
       }
 
+      // Handle repo-specific autolinks-file
+      let repoAutolinksFile = autolinksFile;
+      if (repoConfig['autolinks-file'] !== undefined) {
+        repoAutolinksFile = repoConfig['autolinks-file'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
@@ -1448,6 +1656,21 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${workflowResult.error}`);
+        }
+      }
+
+      // Sync autolinks if specified
+      if (repoAutolinksFile) {
+        core.info(`  🔗 Checking autolinks...`);
+        const autolinksResult = await syncAutolinks(octokit, repo, repoAutolinksFile, dryRun);
+
+        // Add autolinks result to the main result
+        result.autolinksSync = autolinksResult;
+
+        if (autolinksResult.success) {
+          core.info(`  🔗 ${autolinksResult.message}`);
+        } else {
+          core.warning(`  ⚠️  ${autolinksResult.error}`);
         }
       }
 
