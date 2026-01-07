@@ -936,7 +936,7 @@ async function deleteUnmanagedRulesetsHelper(octokit, owner, repoName, existingR
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} rulesetFilePath - Path to local ruleset JSON file
- * @param {boolean} deleteUnmanaged - Delete rulesets that are not defined in the config
+ * @param {boolean} deleteUnmanaged - Delete all other rulesets besides the one being synced
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */

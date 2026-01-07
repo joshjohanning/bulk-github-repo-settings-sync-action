@@ -192,7 +192,7 @@ For more information on ruleset configuration, see the [GitHub Rulesets document
 
 ### Delete Unmanaged Rulesets
 
-By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To delete rulesets that aren't defined in your configuration, use the `delete-unmanaged-rulesets` parameter:
+By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To delete all other rulesets besides the one being synced, use the `delete-unmanaged-rulesets` parameter:
 
 ```yml
 - name: Sync Repository Rulesets (delete unmanaged)
@@ -409,7 +409,7 @@ Output shows what would change:
 | `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                     |
 | `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`        |
 | `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                     |
-| `delete-unmanaged-rulesets`      | Delete rulesets that are not defined in the rulesets-file (ensures only managed rulesets exist)                                            | No       | `false`                               |
+| `delete-unmanaged-rulesets`      | Delete all other rulesets besides the one being synced                                                                                     | No       | `false`                               |
 | `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                     |
 | `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template` |
 | `workflow-files`                 | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                     |
