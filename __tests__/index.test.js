@@ -1606,6 +1606,65 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(repoRow[2]).toContain('copilot-instructions');
     });
 
+    test('should handle summary table with package.json sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'sync-scripts': 'true',
+          'package-json-file': 'package.json'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({
+          name: 'source-repo',
+          scripts: { test: 'jest', build: 'tsc' }
+        })
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          content: Buffer.from(
+            JSON.stringify({
+              name: 'target-repo',
+              scripts: { test: 'mocha' }
+            })
+          ).toString('base64'),
+          sha: 'target123'
+        }
+      });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 47, html_url: 'https://github.com/owner/repo1/pull/47' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('package.json');
+    });
+
     test('should handle summary table with PR template sync changes', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
