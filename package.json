@@ -1,7 +1,7 @@
 {
   "name": "bulk-github-repo-settings-sync-action",
   "description": "Update repository settings in bulk for multiple GitHub repositories",
-  "version": "1.8.0",
+  "version": "1.7.1",
   "type": "module",
   "author": {
     "name": "Josh Johanning",
@@ -45,8 +45,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^2.0.1",
-    "@actions/github": "^6.0.1",
+    "@actions/core": "^2.0.2",
+    "@actions/github": "^7.0.0",
     "@octokit/rest": "^22.0.1",
     "js-yaml": "^4.1.1"
   },
