@@ -3621,7 +3621,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read .gitignore file');
+      expect(result.error).toContain('Failed to read file');
+      expect(result.error).toContain('.gitignore');
     });
 
     test('should handle API errors', async () => {

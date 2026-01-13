@@ -538,11 +538,15 @@ export async function updateRepositorySettings(
  * @param {string} options.prBodyUpdate - PR body when updating existing file(s)
  * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate', 'workflowFiles')
  * @param {string} options.fileDescription - Human-readable description of the file(s) (for error messages)
+ * @param {Object} [options.contentProcessor] - Optional processor for custom content handling (e.g., preserving repo-specific sections)
+ * @param {Function} [options.contentProcessor.getComparableExisting] - (existingContent) => content to compare against source
+ * @param {Function} [options.contentProcessor.getFinalContent] - (sourceContent, existingContent) => content to commit
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
-  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } = options;
+  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription, contentProcessor } =
+    options;
 
   const [owner, repoName] = repo.split('/');
 
@@ -608,13 +612,25 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         }
       }
 
-      // Compare content
-      const needsUpdate = !existingContent || existingContent.trim() !== fileInfo.content.trim();
+      // Compare content - use contentProcessor if provided to handle special cases like repo-specific sections
+      let comparableExisting = existingContent;
+      let finalContent = fileInfo.content;
+
+      if (contentProcessor && existingContent) {
+        // Get the comparable portion of existing content (e.g., strip repo-specific sections)
+        comparableExisting = contentProcessor.getComparableExisting(existingContent);
+        // Get the final content to commit (e.g., merge source with repo-specific sections)
+        finalContent = contentProcessor.getFinalContent(fileInfo.content, existingContent);
+      }
+
+      const needsUpdate = !existingContent || comparableExisting.trim() !== fileInfo.content.trim();
 
       if (needsUpdate) {
         filesToUpdate.push({
           ...fileInfo,
           existingSha,
+          existingContent,
+          finalContent,
           isNew: !existingContent
         });
       }
@@ -747,12 +763,15 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
     for (const file of filesToUpdate) {
       const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
 
+      // Use finalContent if available (from contentProcessor), otherwise use original content
+      const contentToCommit = file.finalContent || file.content;
+
       await octokit.rest.repos.createOrUpdateFileContents({
         owner,
         repo: repoName,
         path: file.targetPath,
         message: commitMessage,
-        content: Buffer.from(file.content).toString('base64'),
+        content: Buffer.from(contentToCommit).toString('base64'),
         branch: branchName,
         sha: file.existingSha || undefined
       });
@@ -879,6 +898,66 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 }
 
 /**
+ * Content processor for .gitignore files that preserves repository-specific entries.
+ * Repository-specific entries are marked with a special comment marker and are
+ * preserved when syncing the base gitignore content.
+ */
+const gitignoreContentProcessor = {
+  marker: '# Repository-specific entries (preserved during sync)',
+
+  /**
+   * Get the comparable portion of existing content (everything before the marker)
+   * @param {string} existingContent - The existing file content
+   * @returns {string} Content to compare against source
+   */
+  getComparableExisting(existingContent) {
+    const markerIndex = existingContent.indexOf(this.marker);
+    if (markerIndex === -1) {
+      return existingContent;
+    }
+    return existingContent.substring(0, markerIndex).trimEnd();
+  },
+
+  /**
+   * Get the final content to commit (source + preserved repo-specific entries)
+   * @param {string} sourceContent - The source file content
+   * @param {string} existingContent - The existing file content
+   * @returns {string} Final content to commit
+   */
+  getFinalContent(sourceContent, existingContent) {
+    const markerIndex = existingContent.indexOf(this.marker);
+    if (markerIndex === -1) {
+      // No repo-specific content, just use source
+      let finalContent = sourceContent.trim();
+      if (!finalContent.endsWith('\n')) {
+        finalContent += '\n';
+      }
+      return finalContent;
+    }
+
+    // Extract and preserve repo-specific content
+    const repoSpecificContent = existingContent.substring(markerIndex);
+    let finalContent = sourceContent.trim();
+
+    // Ensure there's a blank line before the repo-specific section
+    if (!finalContent.endsWith('\n')) {
+      finalContent += '\n';
+    }
+    if (!finalContent.endsWith('\n\n')) {
+      finalContent += '\n';
+    }
+    finalContent += repoSpecificContent;
+
+    // Ensure file ends with a newline
+    if (!finalContent.endsWith('\n')) {
+      finalContent += '\n';
+    }
+
+    return finalContent;
+  }
+};
+
+/**
  * Sync .gitignore file to target repository
  * This function handles .gitignore specially to preserve repository-specific entries
  * that are marked with a special comment marker.
@@ -890,246 +969,22 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
  * @returns {Promise<Object>} Result object
  */
 export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun) {
-  const [owner, repoName] = repo.split('/');
-  const targetPath = '.gitignore';
-  const repoSpecificMarker = '# Repository-specific entries (preserved during sync)';
-
-  if (!owner || !repoName) {
-    return {
-      repository: repo,
-      success: false,
-      error: 'Invalid repository format. Expected "owner/repo"',
-      dryRun
-    };
-  }
-
-  try {
-    // Read the source .gitignore file
-    let sourceContent;
-    try {
-      sourceContent = fs.readFileSync(gitignorePath, 'utf8');
-    } catch (error) {
-      return {
-        repository: repo,
-        success: false,
-        error: `Failed to read .gitignore file at ${gitignorePath}: ${error.message}`,
-        dryRun
-      };
-    }
-
-    // Get default branch
-    const { data: repoData } = await octokit.rest.repos.get({
-      owner,
-      repo: repoName
-    });
-    const defaultBranch = repoData.default_branch;
-
-    // Check if .gitignore exists in the target repo
-    let existingSha = null;
-    let existingContent = null;
-    let repoSpecificContent = '';
-
-    try {
-      const { data } = await octokit.rest.repos.getContent({
-        owner,
-        repo: repoName,
-        path: targetPath,
-        ref: defaultBranch
-      });
-      existingSha = data.sha;
-      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
-
-      // Extract repo-specific content (after the marker)
-      const markerIndex = existingContent.indexOf(repoSpecificMarker);
-      if (markerIndex !== -1) {
-        repoSpecificContent = existingContent.substring(markerIndex);
-      }
-    } catch (error) {
-      if (error.status === 404) {
-        // File doesn't exist - this is fine, we'll create it
-        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
-      } else {
-        throw error;
-      }
-    }
-
-    // Build the new content
-    let newContent = sourceContent.trim();
-
-    // If there's repo-specific content, append it
-    if (repoSpecificContent) {
-      // Ensure there's a blank line before the repo-specific section
-      if (!newContent.endsWith('\n')) {
-        newContent += '\n';
-      }
-      if (!newContent.endsWith('\n\n')) {
-        newContent += '\n';
-      }
-      newContent += repoSpecificContent;
-    }
-
-    // Ensure file ends with a newline
-    if (!newContent.endsWith('\n')) {
-      newContent += '\n';
-    }
-
-    // Compare content
-    const needsUpdate = !existingContent || existingContent.trim() !== newContent.trim();
-
-    if (!needsUpdate) {
-      return {
-        repository: repo,
-        success: true,
-        gitignore: 'unchanged',
-        message: `${targetPath} is already up to date`,
-        dryRun
-      };
-    }
-
-    // Check if there's already an open PR for this update
-    const branchName = 'gitignore-sync';
-    let existingPR = null;
-
-    try {
-      const { data: pulls } = await octokit.rest.pulls.list({
-        owner,
-        repo: repoName,
-        state: 'open',
-        head: `${owner}:${branchName}`
-      });
-
-      if (pulls.length > 0) {
-        existingPR = pulls[0];
-        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
-      }
-    } catch (error) {
-      // Non-fatal, continue
-      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
-    }
-
-    // If there's already an open PR, don't create/update another one
-    if (existingPR) {
-      return {
-        repository: repo,
-        success: true,
-        gitignore: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
-        prNumber: existingPR.number,
-        prUrl: existingPR.html_url,
-        dryRun
-      };
-    }
-
-    if (dryRun) {
-      return {
-        repository: repo,
-        success: true,
-        gitignore: existingContent ? 'would-update' : 'would-create',
-        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
-        dryRun
-      };
-    }
-
-    // Create or get reference to the branch
-    let branchExists = false;
-    try {
-      await octokit.rest.git.getRef({
-        owner,
-        repo: repoName,
-        ref: `heads/${branchName}`
-      });
-      branchExists = true;
-    } catch (error) {
-      if (error.status !== 404) {
-        throw error;
-      }
-    }
-
-    // Get the SHA of the default branch to create new branch from
-    const { data: defaultRef } = await octokit.rest.git.getRef({
-      owner,
-      repo: repoName,
-      ref: `heads/${defaultBranch}`
-    });
-
-    if (!branchExists) {
-      // Create new branch
-      await octokit.rest.git.createRef({
-        owner,
-        repo: repoName,
-        ref: `refs/heads/${branchName}`,
-        sha: defaultRef.object.sha
-      });
-      core.info(`  🌿 Created branch ${branchName}`);
-    } else {
-      // Update existing branch to latest from default branch
-      await octokit.rest.git.updateRef({
-        owner,
-        repo: repoName,
-        ref: `heads/${branchName}`,
-        sha: defaultRef.object.sha,
-        force: true
-      });
-      core.info(`  🌿 Updated branch ${branchName}`);
-    }
-
-    // Create or update the file
-    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
-
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
-      repo: repoName,
-      path: targetPath,
-      message: commitMessage,
-      content: Buffer.from(newContent).toString('base64'),
-      branch: branchName,
-      sha: existingSha || undefined
-    });
-
-    core.info(`  ✍️  Committed changes to ${targetPath}`);
-
-    // Prepare PR body content
-    let prBody;
-    if (existingContent) {
-      prBody = `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration`;
-      if (repoSpecificContent) {
-        prBody += `\n- Repository-specific entries have been preserved`;
-      }
-    } else {
-      prBody = `This PR adds \`.gitignore\` to the repository.\n\n**Changes:**\n- Added .gitignore configuration`;
-    }
-
-    // Create new PR
-    const { data: pr } = await octokit.rest.pulls.create({
-      owner,
-      repo: repoName,
-      title: prTitle,
-      head: branchName,
-      base: defaultBranch,
-      body: prBody
-    });
-    const prNumber = pr.number;
-    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
-
-    return {
-      repository: repo,
-      success: true,
-      gitignore: existingContent ? 'updated' : 'created',
-      prNumber,
-      prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
-      message: existingContent
-        ? `Updated ${targetPath} via PR #${prNumber}`
-        : `Created ${targetPath} via PR #${prNumber}`,
-      dryRun
-    };
-  } catch (error) {
-    return {
-      repository: repo,
-      success: false,
-      error: `Failed to sync .gitignore: ${error.message}`,
-      dryRun
-    };
-  }
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: gitignorePath,
+      targetPath: '.gitignore',
+      branchName: 'gitignore-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.gitignore\` to the repository.\n\n**Changes:**\n- Added .gitignore configuration`,
+      prBodyUpdate: `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration\n- Repository-specific entries have been preserved`,
+      resultKey: 'gitignore',
+      fileDescription: '.gitignore',
+      contentProcessor: gitignoreContentProcessor
+    },
+    dryRun
+  );
 }
 
 /**
