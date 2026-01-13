@@ -19,8 +19,8 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔒 **Enable or disable immutable releases** to prevent release deletion and modification
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
-- � **Sync .gitignore files** across repositories via pull requests (preserves repo-specific content)
-- �📋 **Sync repository rulesets** across repositories
+- 🔄 **Sync .gitignore files** across repositories via pull requests (preserves repo-specific content)
+- 📋 **Sync repository rulesets** across repositories
 - 📝 **Sync pull request templates** across repositories via pull requests
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
@@ -420,8 +420,8 @@ repos:
 - If it exists but differs, it updates it via PR
 - **Repository-specific entries are preserved**: Content after a `# Repository-specific entries (preserved during sync)` marker is kept intact
 - If content is identical, no PR is created
-- PRs are created/updated using the GitHub API so commits are verified
-- Updates existing open PRs instead of creating duplicates
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
 
 **Example: Preserving repo-specific entries**
 
@@ -439,6 +439,8 @@ twistlock-*.md
 ```
 
 When the sync runs, it will update the standard entries from the source file while keeping `scanresults.json` and `twistlock-*.md` intact.
+
+> **Note:** Do not include the marker comment `# Repository-specific entries (preserved during sync)` in your source `.gitignore` file. This marker should only exist in target repositories.
 
 ### Organization-wide Updates
 
