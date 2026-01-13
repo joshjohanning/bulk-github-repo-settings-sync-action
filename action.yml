@@ -40,6 +40,9 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
+  immutable-releases:
+    description: 'Enable immutable releases to prevent release deletion and modification'
+    required: false
   enable-default-code-scanning:
     description: 'Enable default code scanning setup'
     required: false
@@ -54,12 +57,43 @@ inputs:
     required: false
     default: 'chore: update dependabot.yml'
   gitignore:
-    description: 'Path to a .gitignore file to sync to .gitignore in target repositories (preserves repo-specific content at end)'
+    description: 'Path to a .gitignore file to sync to .gitignore in target repositories (preserves repo-specific content after marker)'
     required: false
   gitignore-pr-title:
     description: 'Title for pull requests when updating .gitignore'
     required: false
     default: 'chore: update .gitignore'
+  rulesets-file:
+    description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
+    required: false
+  delete-unmanaged-rulesets:
+    description: 'Delete all other rulesets besides the one being synced'
+    required: false
+    default: 'false'
+  pull-request-template:
+    description: 'Path to a pull request template file to sync to .github/pull_request_template.md in target repositories'
+    required: false
+  pull-request-template-pr-title:
+    description: 'Title for pull requests when updating pull request template'
+    required: false
+    default: 'chore: update pull request template'
+  workflow-files:
+    description: 'Comma-separated list of workflow file paths to sync to .github/workflows/ in target repositories (e.g., "./workflows/ci.yml,./workflows/release.yml")'
+    required: false
+  workflow-files-pr-title:
+    description: 'Title for pull requests when updating workflow files'
+    required: false
+    default: 'chore: sync workflow configuration'
+  autolinks-file:
+    description: 'Path to a JSON file containing autolink references to sync to target repositories'
+    required: false
+  copilot-instructions-md:
+    description: 'Path to a copilot-instructions.md file to sync to .github/copilot-instructions.md in target repositories'
+    required: false
+  copilot-instructions-pr-title:
+    description: 'Title for pull requests when updating copilot-instructions.md'
+    required: false
+    default: 'chore: update copilot-instructions.md'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

@@ -33,6 +33,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 /**
@@ -174,11 +175,20 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
  * @param {string} repo - Repository in "owner/repo" format
  * @param {Object} settings - Settings to update
  * @param {boolean} enableCodeScanning - Enable default CodeQL scanning
+ * @param {boolean|null} immutableReleases - Enable or disable immutable releases
  * @param {Array<string>|null} topics - Topics to set on repository
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function updateRepositorySettings(octokit, repo, settings, enableCodeScanning, topics, dryRun) {
+export async function updateRepositorySettings(
+  octokit,
+  repo,
+  settings,
+  enableCodeScanning,
+  immutableReleases,
+  topics,
+  dryRun
+) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -438,6 +448,71 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
       }
     }
 
+    // Handle immutable releases
+    if (immutableReleases !== null) {
+      try {
+        // Check current immutable releases status
+        let currentImmutableReleases = false;
+        try {
+          const response = await octokit.request('GET /repos/{owner}/{repo}/immutable-releases', {
+            owner,
+            repo: repoName,
+            headers: {
+              'X-GitHub-Api-Version': '2022-11-28'
+            }
+          });
+          // Check the 'enabled' property in the response
+          currentImmutableReleases = response.data.enabled === true;
+        } catch (error) {
+          // 404 means immutable releases are not enabled
+          if (error.status === 404) {
+            currentImmutableReleases = false;
+          } else {
+            throw error;
+          }
+        }
+
+        result.currentImmutableReleases = currentImmutableReleases;
+
+        if (currentImmutableReleases !== immutableReleases) {
+          result.immutableReleasesChange = {
+            from: currentImmutableReleases,
+            to: immutableReleases
+          };
+
+          if (!dryRun) {
+            if (immutableReleases) {
+              // Enable immutable releases
+              await octokit.request('PUT /repos/{owner}/{repo}/immutable-releases', {
+                owner,
+                repo: repoName,
+                headers: {
+                  'X-GitHub-Api-Version': '2022-11-28'
+                }
+              });
+            } else {
+              // Disable immutable releases
+              await octokit.request('DELETE /repos/{owner}/{repo}/immutable-releases', {
+                owner,
+                repo: repoName,
+                headers: {
+                  'X-GitHub-Api-Version': '2022-11-28'
+                }
+              });
+            }
+            result.immutableReleasesUpdated = true;
+          } else {
+            result.immutableReleasesWouldUpdate = true;
+          }
+        } else {
+          result.immutableReleasesUnchanged = true;
+        }
+      } catch (error) {
+        // Immutable releases might fail for various reasons (insufficient permissions, not available, etc.)
+        result.immutableReleasesWarning = `Could not process immutable releases: ${error.message}`;
+      }
+    }
+
     return result;
   } catch (error) {
     return {
@@ -450,17 +525,26 @@ export async function updateRepositorySettings(octokit, repo, settings, enableCo
 }
 
 /**
- * Sync dependabot.yml file to target repository
+ * Generic function to sync one or more files to a target repository via pull request.
+ * If an open PR already exists for the same branch, returns early with 'pr-exists' status
+ * to avoid creating duplicate PRs. The existing PR is not updated with new file changes.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
- * @param {string} dependabotYmlPath - Path to local dependabot.yml file
- * @param {string} prTitle - Title for the pull request
+ * @param {Object} options - Sync options
+ * @param {Array<{sourceFilePath: string, targetPath: string}>} options.files - Array of file mappings (sourceFilePath -> targetPath)
+ * @param {string} options.branchName - Branch name for the PR
+ * @param {string} options.prTitle - Title for the pull request
+ * @param {string} options.prBodyCreate - PR body when creating new file(s)
+ * @param {string} options.prBodyUpdate - PR body when updating existing file(s)
+ * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate', 'workflowFiles')
+ * @param {string} options.fileDescription - Human-readable description of the file(s) (for error messages)
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
+  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } = options;
+
   const [owner, repoName] = repo.split('/');
-  const targetPath = '.github/dependabot.yml';
 
   if (!owner || !repoName) {
     return {
@@ -472,17 +556,25 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
   }
 
   try {
-    // Read the source dependabot.yml file
-    let sourceContent;
-    try {
-      sourceContent = fs.readFileSync(dependabotYmlPath, 'utf8');
-    } catch (error) {
-      return {
-        repository: repo,
-        success: false,
-        error: `Failed to read dependabot.yml file at ${dependabotYmlPath}: ${error.message}`,
-        dryRun
-      };
+    // Read all source files and build file info array
+    const fileInfos = [];
+    for (const file of files) {
+      let sourceContent;
+      try {
+        sourceContent = fs.readFileSync(file.sourceFilePath, 'utf8');
+      } catch (error) {
+        return {
+          repository: repo,
+          success: false,
+          error: `Failed to read file at ${file.sourceFilePath} for ${fileDescription}: ${error.message}`,
+          dryRun
+        };
+      }
+      fileInfos.push({
+        sourceFilePath: file.sourceFilePath,
+        targetPath: file.targetPath,
+        content: sourceContent
+      });
     }
 
     // Get default branch
@@ -492,45 +584,59 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
     });
     const defaultBranch = repoData.default_branch;
 
-    // Check if dependabot.yml exists in the target repo
-    let existingSha = null;
-    let existingContent = null;
+    // Check each file and determine which need updates
+    const filesToUpdate = [];
+    for (const fileInfo of fileInfos) {
+      let existingSha = null;
+      let existingContent = null;
 
-    try {
-      const { data } = await octokit.rest.repos.getContent({
-        owner,
-        repo: repoName,
-        path: targetPath,
-        ref: defaultBranch
-      });
-      existingSha = data.sha;
-      existingContent = Buffer.from(data.content, 'base64').toString('utf8');
-    } catch (error) {
-      if (error.status === 404) {
-        // File doesn't exist - this is fine, we'll create it
-        core.info(`  📄 ${targetPath} does not exist in ${repo}, will create it`);
-      } else {
-        throw error;
+      try {
+        const { data } = await octokit.rest.repos.getContent({
+          owner,
+          repo: repoName,
+          path: fileInfo.targetPath,
+          ref: defaultBranch
+        });
+        existingSha = data.sha;
+        existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+      } catch (error) {
+        if (error.status === 404) {
+          // File doesn't exist - this is fine, we'll create it
+          core.info(`  📄 ${fileInfo.targetPath} does not exist in ${repo}, will create it`);
+        } else {
+          throw error;
+        }
+      }
+
+      // Compare content
+      const needsUpdate = !existingContent || existingContent.trim() !== fileInfo.content.trim();
+
+      if (needsUpdate) {
+        filesToUpdate.push({
+          ...fileInfo,
+          existingSha,
+          isNew: !existingContent
+        });
       }
     }
 
-    // Compare content
-    const needsUpdate = !existingContent || existingContent.trim() !== sourceContent.trim();
-
-    if (!needsUpdate) {
+    // If no files need updates, return early
+    if (filesToUpdate.length === 0) {
+      const targetPaths = fileInfos.map(f => f.targetPath);
+      const message =
+        fileInfos.length === 1 ? `${targetPaths[0]} is already up to date` : 'All files are already up to date';
       return {
         repository: repo,
         success: true,
-        dependabotYml: 'unchanged',
-        message: `${targetPath} is already up to date`,
+        [resultKey]: 'unchanged',
+        message,
+        filesProcessed: targetPaths,
         dryRun
       };
     }
 
     // Check if there's already an open PR for this update
-    const branchName = 'dependabot-yml-sync';
     let existingPR = null;
-
     try {
       const { data: pulls } = await octokit.rest.pulls.list({
         owner,
@@ -541,7 +647,8 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 
       if (pulls.length > 0) {
         existingPR = pulls[0];
-        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+        const targetDesc = fileInfos.length === 1 ? fileInfos[0].targetPath : fileDescription;
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetDesc}`);
       }
     } catch (error) {
       // Non-fatal, continue
@@ -550,28 +657,44 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
 
     // If there's already an open PR, don't create/update another one
     if (existingPR) {
+      const targetDesc = fileInfos.length === 1 ? fileInfos[0].targetPath : fileDescription;
       return {
         repository: repo,
         success: true,
-        dependabotYml: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        [resultKey]: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetDesc}`,
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
+        filesProcessed: fileInfos.map(f => f.targetPath),
         dryRun
       };
     }
 
     if (dryRun) {
+      const newFiles = filesToUpdate.filter(f => f.isNew).map(f => f.targetPath);
+      const updatedFiles = filesToUpdate.filter(f => !f.isNew).map(f => f.targetPath);
+      let message;
+      if (fileInfos.length === 1) {
+        message = filesToUpdate[0].isNew
+          ? `Would create ${filesToUpdate[0].targetPath} via PR`
+          : `Would update ${filesToUpdate[0].targetPath} via PR`;
+      } else {
+        message = `Would sync ${filesToUpdate.length} file(s) via PR`;
+      }
       return {
         repository: repo,
         success: true,
-        dependabotYml: existingContent ? 'would-update' : 'would-create',
-        message: existingContent ? `Would update ${targetPath} via PR` : `Would create ${targetPath} via PR`,
+        [resultKey]: filesToUpdate.some(f => f.isNew) ? 'would-create' : 'would-update',
+        message,
+        filesWouldCreate: newFiles.length > 0 ? newFiles : undefined,
+        filesWouldUpdate: updatedFiles.length > 0 ? updatedFiles : undefined,
+        filesProcessed: fileInfos.map(f => f.targetPath),
         dryRun
       };
     }
 
     // Create or get reference to the branch
+    core.info(`  🔍 Checking for existing branch ${branchName}...`);
     let branchExists = false;
     try {
       await octokit.rest.git.getRef({
@@ -580,8 +703,11 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
         ref: `heads/${branchName}`
       });
       branchExists = true;
+      core.info(`  ✓ Branch ${branchName} exists`);
     } catch (error) {
-      if (error.status !== 404) {
+      if (error.status === 404) {
+        core.info(`  ✓ Branch ${branchName} does not exist`);
+      } else {
         throw error;
       }
     }
@@ -614,76 +740,148 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       core.info(`  🌿 Updated branch ${branchName}`);
     }
 
-    // Create or update the file
-    const commitMessage = existingContent ? `chore: update ${targetPath}` : `chore: add ${targetPath}`;
+    // Create or update each file
+    const createdFiles = [];
+    const updatedFiles = [];
 
-    await octokit.rest.repos.createOrUpdateFileContents({
+    for (const file of filesToUpdate) {
+      const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
+
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo: repoName,
+        path: file.targetPath,
+        message: commitMessage,
+        content: Buffer.from(file.content).toString('base64'),
+        branch: branchName,
+        sha: file.existingSha || undefined
+      });
+
+      if (file.isNew) {
+        createdFiles.push(file.targetPath);
+      } else {
+        updatedFiles.push(file.targetPath);
+      }
+
+      core.info(`  ✍️  Committed changes to ${file.targetPath}`);
+    }
+
+    // Prepare PR body content - use dynamic body for multiple files, or simple body for single file
+    let prBody;
+    if (fileInfos.length === 1) {
+      prBody = filesToUpdate[0].isNew ? prBodyCreate : prBodyUpdate;
+    } else {
+      prBody = `This PR syncs ${fileDescription} to the latest versions.\n\n**Changes:**\n`;
+      if (createdFiles.length > 0) {
+        prBody += `\n**Added:**\n${createdFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+      }
+      if (updatedFiles.length > 0) {
+        prBody += `\n**Updated:**\n${updatedFiles.map(f => `- \`${f}\``).join('\n')}\n`;
+      }
+    }
+
+    // Create new PR (we only reach here if no existing PR was found)
+    const { data: pr } = await octokit.rest.pulls.create({
       owner,
       repo: repoName,
-      path: targetPath,
-      message: commitMessage,
-      content: Buffer.from(sourceContent).toString('base64'),
-      branch: branchName,
-      sha: existingSha || undefined
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
     });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
 
-    core.info(`  ✍️  Committed changes to ${targetPath}`);
-
-    // Prepare PR body content
-    const prBody = existingContent
-      ? `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`
-      : `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`;
-
-    // Create or update PR
-    let prNumber;
-    if (existingPR) {
-      // Update existing PR
-      await octokit.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: existingPR.number,
-        title: prTitle,
-        body: prBody
-      });
-      prNumber = existingPR.number;
-      core.info(`  🔄 Updated existing PR #${prNumber}`);
+    // Determine status
+    let status;
+    if (createdFiles.length > 0 && updatedFiles.length > 0) {
+      status = 'mixed';
+    } else if (createdFiles.length > 0) {
+      status = 'created';
     } else {
-      // Create new PR
-      const { data: pr } = await octokit.rest.pulls.create({
-        owner,
-        repo: repoName,
-        title: prTitle,
-        head: branchName,
-        base: defaultBranch,
-        body: prBody
-      });
-      prNumber = pr.number;
-      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
+      status = 'updated';
+    }
+
+    // Build message
+    let message;
+    if (fileInfos.length === 1) {
+      message = filesToUpdate[0].isNew
+        ? `Created ${filesToUpdate[0].targetPath} via PR #${prNumber}`
+        : `Updated ${filesToUpdate[0].targetPath} via PR #${prNumber}`;
+    } else {
+      message = `Synced ${filesToUpdate.length} file(s) via PR #${prNumber}`;
     }
 
     return {
       repository: repo,
       success: true,
-      dependabotYml: existingContent ? 'updated' : 'created',
+      [resultKey]: status,
       prNumber,
       prUrl: `https://github.com/${owner}/${repoName}/pull/${prNumber}`,
-      message: existingContent
-        ? `Updated ${targetPath} via PR #${prNumber}`
-        : `Created ${targetPath} via PR #${prNumber}`,
+      message,
+      filesCreated: createdFiles.length > 0 ? createdFiles : undefined,
+      filesUpdated: updatedFiles.length > 0 ? updatedFiles : undefined,
+      filesProcessed: fileInfos.map(f => f.targetPath),
       dryRun
     };
   } catch (error) {
     return {
       repository: repo,
       success: false,
-      error: `Failed to sync dependabot.yml: ${error.message}`,
+      error: `Failed to sync ${fileDescription}: ${error.message}`,
       dryRun
     };
   }
 }
 
 /**
+ * Legacy wrapper - sync a single file to a target repository via pull request
+ * @deprecated Use syncFilesViaPullRequest instead
+ */
+export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
+  const { sourceFilePath, targetPath, ...restOptions } = options;
+  return syncFilesViaPullRequest(
+    octokit,
+    repo,
+    {
+      ...restOptions,
+      files: [{ sourceFilePath, targetPath }]
+    },
+    dryRun
+  );
+}
+
+/**
+ * Sync dependabot.yml file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} dependabotYmlPath - Path to local dependabot.yml file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: dependabotYmlPath,
+      targetPath: '.github/dependabot.yml',
+      branchName: 'dependabot-yml-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`,
+      prBodyUpdate: `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`,
+      resultKey: 'dependabotYml',
+      fileDescription: 'dependabot.yml'
+    },
+    dryRun
+  );
+}
+
+/**
  * Sync .gitignore file to target repository
+ * This function handles .gitignore specially to preserve repository-specific entries
+ * that are marked with a special comment marker.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} gitignorePath - Path to local .gitignore file
@@ -901,32 +1099,17 @@ export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRu
       prBody = `This PR adds \`.gitignore\` to the repository.\n\n**Changes:**\n- Added .gitignore configuration`;
     }
 
-    // Create or update PR
-    let prNumber;
-    if (existingPR) {
-      // Update existing PR
-      await octokit.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: existingPR.number,
-        title: prTitle,
-        body: prBody
-      });
-      prNumber = existingPR.number;
-      core.info(`  🔄 Updated existing PR #${prNumber}`);
-    } else {
-      // Create new PR
-      const { data: pr } = await octokit.rest.pulls.create({
-        owner,
-        repo: repoName,
-        title: prTitle,
-        head: branchName,
-        base: defaultBranch,
-        body: prBody
-      });
-      prNumber = pr.number;
-      core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
-    }
+    // Create new PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    const prNumber = pr.number;
+    core.info(`  📬 Created PR #${prNumber}: ${pr.html_url}`);
 
     return {
       repository: repo,
@@ -950,15 +1133,623 @@ export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRu
 }
 
 /**
+ * Delete rulesets that are not in the managed list
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {Array} existingRulesets - List of existing rulesets in the repository
+ * @param {string} managedRulesetName - Name of the ruleset being managed (to exclude from deletion)
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Array>} Array of deletion results
+ */
+async function deleteUnmanagedRulesetsHelper(octokit, owner, repoName, existingRulesets, managedRulesetName, dryRun) {
+  const rulesetsToDelete = existingRulesets.filter(r => r.name !== managedRulesetName);
+  const deletedRulesets = [];
+
+  for (const rulesetToDelete of rulesetsToDelete) {
+    if (dryRun) {
+      core.info(`  🗑️  Would delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+      deletedRulesets.push({
+        name: rulesetToDelete.name,
+        id: rulesetToDelete.id,
+        deleted: false,
+        wouldDelete: true
+      });
+    } else {
+      try {
+        await octokit.rest.repos.deleteRepoRuleset({
+          owner,
+          repo: repoName,
+          ruleset_id: rulesetToDelete.id
+        });
+        core.info(`  🗑️  Deleted ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
+        deletedRulesets.push({
+          name: rulesetToDelete.name,
+          id: rulesetToDelete.id,
+          deleted: true
+        });
+      } catch (deleteError) {
+        core.warning(
+          `  ⚠️  Failed to delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id}): ${deleteError.message}`
+        );
+        deletedRulesets.push({
+          name: rulesetToDelete.name,
+          id: rulesetToDelete.id,
+          deleted: false,
+          error: deleteError.message
+        });
+      }
+    }
+  }
+
+  return deletedRulesets;
+}
+
+/**
+ * Sync repository ruleset to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} rulesetFilePath - Path to local ruleset JSON file
+ * @param {boolean} deleteUnmanaged - Delete all other rulesets besides the one being synced
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, deleteUnmanaged, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source ruleset JSON file
+    let rulesetConfig;
+    try {
+      const fileContent = fs.readFileSync(rulesetFilePath, 'utf8');
+      rulesetConfig = JSON.parse(fileContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse ruleset file at ${rulesetFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Validate that the ruleset has a name
+    if (!rulesetConfig.name) {
+      return {
+        repository: repo,
+        success: false,
+        error: 'Ruleset configuration must include a "name" field.',
+        dryRun
+      };
+    }
+
+    const rulesetName = rulesetConfig.name;
+
+    // Get existing rulesets for the repository
+    let existingRulesets = [];
+    try {
+      const { data } = await octokit.rest.repos.getRepoRulesets({
+        owner,
+        repo: repoName
+      });
+      existingRulesets = data;
+    } catch (error) {
+      // If we get a 404, the repository might not have rulesets enabled
+      if (error.status === 404) {
+        core.info(`  📋 Repository ${repo} does not have rulesets enabled or accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Check if a ruleset with the same name already exists
+    const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
+
+    if (existingRuleset) {
+      // Fetch full ruleset details to compare
+      const { data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
+        owner,
+        repo: repoName,
+        ruleset_id: existingRuleset.id
+      });
+
+      // Compare the existing ruleset with the new configuration
+      // Remove fields that are returned by the API but not part of the input config
+      const existingConfig = {
+        name: fullRuleset.name,
+        target: fullRuleset.target,
+        enforcement: fullRuleset.enforcement,
+        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
+        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
+        rules: fullRuleset.rules
+      };
+
+      // Normalize the source config by removing API-only fields that shouldn't be compared
+      // This allows users to use raw API response JSON as their source config
+      const normalizedSourceConfig = {
+        name: rulesetConfig.name,
+        target: rulesetConfig.target,
+        enforcement: rulesetConfig.enforcement,
+        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
+        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
+        rules: rulesetConfig.rules
+      };
+
+      // Deep comparison of the configurations
+      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+
+      if (configsMatch) {
+        core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+
+        const result = {
+          repository: repo,
+          success: true,
+          ruleset: 'unchanged',
+          rulesetId: existingRuleset.id,
+          message: `Ruleset "${rulesetName}" is already up to date`,
+          dryRun
+        };
+
+        // Handle delete unmanaged rulesets
+        if (deleteUnmanaged) {
+          const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+            octokit,
+            owner,
+            repoName,
+            existingRulesets,
+            rulesetName,
+            dryRun
+          );
+          if (deletedRulesets.length > 0) {
+            result.deletedRulesets = deletedRulesets;
+          }
+        }
+
+        return result;
+      }
+
+      if (dryRun) {
+        const result = {
+          repository: repo,
+          success: true,
+          ruleset: 'would-update',
+          rulesetId: existingRuleset.id,
+          message: `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
+          dryRun
+        };
+
+        // Handle delete unmanaged rulesets in dry-run mode
+        if (deleteUnmanaged) {
+          const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+            octokit,
+            owner,
+            repoName,
+            existingRulesets,
+            rulesetName,
+            dryRun
+          );
+          if (deletedRulesets.length > 0) {
+            result.deletedRulesets = deletedRulesets;
+          }
+        }
+
+        return result;
+      }
+
+      // Update existing ruleset
+      await octokit.rest.repos.updateRepoRuleset({
+        owner,
+        repo: repoName,
+        ruleset_id: existingRuleset.id,
+        ...rulesetConfig
+      });
+
+      core.info(`  📋 Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`);
+
+      const result = {
+        repository: repo,
+        success: true,
+        ruleset: 'updated',
+        rulesetId: existingRuleset.id,
+        message: `Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
+        dryRun
+      };
+
+      // Handle delete unmanaged rulesets
+      if (deleteUnmanaged) {
+        const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+          octokit,
+          owner,
+          repoName,
+          existingRulesets,
+          rulesetName,
+          dryRun
+        );
+        if (deletedRulesets.length > 0) {
+          result.deletedRulesets = deletedRulesets;
+        }
+      }
+
+      return result;
+    }
+
+    if (dryRun) {
+      const result = {
+        repository: repo,
+        success: true,
+        ruleset: 'would-create',
+        message: `Would create ruleset "${rulesetName}"`,
+        dryRun
+      };
+
+      // Handle delete unmanaged rulesets in dry-run mode
+      if (deleteUnmanaged) {
+        const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+          octokit,
+          owner,
+          repoName,
+          existingRulesets,
+          rulesetName,
+          dryRun
+        );
+        if (deletedRulesets.length > 0) {
+          result.deletedRulesets = deletedRulesets;
+        }
+      }
+
+      return result;
+    }
+
+    // Create new ruleset
+    const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+      owner,
+      repo: repoName,
+      ...rulesetConfig
+    });
+
+    core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
+
+    const result = {
+      repository: repo,
+      success: true,
+      ruleset: 'created',
+      rulesetId: newRuleset.id,
+      message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
+      dryRun
+    };
+
+    // Handle delete unmanaged rulesets
+    if (deleteUnmanaged) {
+      const deletedRulesets = await deleteUnmanagedRulesetsHelper(
+        octokit,
+        owner,
+        repoName,
+        existingRulesets,
+        rulesetName,
+        dryRun
+      );
+      if (deletedRulesets.length > 0) {
+        result.deletedRulesets = deletedRulesets;
+      }
+    }
+
+    return result;
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync ruleset: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
+ * Sync pull request template file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} templatePath - Path to local pull request template file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: templatePath,
+      targetPath: '.github/pull_request_template.md',
+      branchName: 'pull-request-template-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`,
+      prBodyUpdate: `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`,
+      resultKey: 'pullRequestTemplate',
+      fileDescription: 'pull request template'
+    },
+    dryRun
+  );
+}
+
+/**
+ * Sync workflow files to target repository via a single pull request
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Array<string>} workflowFilePaths - Array of local workflow file paths to sync
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+  // Validate that workflow files array is non-empty
+  if (!workflowFilePaths || workflowFilePaths.length === 0) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'No workflow files specified',
+      dryRun
+    };
+  }
+
+  // Build files array - extract filename from source path and use as target
+  const files = workflowFilePaths.map(filePath => ({
+    sourceFilePath: filePath,
+    targetPath: `.github/workflows/${path.basename(filePath)}`
+  }));
+
+  return syncFilesViaPullRequest(
+    octokit,
+    repo,
+    {
+      files,
+      branchName: 'workflow-files-sync',
+      prTitle,
+      prBodyCreate: 'This PR adds workflow files.',
+      prBodyUpdate: 'This PR syncs workflow files to the latest versions.',
+      resultKey: 'workflowFiles',
+      fileDescription: 'workflow files'
+    },
+    dryRun
+  );
+}
+
+/**
+ * Sync autolink references to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} autolinksFilePath - Path to local autolinks JSON file
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source autolinks JSON file
+    let autolinksConfig;
+    try {
+      const fileContent = fs.readFileSync(autolinksFilePath, 'utf8');
+      autolinksConfig = JSON.parse(fileContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse autolinks file at ${autolinksFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Validate that the config has an autolinks array
+    if (!Array.isArray(autolinksConfig.autolinks)) {
+      return {
+        repository: repo,
+        success: false,
+        error: 'Autolinks configuration must contain an "autolinks" array.',
+        dryRun
+      };
+    }
+
+    // Validate each autolink entry
+    for (const autolink of autolinksConfig.autolinks) {
+      if (!autolink.key_prefix || !autolink.url_template) {
+        return {
+          repository: repo,
+          success: false,
+          error: 'Each autolink must have "key_prefix" and "url_template" fields.',
+          dryRun
+        };
+      }
+    }
+
+    // Get existing autolinks for the repository
+    let existingAutolinks = [];
+    try {
+      const { data } = await octokit.rest.repos.listAutolinks({
+        owner,
+        repo: repoName
+      });
+      existingAutolinks = data;
+    } catch (error) {
+      // If we get a 404, autolinks might not be available or accessible
+      if (error.status === 404) {
+        core.info(`  🔗 Repository ${repo} does not have autolinks accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Compare existing autolinks with desired configuration
+    const autolinksToCreate = [];
+    const autolinksToDelete = [];
+    const autolinksUnchanged = [];
+
+    // Find autolinks that need to be created or are unchanged
+    for (const desiredAutolink of autolinksConfig.autolinks) {
+      const existing = existingAutolinks.find(
+        e =>
+          e.key_prefix === desiredAutolink.key_prefix &&
+          e.url_template === desiredAutolink.url_template &&
+          (e.is_alphanumeric ?? true) === (desiredAutolink.is_alphanumeric ?? true)
+      );
+
+      if (existing) {
+        autolinksUnchanged.push(desiredAutolink);
+      } else {
+        // Check if there's an existing autolink with the same key_prefix but different settings
+        const existingWithSamePrefix = existingAutolinks.find(e => e.key_prefix === desiredAutolink.key_prefix);
+        if (existingWithSamePrefix) {
+          // Need to delete the old one and create the new one
+          autolinksToDelete.push(existingWithSamePrefix);
+        }
+        autolinksToCreate.push(desiredAutolink);
+      }
+    }
+
+    // Find autolinks that need to be deleted (exist in repo but not in config)
+    for (const existingAutolink of existingAutolinks) {
+      const inConfig = autolinksConfig.autolinks.find(d => d.key_prefix === existingAutolink.key_prefix);
+      if (!inConfig) {
+        autolinksToDelete.push(existingAutolink);
+      }
+    }
+
+    // If no changes needed, return early
+    if (autolinksToCreate.length === 0 && autolinksToDelete.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        autolinks: 'unchanged',
+        message: `All ${autolinksUnchanged.length} autolink(s) are already up to date`,
+        autolinksUnchanged: autolinksUnchanged.length,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      const message = [];
+      if (autolinksToCreate.length > 0) {
+        message.push(`Would create ${autolinksToCreate.length} autolink(s)`);
+      }
+      if (autolinksToDelete.length > 0) {
+        message.push(`Would delete ${autolinksToDelete.length} autolink(s)`);
+      }
+      return {
+        repository: repo,
+        success: true,
+        autolinks: 'would-update',
+        message: message.join(', '),
+        autolinksWouldCreate: autolinksToCreate.map(a => a.key_prefix),
+        autolinksWouldDelete: autolinksToDelete.map(a => a.key_prefix),
+        autolinksUnchanged: autolinksUnchanged.length,
+        dryRun
+      };
+    }
+
+    // Delete autolinks that are no longer needed or have changed
+    for (const autolink of autolinksToDelete) {
+      await octokit.rest.repos.deleteAutolink({
+        owner,
+        repo: repoName,
+        autolink_id: autolink.id
+      });
+      core.info(`  🔗 Deleted autolink: ${autolink.key_prefix}`);
+    }
+
+    // Create new autolinks
+    for (const autolink of autolinksToCreate) {
+      await octokit.rest.repos.createAutolink({
+        owner,
+        repo: repoName,
+        key_prefix: autolink.key_prefix,
+        url_template: autolink.url_template,
+        is_alphanumeric: autolink.is_alphanumeric ?? true
+      });
+      core.info(`  🔗 Created autolink: ${autolink.key_prefix}`);
+    }
+
+    const message = [];
+    if (autolinksToCreate.length > 0) {
+      message.push(`Created ${autolinksToCreate.length} autolink(s)`);
+    }
+    if (autolinksToDelete.length > 0) {
+      message.push(`Deleted ${autolinksToDelete.length} autolink(s)`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      autolinks: 'updated',
+      message: message.join(', '),
+      autolinksCreated: autolinksToCreate.map(a => a.key_prefix),
+      autolinksDeleted: autolinksToDelete.map(a => a.key_prefix),
+      autolinksUnchanged: autolinksUnchanged.length,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync autolinks: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
+ * Sync copilot-instructions.md file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} copilotInstructionsPath - Path to local copilot-instructions.md file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncCopilotInstructions(octokit, repo, copilotInstructionsPath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: copilotInstructionsPath,
+      targetPath: '.github/copilot-instructions.md',
+      branchName: 'copilot-instructions-md-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/copilot-instructions.md\` to configure GitHub Copilot.\n\n**Changes:**\n- Added Copilot instructions`,
+      prBodyUpdate: `This PR updates \`.github/copilot-instructions.md\` to the latest version.\n\n**Changes:**\n- Updated Copilot instructions`,
+      resultKey: 'copilotInstructions',
+      fileDescription: 'copilot-instructions.md'
+    },
+    dryRun
+  );
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, or dependabot)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, or copilot instructions)
  */
 function hasRepositoryChanges(result) {
   return (
     (result.changes && result.changes.length > 0) ||
     result.topicsChange ||
     result.codeScanningChange ||
+    result.immutableReleasesChange ||
     (result.dependabotSync &&
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
@@ -966,7 +1757,27 @@ function hasRepositoryChanges(result) {
     (result.gitignoreSync &&
       result.gitignoreSync.success &&
       result.gitignoreSync.gitignore &&
-      result.gitignoreSync.gitignore !== 'unchanged')
+      result.gitignoreSync.gitignore !== 'unchanged') ||
+    (result.rulesetSync &&
+      result.rulesetSync.success &&
+      result.rulesetSync.ruleset &&
+      result.rulesetSync.ruleset !== 'unchanged') ||
+    (result.pullRequestTemplateSync &&
+      result.pullRequestTemplateSync.success &&
+      result.pullRequestTemplateSync.pullRequestTemplate &&
+      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged') ||
+    (result.workflowFilesSync &&
+      result.workflowFilesSync.success &&
+      result.workflowFilesSync.workflowFiles &&
+      result.workflowFilesSync.workflowFiles !== 'unchanged') ||
+    (result.autolinksSync &&
+      result.autolinksSync.success &&
+      result.autolinksSync.autolinks &&
+      result.autolinksSync.autolinks !== 'unchanged') ||
+    (result.copilotInstructionsSync &&
+      result.copilotInstructionsSync.success &&
+      result.copilotInstructionsSync.copilotInstructions &&
+      result.copilotInstructionsSync.copilotInstructions !== 'unchanged')
   );
 }
 
@@ -993,6 +1804,7 @@ export async function run() {
     };
 
     const enableCodeScanning = getBooleanInput('enable-default-code-scanning');
+    const immutableReleases = getBooleanInput('immutable-releases');
     const dryRun = getBooleanInput('dry-run');
 
     // Parse topics if provided
@@ -1012,6 +1824,33 @@ export async function run() {
     const gitignore = getInput('gitignore');
     const gitignorePrTitle = getInput('gitignore-pr-title') || 'chore: update .gitignore';
 
+    // Get rulesets settings
+    const rulesetsFile = getInput('rulesets-file');
+    const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets');
+
+    // Get pull request template settings
+    const pullRequestTemplate = getInput('pull-request-template');
+    const pullRequestTemplatePrTitle =
+      getInput('pull-request-template-pr-title') || 'chore: update pull request template';
+
+    // Get workflow files settings
+    const workflowFilesInput = getInput('workflow-files');
+    const workflowFiles = workflowFilesInput
+      ? workflowFilesInput
+          .split(',')
+          .map(f => f.trim())
+          .filter(f => f.length > 0)
+      : null;
+    const workflowFilesPrTitle = getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
+
+    // Get autolinks settings
+    const autolinksFile = getInput('autolinks-file');
+
+    // Get copilot instructions settings
+    const copilotInstructionsMd = getInput('copilot-instructions-md');
+    const copilotInstructionsPrTitle =
+      getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1026,12 +1865,18 @@ export async function run() {
     const hasSettings =
       Object.values(settings).some(value => value !== null) ||
       enableCodeScanning ||
+      immutableReleases !== null ||
       topics !== null ||
       dependabotYml ||
-      gitignore;
+      gitignore ||
+      rulesetsFile ||
+      pullRequestTemplate ||
+      (workflowFiles && workflowFiles.length > 0) ||
+      autolinksFile ||
+      copilotInstructionsMd;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
       );
     }
 
@@ -1049,6 +1894,9 @@ export async function run() {
     if (enableCodeScanning) {
       core.info('CodeQL scanning will be enabled');
     }
+    if (immutableReleases !== null) {
+      core.info(`Immutable releases will be ${immutableReleases ? 'enabled' : 'disabled'}`);
+    }
     if (topics !== null) {
       core.info(`Topics to set: ${topics.join(', ')}`);
     }
@@ -1057,6 +1905,21 @@ export async function run() {
     }
     if (gitignore) {
       core.info(`.gitignore will be synced from: ${gitignore}`);
+    }
+    if (rulesetsFile) {
+      core.info(`Repository ruleset will be synced from: ${rulesetsFile}`);
+    }
+    if (pullRequestTemplate) {
+      core.info(`Pull request template will be synced from: ${pullRequestTemplate}`);
+    }
+    if (workflowFiles) {
+      core.info(`Workflow files will be synced from: ${workflowFiles.join(', ')}`);
+    }
+    if (autolinksFile) {
+      core.info(`Autolinks will be synced from: ${autolinksFile}`);
+    }
+    if (copilotInstructionsMd) {
+      core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
     }
 
     // Update repositories
@@ -1099,6 +1962,10 @@ export async function run() {
           ? repoConfig['enable-default-code-scanning']
           : enableCodeScanning;
 
+      // Handle repo-specific immutable releases
+      const repoImmutableReleases =
+        repoConfig['immutable-releases'] !== undefined ? repoConfig['immutable-releases'] : immutableReleases;
+
       // Handle repo-specific topics
       let repoTopics = topics;
       if (repoConfig.topics !== undefined) {
@@ -1126,11 +1993,51 @@ export async function run() {
         repoGitignore = repoConfig['gitignore'];
       }
 
+      // Handle repo-specific rulesets-file
+      let repoRulesetsFile = rulesetsFile;
+      if (repoConfig['rulesets-file'] !== undefined) {
+        repoRulesetsFile = repoConfig['rulesets-file'];
+      }
+
+      // Handle repo-specific pull-request-template
+      let repoPullRequestTemplate = pullRequestTemplate;
+      if (repoConfig['pull-request-template'] !== undefined) {
+        repoPullRequestTemplate = repoConfig['pull-request-template'];
+      }
+
+      // Handle repo-specific workflow-files
+      let repoWorkflowFiles = workflowFiles;
+      if (repoConfig['workflow-files'] !== undefined) {
+        if (typeof repoConfig['workflow-files'] === 'string') {
+          repoWorkflowFiles = repoConfig['workflow-files']
+            .split(',')
+            .map(f => f.trim())
+            .filter(f => f.length > 0);
+        } else if (Array.isArray(repoConfig['workflow-files'])) {
+          repoWorkflowFiles = repoConfig['workflow-files'];
+        } else {
+          repoWorkflowFiles = null;
+        }
+      }
+
+      // Handle repo-specific autolinks-file
+      let repoAutolinksFile = autolinksFile;
+      if (repoConfig['autolinks-file'] !== undefined) {
+        repoAutolinksFile = repoConfig['autolinks-file'];
+      }
+
+      // Handle repo-specific copilot-instructions-md
+      let repoCopilotInstructionsMd = copilotInstructionsMd;
+      if (repoConfig['copilot-instructions-md'] !== undefined) {
+        repoCopilotInstructionsMd = repoConfig['copilot-instructions-md'];
+      }
+
       const result = await updateRepositorySettings(
         octokit,
         repo,
         repoSettings,
         repoEnableCodeScanning,
+        repoImmutableReleases,
         repoTopics,
         dryRun
       );
@@ -1138,22 +2045,16 @@ export async function run() {
 
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
-        core.info(`  📦 Syncing dependabot.yml...`);
+        core.info(`  📦 Checking dependabot.yml...`);
         const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
 
         if (dependabotResult.success) {
-          if (dependabotResult.dependabotYml === 'unchanged') {
-            core.info(`  📦 ${dependabotResult.message}`);
-          } else if (dryRun) {
-            core.info(`  📦 ${dependabotResult.message}`);
-          } else {
-            core.info(`  📦 ${dependabotResult.message}`);
-            if (dependabotResult.prUrl) {
-              core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
-            }
+          core.info(`  📦 ${dependabotResult.message}`);
+          if (dependabotResult.prUrl) {
+            core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
@@ -1162,25 +2063,121 @@ export async function run() {
 
       // Sync .gitignore if specified
       if (repoGitignore) {
-        core.info(`  📝 Syncing .gitignore...`);
+        core.info(`  📝 Checking .gitignore...`);
         const gitignoreResult = await syncGitignore(octokit, repo, repoGitignore, gitignorePrTitle, dryRun);
 
         // Add gitignore result to the main result
         result.gitignoreSync = gitignoreResult;
 
         if (gitignoreResult.success) {
-          if (gitignoreResult.gitignore === 'unchanged') {
-            core.info(`  📝 ${gitignoreResult.message}`);
-          } else if (dryRun) {
-            core.info(`  📝 ${gitignoreResult.message}`);
-          } else {
-            core.info(`  📝 ${gitignoreResult.message}`);
-            if (gitignoreResult.prUrl) {
-              core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
-            }
+          core.info(`  📝 ${gitignoreResult.message}`);
+          if (gitignoreResult.prUrl) {
+            core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
           }
         } else {
           core.warning(`  ⚠️  ${gitignoreResult.error}`);
+        }
+      }
+
+      // Sync repository ruleset if specified
+      if (repoRulesetsFile) {
+        core.info(`  📋 Checking repository ruleset...`);
+        const rulesetResult = await syncRepositoryRuleset(
+          octokit,
+          repo,
+          repoRulesetsFile,
+          deleteUnmanagedRulesets,
+          dryRun
+        );
+
+        // Add ruleset result to the main result
+        result.rulesetSync = rulesetResult;
+
+        if (rulesetResult.success) {
+          core.info(`  📋 ${rulesetResult.message}`);
+        } else {
+          core.warning(`  ⚠️  ${rulesetResult.error}`);
+        }
+      }
+
+      // Sync pull request template if specified
+      if (repoPullRequestTemplate) {
+        core.info(`  📝 Checking pull request template...`);
+        const templateResult = await syncPullRequestTemplate(
+          octokit,
+          repo,
+          repoPullRequestTemplate,
+          pullRequestTemplatePrTitle,
+          dryRun
+        );
+
+        // Add pull request template result to the main result
+        result.pullRequestTemplateSync = templateResult;
+
+        if (templateResult.success) {
+          core.info(`  📝 ${templateResult.message}`);
+          if (templateResult.prUrl) {
+            core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${templateResult.error}`);
+        }
+      }
+
+      // Sync workflow files if specified
+      if (repoWorkflowFiles && repoWorkflowFiles.length > 0) {
+        core.info(`  🔧 Checking workflow files...`);
+        const workflowResult = await syncWorkflowFiles(octokit, repo, repoWorkflowFiles, workflowFilesPrTitle, dryRun);
+
+        // Add workflow files result to the main result
+        result.workflowFilesSync = workflowResult;
+
+        if (workflowResult.success) {
+          core.info(`  🔧 ${workflowResult.message}`);
+          if (workflowResult.prUrl) {
+            core.info(`  🔗 PR URL: ${workflowResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${workflowResult.error}`);
+        }
+      }
+
+      // Sync autolinks if specified
+      if (repoAutolinksFile) {
+        core.info(`  🔗 Checking autolinks...`);
+        const autolinksResult = await syncAutolinks(octokit, repo, repoAutolinksFile, dryRun);
+
+        // Add autolinks result to the main result
+        result.autolinksSync = autolinksResult;
+
+        if (autolinksResult.success) {
+          core.info(`  🔗 ${autolinksResult.message}`);
+        } else {
+          core.warning(`  ⚠️  ${autolinksResult.error}`);
+        }
+      }
+
+      // Sync copilot-instructions.md if specified
+      if (repoCopilotInstructionsMd) {
+        core.info(`  🤖 Checking copilot-instructions.md...`);
+        const copilotResult = await syncCopilotInstructions(
+          octokit,
+          repo,
+          repoCopilotInstructionsMd,
+          copilotInstructionsPrTitle,
+          dryRun
+        );
+
+        // Add copilot instructions result to the main result
+        result.copilotInstructionsSync = copilotResult;
+
+        if (copilotResult.success) {
+          core.info(`  🤖 ${copilotResult.message}`);
+          if (copilotResult.prUrl) {
+            core.info(`  🔗 PR URL: ${copilotResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${copilotResult.error}`);
         }
       }
 
@@ -1197,11 +2194,7 @@ export async function run() {
           core.info(`  📝 Settings changes:`);
           for (const change of result.changes) {
             const settingName = change.setting.replace(/_/g, '-');
-            if (dryRun) {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            } else {
-              core.info(`     ${settingName}: ${change.from} → ${change.to}`);
-            }
+            core.info(`     ${settingName}: ${change.from} → ${change.to}`);
           }
         }
 
@@ -1250,8 +2243,27 @@ export async function run() {
           core.warning(`  ⚠️ ${result.codeScanningWarning}`);
         }
 
+        // Log immutable releases changes
+        if (result.immutableReleasesChange) {
+          if (dryRun) {
+            core.info(
+              `  🔒 Would ${result.immutableReleasesChange.to ? 'enable' : 'disable'} immutable releases: ${result.immutableReleasesChange.from} → ${result.immutableReleasesChange.to}`
+            );
+          } else {
+            core.info(
+              `  🔒 Immutable releases ${result.immutableReleasesChange.to ? 'enabled' : 'disabled'}: ${result.immutableReleasesChange.from} → ${result.immutableReleasesChange.to}`
+            );
+          }
+        } else if (result.immutableReleasesUnchanged) {
+          core.info(`  🔒 Immutable releases unchanged: ${result.currentImmutableReleases ? 'enabled' : 'disabled'}`);
+        }
+
+        if (result.immutableReleasesWarning) {
+          core.warning(`  ⚠️ ${result.immutableReleasesWarning}`);
+        }
+
         // Log if no changes were needed
-        if ((!result.changes || result.changes.length === 0) && !result.topicsChange && !result.codeScanningChange) {
+        if (!hasRepositoryChanges(result)) {
           core.info(`  ℹ️  No changes needed - all settings already match desired state`);
         }
       } else {
