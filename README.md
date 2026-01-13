@@ -113,8 +113,8 @@ repos:
 - If `.github/dependabot.yml` doesn't exist, it creates it and opens a PR
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
-- PRs are created/updated using the GitHub API so commits are verified
-- Updates existing open PRs instead of creating duplicates
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
 
 ### Syncing Repository Rulesets
 
@@ -382,8 +382,8 @@ repos:
 - If `.github/copilot-instructions.md` doesn't exist, it creates it and opens a PR
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
-- PRs are created/updated using the GitHub API so commits are verified
-- Updates existing open PRs instead of creating duplicates
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
 
 For more information on Copilot instructions, see the [GitHub Copilot documentation](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot).
 
