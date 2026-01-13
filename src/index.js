@@ -1459,9 +1459,36 @@ export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
 }
 
 /**
+ * Sync copilot-instructions.md file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} copilotInstructionsPath - Path to local copilot-instructions.md file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncCopilotInstructions(octokit, repo, copilotInstructionsPath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: copilotInstructionsPath,
+      targetPath: '.github/copilot-instructions.md',
+      branchName: 'copilot-instructions-md-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.github/copilot-instructions.md\` to configure GitHub Copilot.\n\n**Changes:**\n- Added Copilot instructions`,
+      prBodyUpdate: `This PR updates \`.github/copilot-instructions.md\` to the latest version.\n\n**Changes:**\n- Updated Copilot instructions`,
+      resultKey: 'copilotInstructions',
+      fileDescription: 'copilot-instructions.md'
+    },
+    dryRun
+  );
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, workflow files, or autolinks)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, workflow files, autolinks, or copilot instructions)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1488,7 +1515,11 @@ function hasRepositoryChanges(result) {
     (result.autolinksSync &&
       result.autolinksSync.success &&
       result.autolinksSync.autolinks &&
-      result.autolinksSync.autolinks !== 'unchanged')
+      result.autolinksSync.autolinks !== 'unchanged') ||
+    (result.copilotInstructionsSync &&
+      result.copilotInstructionsSync.success &&
+      result.copilotInstructionsSync.copilotInstructions &&
+      result.copilotInstructionsSync.copilotInstructions !== 'unchanged')
   );
 }
 
@@ -1553,6 +1584,11 @@ export async function run() {
     // Get autolinks settings
     const autolinksFile = getInput('autolinks-file');
 
+    // Get copilot instructions settings
+    const copilotInstructionsMd = getInput('copilot-instructions-md');
+    const copilotInstructionsPrTitle =
+      getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1573,10 +1609,11 @@ export async function run() {
       rulesetsFile ||
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
-      autolinksFile;
+      autolinksFile ||
+      copilotInstructionsMd;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
       );
     }
 
@@ -1614,6 +1651,9 @@ export async function run() {
     }
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
+    }
+    if (copilotInstructionsMd) {
+      core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
     }
 
     // Update repositories
@@ -1712,6 +1752,12 @@ export async function run() {
       let repoAutolinksFile = autolinksFile;
       if (repoConfig['autolinks-file'] !== undefined) {
         repoAutolinksFile = repoConfig['autolinks-file'];
+      }
+
+      // Handle repo-specific copilot-instructions-md
+      let repoCopilotInstructionsMd = copilotInstructionsMd;
+      if (repoConfig['copilot-instructions-md'] !== undefined) {
+        repoCopilotInstructionsMd = repoConfig['copilot-instructions-md'];
       }
 
       const result = await updateRepositorySettings(
@@ -1818,6 +1864,30 @@ export async function run() {
           core.info(`  🔗 ${autolinksResult.message}`);
         } else {
           core.warning(`  ⚠️  ${autolinksResult.error}`);
+        }
+      }
+
+      // Sync copilot-instructions.md if specified
+      if (repoCopilotInstructionsMd) {
+        core.info(`  🤖 Checking copilot-instructions.md...`);
+        const copilotResult = await syncCopilotInstructions(
+          octokit,
+          repo,
+          repoCopilotInstructionsMd,
+          copilotInstructionsPrTitle,
+          dryRun
+        );
+
+        // Add copilot instructions result to the main result
+        result.copilotInstructionsSync = copilotResult;
+
+        if (copilotResult.success) {
+          core.info(`  🤖 ${copilotResult.message}`);
+          if (copilotResult.prUrl) {
+            core.info(`  🔗 PR URL: ${copilotResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${copilotResult.error}`);
         }
       }
 
