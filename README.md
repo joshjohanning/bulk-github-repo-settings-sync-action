@@ -19,6 +19,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔒 **Enable or disable immutable releases** to prevent release deletion and modification
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
+- 🔄 **Sync .gitignore files** across repositories via pull requests (preserves repo-specific content)
 - 📋 **Sync repository rulesets** across repositories
 - 📝 **Sync pull request templates** across repositories via pull requests
 - 🔧 **Sync workflow files** across repositories via pull requests
@@ -387,6 +388,60 @@ repos:
 
 For more information on Copilot instructions, see the [GitHub Copilot documentation](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot).
 
+### Syncing .gitignore Configuration
+
+Sync a `.gitignore` file to `.gitignore` in target repositories via pull requests:
+
+```yml
+- name: Sync .gitignore Config
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    gitignore: './config/gitignore/.gitignore'
+    gitignore-pr-title: 'chore: update .gitignore'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    gitignore: './config/gitignore/node.gitignore'
+  - repo: owner/repo2
+    gitignore: './config/gitignore/python.gitignore'
+  - repo: owner/repo3
+    gitignore: './.gitignore' # use the same config that this repo is using
+```
+
+**Behavior:**
+
+- If `.gitignore` doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- **Repository-specific entries are preserved**: Content after a `# Repository-specific entries (preserved during sync)` marker is kept intact
+- If content is identical, no PR is created
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
+
+**Example: Preserving repo-specific entries**
+
+In your target repository's `.gitignore`, you can add repository-specific entries that will be preserved during syncs:
+
+```gitignore
+# Standard entries (synced from source)
+node_modules/
+dist/
+*.log
+
+# Repository-specific entries (preserved during sync)
+scanresults.json
+twistlock-*.md
+```
+
+When the sync runs, it will update the standard entries from the source file while keeping `scanresults.json` and `twistlock-*.md` intact.
+
+> **Note:** Do not include the marker comment `# Repository-specific entries (preserved during sync)` in your source `.gitignore` file. This marker should only exist in target repositories.
+
 ### Organization-wide Updates
 
 ```yml
@@ -446,6 +501,8 @@ Output shows what would change:
 | `topics`                         | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                       |
 | `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                       |
 | `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`          |
+| `gitignore`                      | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                    | No       | -                                       |
+| `gitignore-pr-title`             | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`              |
 | `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                       |
 | `delete-unmanaged-rulesets`      | Delete all other rulesets besides the one being synced                                                                                     | No       | `false`                                 |
 | `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                       |

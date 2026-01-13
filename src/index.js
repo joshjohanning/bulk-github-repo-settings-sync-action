@@ -538,11 +538,15 @@ export async function updateRepositorySettings(
  * @param {string} options.prBodyUpdate - PR body when updating existing file(s)
  * @param {string} options.resultKey - Key for the result status (e.g., 'dependabotYml', 'pullRequestTemplate', 'workflowFiles')
  * @param {string} options.fileDescription - Human-readable description of the file(s) (for error messages)
+ * @param {Object} [options.contentProcessor] - Optional processor for custom content handling (e.g., preserving repo-specific sections)
+ * @param {Function} [options.contentProcessor.getComparableExisting] - (existingContent) => content to compare against source
+ * @param {Function} [options.contentProcessor.getFinalContent] - (sourceContent, existingContent) => content to commit
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
-  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription } = options;
+  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription, contentProcessor } =
+    options;
 
   const [owner, repoName] = repo.split('/');
 
@@ -608,13 +612,25 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         }
       }
 
-      // Compare content
-      const needsUpdate = !existingContent || existingContent.trim() !== fileInfo.content.trim();
+      // Compare content - use contentProcessor if provided to handle special cases like repo-specific sections
+      let comparableExisting = existingContent;
+      let finalContent = fileInfo.content;
+
+      if (contentProcessor && existingContent) {
+        // Get the comparable portion of existing content (e.g., strip repo-specific sections)
+        comparableExisting = contentProcessor.getComparableExisting(existingContent);
+        // Get the final content to commit (e.g., merge source with repo-specific sections)
+        finalContent = contentProcessor.getFinalContent(fileInfo.content, existingContent);
+      }
+
+      const needsUpdate = !existingContent || comparableExisting.trim() !== fileInfo.content.trim();
 
       if (needsUpdate) {
         filesToUpdate.push({
           ...fileInfo,
           existingSha,
+          existingContent,
+          finalContent,
           isNew: !existingContent
         });
       }
@@ -747,12 +763,15 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
     for (const file of filesToUpdate) {
       const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
 
+      // Use finalContent if available (from contentProcessor), otherwise use original content
+      const contentToCommit = file.finalContent || file.content;
+
       await octokit.rest.repos.createOrUpdateFileContents({
         owner,
         repo: repoName,
         path: file.targetPath,
         message: commitMessage,
-        content: Buffer.from(file.content).toString('base64'),
+        content: Buffer.from(contentToCommit).toString('base64'),
         branch: branchName,
         sha: file.existingSha || undefined
       });
@@ -873,6 +892,96 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       prBodyUpdate: `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`,
       resultKey: 'dependabotYml',
       fileDescription: 'dependabot.yml'
+    },
+    dryRun
+  );
+}
+
+/**
+ * Content processor for .gitignore files that preserves repository-specific entries.
+ * Repository-specific entries are marked with a special comment marker and are
+ * preserved when syncing the base gitignore content.
+ */
+const gitignoreContentProcessor = {
+  marker: '# Repository-specific entries (preserved during sync)',
+
+  /**
+   * Get the comparable portion of existing content (everything before the marker)
+   * @param {string} existingContent - The existing file content
+   * @returns {string} Content to compare against source
+   */
+  getComparableExisting(existingContent) {
+    const markerIndex = existingContent.indexOf(this.marker);
+    if (markerIndex === -1) {
+      return existingContent;
+    }
+    return existingContent.substring(0, markerIndex).trimEnd();
+  },
+
+  /**
+   * Get the final content to commit (source + preserved repo-specific entries)
+   * @param {string} sourceContent - The source file content
+   * @param {string} existingContent - The existing file content
+   * @returns {string} Final content to commit
+   */
+  getFinalContent(sourceContent, existingContent) {
+    const markerIndex = existingContent.indexOf(this.marker);
+    if (markerIndex === -1) {
+      // No repo-specific content, just use source
+      let finalContent = sourceContent.trim();
+      if (!finalContent.endsWith('\n')) {
+        finalContent += '\n';
+      }
+      return finalContent;
+    }
+
+    // Extract and preserve repo-specific content
+    const repoSpecificContent = existingContent.substring(markerIndex);
+    let finalContent = sourceContent.trim();
+
+    // Ensure there's a blank line before the repo-specific section
+    if (!finalContent.endsWith('\n')) {
+      finalContent += '\n';
+    }
+    if (!finalContent.endsWith('\n\n')) {
+      finalContent += '\n';
+    }
+    finalContent += repoSpecificContent;
+
+    // Ensure file ends with a newline
+    if (!finalContent.endsWith('\n')) {
+      finalContent += '\n';
+    }
+
+    return finalContent;
+  }
+};
+
+/**
+ * Sync .gitignore file to target repository
+ * This function handles .gitignore specially to preserve repository-specific entries
+ * that are marked with a special comment marker.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} gitignorePath - Path to local .gitignore file
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun) {
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: gitignorePath,
+      targetPath: '.gitignore',
+      branchName: 'gitignore-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`.gitignore\` to the repository.\n\n**Changes:**\n- Added .gitignore configuration`,
+      prBodyUpdate: `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration\n- Repository-specific entries have been preserved`,
+      resultKey: 'gitignore',
+      fileDescription: '.gitignore',
+      contentProcessor: gitignoreContentProcessor
     },
     dryRun
   );
@@ -1488,7 +1597,7 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
 /**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, rulesets, pull request template, workflow files, autolinks, or copilot instructions)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, or copilot instructions)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1500,6 +1609,10 @@ function hasRepositoryChanges(result) {
       result.dependabotSync.success &&
       result.dependabotSync.dependabotYml &&
       result.dependabotSync.dependabotYml !== 'unchanged') ||
+    (result.gitignoreSync &&
+      result.gitignoreSync.success &&
+      result.gitignoreSync.gitignore &&
+      result.gitignoreSync.gitignore !== 'unchanged') ||
     (result.rulesetSync &&
       result.rulesetSync.success &&
       result.rulesetSync.ruleset &&
@@ -1560,7 +1673,11 @@ export async function run() {
 
     // Get dependabot.yml settings
     const dependabotYml = getInput('dependabot-yml');
-    const prTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+
+    // Get .gitignore settings
+    const gitignore = getInput('gitignore');
+    const gitignorePrTitle = getInput('gitignore-pr-title') || 'chore: update .gitignore';
 
     // Get rulesets settings
     const rulesetsFile = getInput('rulesets-file');
@@ -1606,6 +1723,7 @@ export async function run() {
       immutableReleases !== null ||
       topics !== null ||
       dependabotYml ||
+      gitignore ||
       rulesetsFile ||
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
@@ -1613,7 +1731,7 @@ export async function run() {
       copilotInstructionsMd;
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
       );
     }
 
@@ -1639,6 +1757,9 @@ export async function run() {
     }
     if (dependabotYml) {
       core.info(`Dependabot.yml will be synced from: ${dependabotYml}`);
+    }
+    if (gitignore) {
+      core.info(`.gitignore will be synced from: ${gitignore}`);
     }
     if (rulesetsFile) {
       core.info(`Repository ruleset will be synced from: ${rulesetsFile}`);
@@ -1721,6 +1842,12 @@ export async function run() {
         repoDependabotYml = repoConfig['dependabot-yml'];
       }
 
+      // Handle repo-specific .gitignore
+      let repoGitignore = gitignore;
+      if (repoConfig['gitignore'] !== undefined) {
+        repoGitignore = repoConfig['gitignore'];
+      }
+
       // Handle repo-specific rulesets-file
       let repoRulesetsFile = rulesetsFile;
       if (repoConfig['rulesets-file'] !== undefined) {
@@ -1774,7 +1901,7 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Checking dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, prTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -1786,6 +1913,24 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+        }
+      }
+
+      // Sync .gitignore if specified
+      if (repoGitignore) {
+        core.info(`  📝 Checking .gitignore...`);
+        const gitignoreResult = await syncGitignore(octokit, repo, repoGitignore, gitignorePrTitle, dryRun);
+
+        // Add gitignore result to the main result
+        result.gitignoreSync = gitignoreResult;
+
+        if (gitignoreResult.success) {
+          core.info(`  📝 ${gitignoreResult.message}`);
+          if (gitignoreResult.prUrl) {
+            core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${gitignoreResult.error}`);
         }
       }
 

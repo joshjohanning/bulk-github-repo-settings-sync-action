@@ -95,6 +95,7 @@ const {
   parseRepositories,
   updateRepositorySettings,
   syncDependabotYml,
+  syncGitignore,
   syncRepositoryRuleset,
   syncPullRequestTemplate,
   syncWorkflowFiles,
@@ -826,7 +827,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
       );
     });
 
@@ -3354,6 +3355,285 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.autolinks).toBe('unchanged');
       expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncGitignore', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+    });
+
+    test('should create .gitignore when it does not exist', async () => {
+      const testContent = 'node_modules/\n.env\n';
+
+      mockFs.readFileSync.mockReturnValue(testContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 42, html_url: 'https://github.com/owner/repo/pull/42' }
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: add .gitignore', false);
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.gitignore',
+          branch: 'gitignore-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update .gitignore when content differs', async () => {
+      const newContent = 'node_modules/\n.env\ndist/\n';
+      const oldContent = 'node_modules/\n.env\n';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 43, html_url: 'https://github.com/owner/repo/pull/43' }
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('updated');
+      expect(result.prNumber).toBe(43);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({ sha: 'file-sha-456' })
+      );
+    });
+
+    test('should preserve repo-specific content after marker', async () => {
+      const newContent = 'node_modules/\n.env\n';
+      const marker = '# Repository-specific entries (preserved during sync)';
+      const repoSpecific = `${marker}\n# Custom entries\n*.custom\n`;
+      const oldContent = `node_modules/\nold-entry/\n${repoSpecific}`;
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with repo-specific content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 44, html_url: 'https://github.com/owner/repo/pull/44' }
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(true);
+      // Verify repo-specific content is preserved
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.any(String)
+        })
+      );
+      // Decode and verify the content includes the repo-specific marker
+      const call = mockOctokit.rest.repos.createOrUpdateFileContents.mock.calls[0][0];
+      const content = Buffer.from(call.content, 'base64').toString('utf8');
+      expect(content).toContain(marker);
+      expect(content).toContain('*.custom');
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const content = 'node_modules/\n.env\n';
+
+      mockFs.readFileSync.mockReturnValue(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-999',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    });
+
+    test('should report existing open PR when one exists', async () => {
+      const newContent = 'node_modules/\n.env\ndist/\n';
+      const oldContent = 'node_modules/\n.env\n';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-111',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('pr-exists');
+      expect(result.prNumber).toBe(50);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode', async () => {
+      const newContent = 'node_modules/\n.env\n';
+
+      mockFs.readFileSync.mockReturnValue(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      // No existing PR
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await syncGitignore(
+        mockOctokit,
+        'owner/repo',
+        './.gitignore',
+        'chore: add .gitignore',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncGitignore(
+        mockOctokit,
+        'invalid-repo-format',
+        './.gitignore',
+        'chore: update .gitignore',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing .gitignore file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncGitignore(
+        mockOctokit,
+        'owner/repo',
+        './nonexistent.gitignore',
+        'chore: update .gitignore',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read file');
+      expect(result.error).toContain('.gitignore');
+    });
+
+    test('should handle API errors', async () => {
+      mockFs.readFileSync.mockReturnValue('node_modules/\n');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync .gitignore');
     });
   });
 
