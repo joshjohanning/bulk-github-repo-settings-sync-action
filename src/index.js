@@ -37,6 +37,50 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 /**
+ * Known configuration keys that can be used in repo config YAML files.
+ * This list is used to warn users about typos or unsupported settings.
+ */
+const KNOWN_REPO_CONFIG_KEYS = new Set([
+  'repo',
+  'allow-squash-merge',
+  'allow-merge-commit',
+  'allow-rebase-merge',
+  'allow-auto-merge',
+  'delete-branch-on-merge',
+  'allow-update-branch',
+  'enable-default-code-scanning',
+  'immutable-releases',
+  'topics',
+  'dependabot-yml',
+  'gitignore',
+  'rulesets-file',
+  'pull-request-template',
+  'workflow-files',
+  'autolinks-file',
+  'copilot-instructions-md'
+]);
+
+/**
+ * Validate repository configuration and warn about unknown keys
+ * @param {Object} repoConfig - Repository configuration object from YAML
+ * @param {string} repoName - Repository name for logging context
+ */
+function validateRepoConfig(repoConfig, repoName) {
+  if (typeof repoConfig !== 'object' || repoConfig === null) {
+    return;
+  }
+
+  for (const key of Object.keys(repoConfig)) {
+    if (!KNOWN_REPO_CONFIG_KEYS.has(key)) {
+      core.warning(
+        `⚠️  Unknown configuration key "${key}" found for repository "${repoName}". ` +
+          `This setting may not exist, may not be available in this version, or may have a typo.`
+      );
+    }
+  }
+}
+
+/**
  * Get input value (works reliably in both GitHub Actions and local environments)
  * @param {string} name - Input name (with dashes)
  * @returns {string} Input value
@@ -89,7 +133,8 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
             // Simple string format: just repo name
             return { repo: item };
           } else if (typeof item === 'object' && item.repo) {
-            // Object format with repo and optional settings
+            // Object format with repo and optional settings - validate config keys
+            validateRepoConfig(item, item.repo);
             return item;
           } else {
             throw new Error('Each item in repos array must be a string or object with "repo" property');
@@ -1876,6 +1921,153 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
 }
 
 /**
+ * Get a list of specific changes made to a repository
+ * @param {Object} result - Repository update result object
+ * @param {boolean} dryRun - Whether this is a dry-run
+ * @returns {Array<string>} List of change descriptions
+ */
+function getChangesList(result, dryRun) {
+  const changes = [];
+  const wouldPrefix = dryRun ? 'Would update ' : '';
+
+  // Repository settings changes
+  if (result.changes && result.changes.length > 0) {
+    const settingNames = result.changes.map(c => c.setting.replace(/_/g, '-'));
+    changes.push(`${wouldPrefix}settings: ${settingNames.join(', ')}`);
+  }
+
+  // Topics changes
+  if (result.topicsChange) {
+    const topicChanges = [];
+    if (result.topicsChange.added.length > 0) {
+      topicChanges.push(`+${result.topicsChange.added.join(', ')}`);
+    }
+    if (result.topicsChange.removed.length > 0) {
+      topicChanges.push(`-${result.topicsChange.removed.join(', ')}`);
+    }
+    changes.push(`${wouldPrefix}topics: ${topicChanges.join(', ')}`);
+  }
+
+  // Code scanning changes
+  if (result.codeScanningChange) {
+    changes.push(`${wouldPrefix}CodeQL scanning`);
+  }
+
+  // Immutable releases changes
+  if (result.immutableReleasesChange) {
+    const action = result.immutableReleasesChange.to ? 'enable' : 'disable';
+    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+    changes.push(`${actionText} immutable releases`);
+  }
+
+  // Dependabot changes
+  if (
+    result.dependabotSync?.success &&
+    result.dependabotSync.dependabotYml &&
+    result.dependabotSync.dependabotYml !== 'unchanged'
+  ) {
+    const status = result.dependabotSync.dependabotYml;
+    if (status === 'pr-exists') {
+      changes.push(`dependabot.yml PR exists (#${result.dependabotSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync dependabot.yml`);
+    } else {
+      changes.push(`${wouldPrefix}dependabot.yml (PR #${result.dependabotSync.prNumber})`);
+    }
+  }
+
+  // Gitignore changes
+  if (
+    result.gitignoreSync?.success &&
+    result.gitignoreSync.gitignore &&
+    result.gitignoreSync.gitignore !== 'unchanged'
+  ) {
+    const status = result.gitignoreSync.gitignore;
+    if (status === 'pr-exists') {
+      changes.push(`.gitignore PR exists (#${result.gitignoreSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync .gitignore`);
+    } else {
+      changes.push(`${wouldPrefix}.gitignore (PR #${result.gitignoreSync.prNumber})`);
+    }
+  }
+
+  // Ruleset changes
+  if (result.rulesetSync?.success && result.rulesetSync.ruleset && result.rulesetSync.ruleset !== 'unchanged') {
+    const status = result.rulesetSync.ruleset;
+    if (status.startsWith('would-')) {
+      changes.push(`Would sync ruleset`);
+    } else {
+      changes.push(`${wouldPrefix}ruleset`);
+    }
+  }
+
+  // Pull request template changes
+  if (
+    result.pullRequestTemplateSync?.success &&
+    result.pullRequestTemplateSync.pullRequestTemplate &&
+    result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged'
+  ) {
+    const status = result.pullRequestTemplateSync.pullRequestTemplate;
+    if (status === 'pr-exists') {
+      changes.push(`PR template PR exists (#${result.pullRequestTemplateSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync PR template`);
+    } else {
+      changes.push(`${wouldPrefix}PR template (PR #${result.pullRequestTemplateSync.prNumber})`);
+    }
+  }
+
+  // Workflow files changes
+  if (
+    result.workflowFilesSync?.success &&
+    result.workflowFilesSync.workflowFiles &&
+    result.workflowFilesSync.workflowFiles !== 'unchanged'
+  ) {
+    const status = result.workflowFilesSync.workflowFiles;
+    if (status === 'pr-exists') {
+      changes.push(`workflow files PR exists (#${result.workflowFilesSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync workflow files`);
+    } else {
+      changes.push(`${wouldPrefix}workflow files (PR #${result.workflowFilesSync.prNumber})`);
+    }
+  }
+
+  // Autolinks changes
+  if (
+    result.autolinksSync?.success &&
+    result.autolinksSync.autolinks &&
+    result.autolinksSync.autolinks !== 'unchanged'
+  ) {
+    const status = result.autolinksSync.autolinks;
+    if (status.startsWith('would-')) {
+      changes.push(`Would sync autolinks`);
+    } else {
+      changes.push(`${wouldPrefix}autolinks`);
+    }
+  }
+
+  // Copilot instructions changes
+  if (
+    result.copilotInstructionsSync?.success &&
+    result.copilotInstructionsSync.copilotInstructions &&
+    result.copilotInstructionsSync.copilotInstructions !== 'unchanged'
+  ) {
+    const status = result.copilotInstructionsSync.copilotInstructions;
+    if (status === 'pr-exists') {
+      changes.push(`copilot-instructions.md PR exists (#${result.copilotInstructionsSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync copilot-instructions.md`);
+    } else {
+      changes.push(`${wouldPrefix}copilot-instructions.md (PR #${result.copilotInstructionsSync.prNumber})`);
+    }
+  }
+
+  return changes;
+}
+
+/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, or package.json)
@@ -2365,10 +2557,19 @@ export async function run() {
 
       if (result.success) {
         successCount++;
+        const repoHasChanges = hasRepositoryChanges(result);
         if (dryRun) {
-          core.info(`🔍 Would update ${repo}`);
+          if (repoHasChanges) {
+            core.info(`🔍 Would update ${repo}`);
+          } else {
+            core.info(`✅ No changes needed in ${repo}`);
+          }
         } else {
-          core.info(`✅ Successfully updated ${repo}`);
+          if (repoHasChanges) {
+            core.info(`✅ Successfully updated ${repo}`);
+          } else {
+            core.info(`✅ No changes needed in ${repo}`);
+          }
         }
 
         // Log repository setting changes
@@ -2443,11 +2644,6 @@ export async function run() {
         if (result.immutableReleasesWarning) {
           core.warning(`  ⚠️ ${result.immutableReleasesWarning}`);
         }
-
-        // Log if no changes were needed
-        if (!hasRepositoryChanges(result)) {
-          core.info(`  ℹ️  No changes needed - all settings already match desired state`);
-        }
       } else {
         failureCount++;
         core.warning(`❌ Failed to update ${repo}: ${result.error}`);
@@ -2475,10 +2671,17 @@ export async function run() {
         const hasChanges = hasRepositoryChanges(r);
 
         let details;
-        if (dryRun) {
-          details = hasChanges ? 'Would update' : 'No changes needed';
+        if (hasChanges) {
+          // Get specific list of changes
+          const changesList = getChangesList(r, dryRun);
+          if (changesList.length > 0) {
+            // Format as bullet points for readability
+            details = changesList.join('; ');
+          } else {
+            details = dryRun ? 'Would update' : 'Updated';
+          }
         } else {
-          details = hasChanges ? 'Updated' : 'No changes needed';
+          details = 'No changes needed';
         }
 
         return [r.repository, '✅ Success', details];
