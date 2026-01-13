@@ -195,6 +195,33 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
     });
 
+    test('should warn about unknown configuration keys in repo config', async () => {
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    unknown-setting: true');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'unknown-setting': true, gitignor: 'path/to/file' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1', 'unknown-setting': true, gitignor: 'path/to/file' }]);
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown configuration key "unknown-setting"')
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Unknown configuration key "gitignor"'));
+    });
+
+    test('should not warn about known configuration keys in repo config', async () => {
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false, gitignore: 'path/to/file' }]
+      });
+
+      mockCore.warning.mockClear();
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1', 'allow-squash-merge': false, gitignore: 'path/to/file' }]);
+      // Should not have any warnings about unknown keys
+      expect(mockCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('Unknown configuration key'));
+    });
+
     test('should reject YAML file without repos array', async () => {
       mockFs.readFileSync.mockReturnValue('repositories:\n  - owner/repo1');
       mockYaml.load.mockReturnValue({
@@ -924,6 +951,701 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results');
       expect(mockCore.summary.addTable).toHaveBeenCalled();
       expect(mockCore.summary.write).toHaveBeenCalled();
+    });
+
+    test('should include specific changes in summary table when settings change', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'delete-branch-on-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock repo with different current settings to trigger changes
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false, // Different from input
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false, // Different from input
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // Verify the summary table was called with changes details
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      // Find the row for repo1 and check it has change details
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('settings:');
+    });
+
+    test('should include topics changes in summary table', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          topics: 'new-topic,another-topic'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
+        data: { names: ['old-topic'] }
+      });
+      mockOctokit.rest.repos.replaceAllTopics.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('topics:');
+    });
+
+    test('should include CodeQL scanning changes in summary table', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'enable-default-code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'not-configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('CodeQL');
+    });
+
+    test('should include immutable releases changes in summary table', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'immutable-releases': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      // Mock immutable releases as not enabled
+      mockOctokit.request.mockRejectedValue({ status: 404 });
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: false } });
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('immutable releases');
+    });
+
+    test('should show dry-run specific messages in summary table', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock repo with different current settings to trigger changes
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false, // Different from input
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results (DRY-RUN)');
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('Would update');
+    });
+
+    test('should process repo-specific settings overrides from YAML', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false }, { repo: 'owner/repo2' }]
+      });
+
+      // repo1: current allow_squash_merge=true, want false -> update
+      // repo2: current allow_squash_merge=false, want true (global) -> update
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({
+          data: {
+            default_branch: 'main',
+            permissions: { admin: true },
+            allow_squash_merge: true, // different from override (false)
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            delete_branch_on_merge: false,
+            allow_auto_merge: false,
+            allow_update_branch: false
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            default_branch: 'main',
+            permissions: { admin: true },
+            allow_squash_merge: false, // different from global (true)
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            delete_branch_on_merge: false,
+            allow_auto_merge: false,
+            allow_update_branch: false
+          }
+        });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // repo1 should use override (false), repo2 should use global (true)
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+    });
+
+    test('should process repo-specific topics as string', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          topics: 'global-topic'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    topics: repo-topic1,repo-topic2');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', topics: 'repo-topic1,repo-topic2' }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getAllTopics.mockResolvedValue({ data: { names: [] } });
+      mockOctokit.rest.repos.replaceAllTopics.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.repos.replaceAllTopics).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        names: ['repo-topic1', 'repo-topic2']
+      });
+    });
+
+    test('should process repo-specific topics as array', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          topics: 'global-topic'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    topics:\n      - topic1\n      - topic2');
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', topics: ['topic1', 'topic2'] }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getAllTopics.mockResolvedValue({ data: { names: [] } });
+      mockOctokit.rest.repos.replaceAllTopics.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.repos.replaceAllTopics).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        names: ['topic1', 'topic2']
+      });
+    });
+
+    test('should process repo-specific workflow-files as string', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'workflow-files': 'global.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'repos.yml') {
+          return 'repos:\n  - repo: owner/repo1\n    workflow-files: repo-workflow.yml';
+        }
+        return 'name: Test Workflow';
+      });
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'workflow-files': 'repo-workflow.yml' }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 1, html_url: 'https://github.com/owner/repo1/pull/1' }
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+
+    test('should process repo-specific workflow-files as array', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'workflow-files': 'global.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'repos.yml') {
+          return 'repos:\n  - repo: owner/repo1\n    workflow-files:\n      - file1.yml\n      - file2.yml';
+        }
+        return 'name: Test Workflow';
+      });
+      mockYaml.load.mockReturnValue({
+        repos: [{ repo: 'owner/repo1', 'workflow-files': ['file1.yml', 'file2.yml'] }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 1, html_url: 'https://github.com/owner/repo1/pull/1' }
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+
+    test('should handle summary table with dependabot sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'dependabot-yml': 'dependabot.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('version: 2\nupdates: []');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      // First call checks for existing branch (404), second call gets default branch SHA
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 42, html_url: 'https://github.com/owner/repo1/pull/42' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('dependabot.yml');
+    });
+
+    test('should handle summary table with gitignore sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          gitignore: '.gitignore'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('node_modules/\n.env');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 43, html_url: 'https://github.com/owner/repo1/pull/43' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('.gitignore');
+    });
+
+    test('should handle summary table with ruleset sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'rulesets-file': 'ruleset.json'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({ name: 'test-ruleset', target: 'branch', enforcement: 'active', rules: [] })
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({ data: { id: 1 } });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('ruleset');
+    });
+
+    test('should handle summary table with workflow files sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'workflow-files': 'ci.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('name: CI\non: push');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 44, html_url: 'https://github.com/owner/repo1/pull/44' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('workflow');
+    });
+
+    test('should handle summary table with autolinks sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'autolinks-file': 'autolinks.json'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({ autolinks: [{ key_prefix: 'JIRA-', url_template: 'https://jira.example.com/browse/<num>' }] })
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('autolinks');
+    });
+
+    test('should handle summary table with copilot instructions sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'copilot-instructions-md': 'copilot-instructions.md'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('# Copilot Instructions\n\nBe helpful.');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 45, html_url: 'https://github.com/owner/repo1/pull/45' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('copilot-instructions');
+    });
+
+    test('should handle summary table with PR template sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'pull-request-template': 'pr-template.md'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockReturnValue('## Description\n\nPlease describe your changes.');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 46, html_url: 'https://github.com/owner/repo1/pull/46' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('PR template');
     });
 
     test('should use custom GitHub API URL when provided', async () => {
