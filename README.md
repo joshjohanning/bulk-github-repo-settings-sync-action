@@ -453,7 +453,7 @@ Sync npm `scripts` and/or `engines` from a source `package.json` to target repos
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
-    package-json-file: './config/package.json'
+    package-json-file: './config/package-json/package.json'
     sync-scripts: true
     sync-engines: true
     package-json-pr-title: 'chore: update package.json'
@@ -464,7 +464,7 @@ Or with repo-specific overrides in `repos.yml`:
 ```yaml
 repos:
   - repo: owner/repo1
-    package-json-file: './config/node-package.json'
+    package-json-file: './config/package-json/node-package.json'
     sync-scripts: true
     sync-engines: true
   - repo: owner/repo2
