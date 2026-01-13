@@ -94,6 +94,21 @@ inputs:
     description: 'Title for pull requests when updating copilot-instructions.md'
     required: false
     default: 'chore: update copilot-instructions.md'
+  package-json-file:
+    description: 'Path to a package.json file to use as source for syncing npm scripts'
+    required: false
+  sync-scripts:
+    description: 'Sync npm scripts from package-json-file to target repositories'
+    required: false
+    default: 'false'
+  sync-engines:
+    description: 'Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)'
+    required: false
+    default: 'false'
+  package-json-pr-title:
+    description: 'Title for pull requests when updating package.json'
+    required: false
+    default: 'chore: update package.json'
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false

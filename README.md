@@ -25,7 +25,8 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
-- 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
+- �📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -442,6 +443,64 @@ When the sync runs, it will update the standard entries from the source file whi
 
 > **Note:** Do not include the marker comment `# Repository-specific entries (preserved during sync)` in your source `.gitignore` file. This marker should only exist in target repositories.
 
+### Syncing package.json Properties
+
+Sync npm `scripts` and/or `engines` from a source `package.json` to target repositories via pull requests:
+
+```yml
+- name: Sync package.json Properties
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    package-json-file: './config/package.json'
+    sync-scripts: true
+    sync-engines: true
+    package-json-pr-title: 'chore: update package.json'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    package-json-file: './config/node-package.json'
+    sync-scripts: true
+    sync-engines: true
+  - repo: owner/repo2
+    # Only sync engines (e.g., for Node.js version upgrade)
+    sync-engines: true
+  - repo: owner/repo3
+    # Skip package.json sync for this repo
+```
+
+**Behavior:**
+
+- Only updates existing `package.json` files (does not create new ones)
+- Merges selected fields (`scripts`, `engines`) while preserving all other fields
+- If selected fields are identical, no PR is created
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
+
+**Example source `package.json`:**
+
+```json
+{
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
+```
+
+Only the fields you enable for syncing (`sync-scripts`, `sync-engines`) will be updated in target repositories. Other fields like `name`, `version`, `dependencies`, `devDependencies`, etc. will be preserved in the target.
+
+> **Tip:** Use `sync-engines` to prepare your repositories for Node.js version upgrades (e.g., Node 20 → Node 22 before GitHub Actions deprecates Node 20 in April 2026).
+
 ### Organization-wide Updates
 
 ```yml
@@ -512,6 +571,10 @@ Output shows what would change:
 | `autolinks-file`                 | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                       |
 | `copilot-instructions-md`        | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
 | `copilot-instructions-pr-title`  | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
+| `package-json-file`              | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
+| `sync-scripts`                   | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `false`                                 |
+| `sync-engines`                   | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `false`                                 |
+| `package-json-pr-title`          | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
 \* Either `repositories` or `repositories-file` must be provided

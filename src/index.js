@@ -988,6 +988,287 @@ export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRu
 }
 
 /**
+ * Deep comparison of objects for package.json fields
+ * @param {*} obj1 - First object to compare
+ * @param {*} obj2 - Second object to compare
+ * @returns {boolean} True if objects are equal
+ */
+function deepEqual(obj1, obj2) {
+  if (obj1 === obj2) return true;
+  if (obj1 === null || obj2 === null) return obj1 === obj2;
+  if (typeof obj1 !== 'object' || typeof obj2 !== 'object') return false;
+
+  const keys1 = Object.keys(obj1).sort();
+  const keys2 = Object.keys(obj2).sort();
+
+  if (keys1.length !== keys2.length) return false;
+  if (keys1.join(',') !== keys2.join(',')) return false;
+
+  return keys1.every(key => deepEqual(obj1[key], obj2[key]));
+}
+
+/**
+ * Sync package.json fields (scripts and/or engines) to target repository via PR
+ * This function merges selected fields from a source package.json into the target,
+ * preserving all other fields in the target package.json.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} packageJsonPath - Path to local package.json file
+ * @param {boolean} syncScripts - Whether to sync the scripts field
+ * @param {boolean} syncEngines - Whether to sync the engines field
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncPackageJson(octokit, repo, packageJsonPath, syncScripts, syncEngines, prTitle, dryRun) {
+  const [owner, repoName] = repo.split('/');
+  const targetPath = 'package.json';
+  const branchName = 'package-json-sync';
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  if (!syncScripts && !syncEngines) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'At least one of syncScripts or syncEngines must be enabled',
+      dryRun
+    };
+  }
+
+  try {
+    // Read and parse the source package.json file
+    let sourcePackageJson;
+    try {
+      const sourceContent = fs.readFileSync(packageJsonPath, 'utf8');
+      sourcePackageJson = JSON.parse(sourceContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse package.json file at ${packageJsonPath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Get default branch
+    const { data: repoData } = await octokit.rest.repos.get({
+      owner,
+      repo: repoName
+    });
+    const defaultBranch = repoData.default_branch;
+
+    // Check if package.json exists in the target repo
+    let existingPackageJson = null;
+    let existingSha = null;
+
+    try {
+      const { data } = await octokit.rest.repos.getContent({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        ref: defaultBranch
+      });
+      existingSha = data.sha;
+      const existingContent = Buffer.from(data.content, 'base64').toString('utf8');
+      existingPackageJson = JSON.parse(existingContent);
+    } catch (error) {
+      if (error.status === 404) {
+        return {
+          repository: repo,
+          success: false,
+          error: `${targetPath} does not exist in ${repo}. This action only updates existing package.json files.`,
+          dryRun
+        };
+      }
+      throw error;
+    }
+
+    // Build updated package.json by merging selected fields
+    const updatedPackageJson = { ...existingPackageJson };
+    const changes = [];
+
+    // Check and update scripts if enabled
+    if (syncScripts) {
+      const sourceScripts = sourcePackageJson.scripts || {};
+      const existingScripts = existingPackageJson.scripts || {};
+
+      if (!deepEqual(sourceScripts, existingScripts)) {
+        updatedPackageJson.scripts = sourceScripts;
+        changes.push({
+          field: 'scripts',
+          from: Object.keys(existingScripts).length,
+          to: Object.keys(sourceScripts).length
+        });
+      }
+    }
+
+    // Check and update engines if enabled
+    if (syncEngines) {
+      const sourceEngines = sourcePackageJson.engines || {};
+      const existingEngines = existingPackageJson.engines || {};
+
+      if (!deepEqual(sourceEngines, existingEngines)) {
+        updatedPackageJson.engines = sourceEngines;
+        changes.push({
+          field: 'engines',
+          from: JSON.stringify(existingEngines),
+          to: JSON.stringify(sourceEngines)
+        });
+      }
+    }
+
+    // If no changes needed, return early
+    if (changes.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'unchanged',
+        message: `${targetPath} is already up to date`,
+        dryRun
+      };
+    }
+
+    // Check if there's already an open PR for this update
+    let existingPR = null;
+    try {
+      const { data: pulls } = await octokit.rest.pulls.list({
+        owner,
+        repo: repoName,
+        state: 'open',
+        head: `${owner}:${branchName}`
+      });
+
+      if (pulls.length > 0) {
+        existingPR = pulls[0];
+        core.info(`  🔄 Found existing open PR #${existingPR.number} for ${targetPath}`);
+      }
+    } catch (error) {
+      core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
+    }
+
+    if (existingPR) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'pr-exists',
+        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        prNumber: existingPR.number,
+        prUrl: existingPR.html_url,
+        changes,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      return {
+        repository: repo,
+        success: true,
+        packageJson: 'would-update',
+        message: `Would update ${targetPath} via PR`,
+        changes,
+        dryRun
+      };
+    }
+
+    // Create or update the branch
+    let branchExists = false;
+    try {
+      await octokit.rest.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      branchExists = true;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    const { data: defaultRef } = await octokit.rest.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`
+    });
+
+    if (!branchExists) {
+      await octokit.rest.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branchName}`,
+        sha: defaultRef.object.sha
+      });
+      core.info(`  🌿 Created branch ${branchName}`);
+    } else {
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: defaultRef.object.sha,
+        force: true
+      });
+      core.info(`  🌿 Updated branch ${branchName}`);
+    }
+
+    // Commit the updated package.json
+    const newContent = `${JSON.stringify(updatedPackageJson, null, 2)}\n`;
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: targetPath,
+      message: `chore: update ${targetPath}`,
+      content: Buffer.from(newContent).toString('base64'),
+      branch: branchName,
+      sha: existingSha
+    });
+    core.info(`  ✍️  Committed changes to ${targetPath}`);
+
+    // Build PR body
+    let prBody = `This PR updates \`package.json\` with synchronized configuration.\n\n**Changes:**\n`;
+    for (const change of changes) {
+      prBody += `- Updated \`${change.field}\` (${change.from} → ${change.to} entries)\n`;
+    }
+
+    // Create PR
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body: prBody
+    });
+    core.info(`  📬 Created PR #${pr.number}: ${pr.html_url}`);
+
+    return {
+      repository: repo,
+      success: true,
+      packageJson: 'updated',
+      prNumber: pr.number,
+      prUrl: pr.html_url,
+      message: `Updated ${targetPath} via PR #${pr.number}`,
+      changes,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync package.json: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Delete rulesets that are not in the managed list
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - Repository owner
@@ -1597,7 +1878,7 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
 /**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, or copilot instructions)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, or package.json)
  */
 function hasRepositoryChanges(result) {
   return (
@@ -1632,7 +1913,11 @@ function hasRepositoryChanges(result) {
     (result.copilotInstructionsSync &&
       result.copilotInstructionsSync.success &&
       result.copilotInstructionsSync.copilotInstructions &&
-      result.copilotInstructionsSync.copilotInstructions !== 'unchanged')
+      result.copilotInstructionsSync.copilotInstructions !== 'unchanged') ||
+    (result.packageJsonSync &&
+      result.packageJsonSync.success &&
+      result.packageJsonSync.packageJson &&
+      result.packageJsonSync.packageJson !== 'unchanged')
   );
 }
 
@@ -1706,6 +1991,12 @@ export async function run() {
     const copilotInstructionsPrTitle =
       getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
 
+    // Get package.json sync settings
+    const packageJsonFile = getInput('package-json-file');
+    const syncScripts = getBooleanInput('sync-scripts');
+    const syncEngines = getBooleanInput('sync-engines');
+    const packageJsonPrTitle = getInput('package-json-pr-title') || 'chore: update package.json';
+
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
     if (dryRun) {
@@ -1728,10 +2019,11 @@ export async function run() {
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
-      copilotInstructionsMd;
+      copilotInstructionsMd ||
+      (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with sync-scripts or sync-engines must be specified)'
       );
     }
 
@@ -2033,6 +2325,41 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${copilotResult.error}`);
+        }
+      }
+
+      // Sync package.json if specified
+      const repoPackageJsonFile = repoConfig?.['package-json-file'] || packageJsonFile;
+      const repoSyncScripts = repoConfig?.['sync-scripts'] !== undefined ? repoConfig['sync-scripts'] : syncScripts;
+      const repoSyncEngines = repoConfig?.['sync-engines'] !== undefined ? repoConfig['sync-engines'] : syncEngines;
+
+      if (repoPackageJsonFile && (repoSyncScripts || repoSyncEngines)) {
+        core.info(`  📦 Checking package.json...`);
+        const packageJsonResult = await syncPackageJson(
+          octokit,
+          repo,
+          repoPackageJsonFile,
+          repoSyncScripts,
+          repoSyncEngines,
+          packageJsonPrTitle,
+          dryRun
+        );
+
+        // Add package.json result to the main result
+        result.packageJsonSync = packageJsonResult;
+
+        if (packageJsonResult.success) {
+          core.info(`  📦 ${packageJsonResult.message}`);
+          if (packageJsonResult.prUrl) {
+            core.info(`  🔗 PR URL: ${packageJsonResult.prUrl}`);
+          }
+          if (packageJsonResult.changes && packageJsonResult.changes.length > 0) {
+            for (const change of packageJsonResult.changes) {
+              core.info(`     - ${dryRun ? 'Would update' : 'Updated'} ${change.field}`);
+            }
+          }
+        } else {
+          core.warning(`  ⚠️  ${packageJsonResult.error}`);
         }
       }
 
