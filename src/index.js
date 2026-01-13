@@ -2068,6 +2068,22 @@ function getChangesList(result, dryRun) {
     }
   }
 
+  // Package.json changes
+  if (
+    result.packageJsonSync?.success &&
+    result.packageJsonSync.packageJson &&
+    result.packageJsonSync.packageJson !== 'unchanged'
+  ) {
+    const status = result.packageJsonSync.packageJson;
+    if (status === 'pr-exists') {
+      changes.push(`package.json PR exists (#${result.packageJsonSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync package.json`);
+    } else {
+      changes.push(`${wouldPrefix}package.json (PR #${result.packageJsonSync.prNumber})`);
+    }
+  }
+
   return changes;
 }
 
