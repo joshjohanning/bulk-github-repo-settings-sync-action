@@ -246,8 +246,8 @@ repos:
 - If `.github/pull_request_template.md` doesn't exist, it creates it and opens a PR
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
-- PRs are created/updated using the GitHub API so commits are verified
-- Updates existing open PRs instead of creating duplicates
+- PRs are created using the GitHub API so commits are verified
+- Skips creating new PRs if an open PR already exists for the sync branch
 
 For more information on pull request templates, see the [GitHub documentation](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
 
