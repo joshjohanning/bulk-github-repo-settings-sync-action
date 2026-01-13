@@ -49,7 +49,7 @@ Update repository settings in bulk across multiple GitHub repositories.
     rulesets-file: './config/rulesets/prod-ruleset.json'
     pull-request-template: './config/templates/pull_request_template.md'
     autolinks-file: './config/autolinks/jira-autolinks.json'
-    copilot-instructions-md: './.github/copilot-instructions.md'
+    copilot-instructions-md: './config/copilot/copilot-instructions.md'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -362,7 +362,7 @@ Sync a `copilot-instructions.md` file to `.github/copilot-instructions.md` in ta
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
-    copilot-instructions-md: './.github/copilot-instructions.md'
+    copilot-instructions-md: './config/copilot/copilot-instructions.md'
     copilot-instructions-pr-title: 'chore: update copilot-instructions.md'
 ```
 
