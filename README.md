@@ -26,7 +26,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔗 **Sync autolink references** across repositories
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
-- �📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes

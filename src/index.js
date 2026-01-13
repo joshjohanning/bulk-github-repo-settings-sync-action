@@ -1279,7 +1279,11 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
     // Build PR body
     let prBody = `This PR updates \`package.json\` with synchronized configuration.\n\n**Changes:**\n`;
     for (const change of changes) {
-      prBody += `- Updated \`${change.field}\` (${change.from} → ${change.to} entries)\n`;
+      if (change.field === 'scripts') {
+        prBody += `- Updated \`${change.field}\` (${change.from} → ${change.to} entries)\n`;
+      } else {
+        prBody += `- Updated \`${change.field}\` (${change.from} → ${change.to})\n`;
+      }
     }
 
     // Create PR
