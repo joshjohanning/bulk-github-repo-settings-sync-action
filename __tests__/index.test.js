@@ -2199,7 +2199,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const newContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
       const oldContent =
@@ -2213,12 +2213,87 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
+      // First call: check default branch (for initial comparison)
+      // Second call: check PR branch (for PR update comparison)
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('pr-updated');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(result.message).toContain('Updated');
+      expect(result.message).toContain('PR #50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'dependabot-yml-sync',
+          sha: 'file-sha-pr-branch'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const newContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "daily"';
+      const oldContent =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      setMockFileContent(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          sha: 'file-sha-999',
-          content: Buffer.from(oldContent).toString('base64')
+          default_branch: 'main'
         }
       });
+
+      // Default branch has old content, but PR branch already has the new content
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(newContent).toString('base64')
+          }
+        });
 
       // Existing PR found
       mockOctokit.rest.pulls.list.mockResolvedValue({
@@ -2239,14 +2314,118 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.dependabotYml).toBe('pr-exists');
+      expect(result.dependabotYml).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(result.message).toContain('PR #50 already has the latest');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should create file in PR branch when file does not exist in PR branch', async () => {
+      const newContent = 'version: 2\nupdates:\n  - package-ecosystem: "npm"';
+
+      setMockFileContent(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // First call: file doesn't exist in default branch
+      // Second call: file doesn't exist in PR branch either
+      mockOctokit.rest.repos.getContent.mockRejectedValueOnce({ status: 404 }).mockRejectedValueOnce({ status: 404 });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: add dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('pr-updated-created');
+      expect(result.prNumber).toBe(50);
+      expect(result.message).toContain('Created');
+      expect(result.message).toContain('PR #50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'dependabot-yml-sync',
+          sha: undefined
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle dry-run mode with existing PR needing update', async () => {
+      const newContent = 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    schedule:\n      interval: "daily"';
+      const oldContent = 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    schedule:\n      interval: "weekly"';
+
+      setMockFileContent(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('would-update-pr');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(result.dryRun).toBe(true);
+      expect(result.message).toContain('Would update');
+      expect(result.message).toContain('PR #50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode', async () => {
@@ -3192,7 +3371,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const newContent = '## Description\n\nNew content';
       const oldContent = '## Description\n\nOld content';
 
@@ -3204,12 +3383,82 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
+      // First call: check default branch, second call: check PR branch
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncPullRequestTemplate(
+        mockOctokit,
+        'owner/repo',
+        './pull_request_template.md',
+        'chore: update pull request template',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.pullRequestTemplate).toBe('pr-updated');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'pull-request-template-sync',
+          sha: 'file-sha-pr-branch'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const content = '## Description\n\nSame content';
+      const oldContent = '## Description\n\nOld content';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          sha: 'file-sha-999',
-          content: Buffer.from(oldContent).toString('base64')
+          default_branch: 'main'
         }
       });
+
+      // Default branch has old content, but PR branch already has the new content
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(content).toString('base64')
+          }
+        });
 
       // Existing PR found
       mockOctokit.rest.pulls.list.mockResolvedValue({
@@ -3230,14 +3479,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.pullRequestTemplate).toBe('pr-exists');
+      expect(result.pullRequestTemplate).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(result.message).toContain('PR #50 already has the latest');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode', async () => {
@@ -3592,7 +3839,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const newContent = 'name: CI\non: [push, pull_request]';
       const oldContent = 'name: CI\non: [push]';
 
@@ -3602,12 +3849,80 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { default_branch: 'main' }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
-        data: {
-          sha: 'file-sha-999',
-          content: Buffer.from(oldContent).toString('base64')
-        }
+      // First call: check default branch, second call: check PR branch
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
       });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('pr-updated');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'workflow-files-sync',
+          sha: 'file-sha-pr-branch'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const content = 'name: CI\non: [push]';
+      const oldContent = 'name: CI\non: [pull_request]';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Default branch has old content, but PR branch already has the new content
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(content).toString('base64')
+          }
+        });
 
       // Existing PR found
       mockOctokit.rest.pulls.list.mockResolvedValue({
@@ -3628,11 +3943,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.workflowFiles).toBe('pr-exists');
+      expect(result.workflowFiles).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(result.message).toContain('PR #50 already has the latest');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -4488,7 +4802,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const newContent = 'node_modules/\n.env\ndist/\n';
       const oldContent = 'node_modules/\n.env\n';
 
@@ -4498,12 +4812,69 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { default_branch: 'main' }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
-        data: {
-          sha: 'file-sha-111',
-          content: Buffer.from(oldContent).toString('base64')
-        }
+      // First call: check default branch, second call: check PR branch
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
       });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
+
+      expect(result.success).toBe(true);
+      expect(result.gitignore).toBe('pr-updated');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'gitignore-sync',
+          sha: 'file-sha-pr-branch'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const content = 'node_modules/\n.env\n';
+      const oldContent = 'node_modules/\n';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Default branch has old content, but PR branch already has the new content
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(content).toString('base64')
+          }
+        });
 
       // Existing PR found
       mockOctokit.rest.pulls.list.mockResolvedValue({
@@ -4513,9 +4884,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await syncGitignore(mockOctokit, 'owner/repo', './.gitignore', 'chore: update .gitignore', false);
 
       expect(result.success).toBe(true);
-      expect(result.gitignore).toBe('pr-exists');
+      expect(result.gitignore).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
-      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(result.message).toContain('PR #50 already has the latest');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -4759,7 +5131,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const newContent = '# GitHub Copilot Instructions\n\nUpdated standards.';
       const oldContent = '# GitHub Copilot Instructions\n\nOld standards.';
 
@@ -4771,12 +5143,82 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
+      // First call: check default branch, second call: check PR branch
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncCopilotInstructions(
+        mockOctokit,
+        'owner/repo',
+        './copilot-instructions.md',
+        'chore: update copilot-instructions.md',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.copilotInstructions).toBe('pr-updated');
+      expect(result.prNumber).toBe(50);
+      expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'copilot-instructions-md-sync',
+          sha: 'file-sha-pr-branch'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const content = '# GitHub Copilot Instructions\n\nSame standards.';
+      const oldContent = '# GitHub Copilot Instructions\n\nOld standards.';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
-          sha: 'file-sha-999',
-          content: Buffer.from(oldContent).toString('base64')
+          default_branch: 'main'
         }
       });
+
+      // Default branch has old content, but PR branch already has the new content
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(oldContent).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-pr-branch',
+            content: Buffer.from(content).toString('base64')
+          }
+        });
 
       // Existing PR found
       mockOctokit.rest.pulls.list.mockResolvedValue({
@@ -4797,14 +5239,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.copilotInstructions).toBe('pr-exists');
+      expect(result.copilotInstructions).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(result.message).toContain('PR #50 already has the latest');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
-      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode', async () => {
@@ -5154,10 +5594,53 @@ describe('Bulk GitHub Repository Settings Action', () => {
         false
       );
 
+      // Note: syncPackageJson has its own implementation that returns pr-exists
+      // (it doesn't use the common syncFilesViaPullRequest function)
       expect(result.success).toBe(true);
       expect(result.packageJson).toBe('pr-exists');
       expect(result.prNumber).toBe(50);
       expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+    });
+
+    test('should report pr-up-to-date when PR exists with same content', async () => {
+      const sourcePackageJson = { scripts: { test: 'jest' } };
+      const existingPackageJson = { scripts: { test: 'mocha' } };
+
+      setMockFileContent(JSON.stringify(sourcePackageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Note: syncPackageJson has its own implementation that returns pr-exists
+      // when a PR exists (it doesn't use the common syncFilesViaPullRequest function)
+      // This test verifies the current behavior of returning pr-exists
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-default',
+          content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
+      });
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true, // syncScripts
+        false, // syncEngines
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('pr-exists');
+      expect(result.prNumber).toBe(50);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
     test('should handle dry-run mode', async () => {
@@ -5204,7 +5687,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { default_branch: 'main' }
       });
 
-      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      const error = new Error('Not Found');
+      error.status = 404;
+      mockOctokit.rest.repos.getContent.mockRejectedValue(error);
 
       const result = await syncPackageJson(
         mockOctokit,

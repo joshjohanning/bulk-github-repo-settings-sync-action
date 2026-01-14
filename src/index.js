@@ -606,8 +606,9 @@ export async function updateRepositorySettings(
 
 /**
  * Generic function to sync one or more files to a target repository via pull request.
- * If an open PR already exists for the same branch, returns early with 'pr-exists' status
- * to avoid creating duplicate PRs. The existing PR is not updated with new file changes.
+ * If an open PR already exists for the same branch, the function checks if the PR branch
+ * content differs from the new source content. If different, it updates the PR branch with
+ * a new commit. If the content is already up to date, returns 'pr-up-to-date' status.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {Object} options - Sync options
@@ -751,16 +752,154 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
     }
 
-    // If there's already an open PR, don't create/update another one
+    // If there's already an open PR, check if content differs and update if needed
     if (existingPR) {
       const targetDesc = fileInfos.length === 1 ? fileInfos[0].targetPath : fileDescription;
+
+      // Fetch content from the PR branch to compare against source
+      const prBranchFilesToUpdate = [];
+      for (const fileInfo of fileInfos) {
+        let prBranchContent = null;
+        let prBranchSha = null;
+
+        try {
+          const { data } = await octokit.rest.repos.getContent({
+            owner,
+            repo: repoName,
+            path: fileInfo.targetPath,
+            ref: branchName
+          });
+          prBranchContent = Buffer.from(data.content, 'base64').toString('utf8');
+          prBranchSha = data.sha;
+        } catch (error) {
+          if (error.status !== 404) {
+            throw error;
+          }
+          // File doesn't exist in PR branch yet
+          core.info(`  📄 ${fileInfo.targetPath} does not exist in PR branch ${branchName}, will create it`);
+        }
+
+        // Compare content - use contentProcessor if provided
+        let comparablePrContent = prBranchContent;
+        let finalContent = fileInfo.content;
+
+        if (contentProcessor && prBranchContent) {
+          comparablePrContent = contentProcessor.getComparableExisting(prBranchContent);
+          finalContent = contentProcessor.getFinalContent(fileInfo.content, prBranchContent);
+        }
+
+        const prNeedsUpdate = !prBranchContent || comparablePrContent.trim() !== fileInfo.content.trim();
+
+        if (prNeedsUpdate) {
+          prBranchFilesToUpdate.push({
+            ...fileInfo,
+            existingSha: prBranchSha,
+            existingContent: prBranchContent,
+            finalContent,
+            isNew: !prBranchContent
+          });
+        }
+      }
+
+      // If no files need updates in the PR branch, it's already up to date
+      if (prBranchFilesToUpdate.length === 0) {
+        core.info(`  ✓ PR #${existingPR.number} already has the latest ${targetDesc}`);
+        return {
+          repository: repo,
+          success: true,
+          [resultKey]: 'pr-up-to-date',
+          message: `PR #${existingPR.number} already has the latest ${targetDesc}`,
+          prNumber: existingPR.number,
+          prUrl: existingPR.html_url,
+          filesProcessed: fileInfos.map(f => f.targetPath),
+          dryRun
+        };
+      }
+
+      // PR exists but content differs - update the PR branch
+      core.info(`  🔄 PR #${existingPR.number} exists but content differs, will update`);
+
+      if (dryRun) {
+        const newFiles = prBranchFilesToUpdate.filter(f => f.isNew).map(f => f.targetPath);
+        const updatedFiles = prBranchFilesToUpdate.filter(f => !f.isNew).map(f => f.targetPath);
+        let message;
+        if (fileInfos.length === 1) {
+          message = prBranchFilesToUpdate[0].isNew
+            ? `Would create ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
+            : `Would update ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+        } else {
+          message = `Would update ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+        }
+        return {
+          repository: repo,
+          success: true,
+          [resultKey]: 'would-update-pr',
+          message,
+          prNumber: existingPR.number,
+          prUrl: existingPR.html_url,
+          filesWouldCreate: newFiles.length > 0 ? newFiles : undefined,
+          filesWouldUpdate: updatedFiles.length > 0 ? updatedFiles : undefined,
+          filesProcessed: fileInfos.map(f => f.targetPath),
+          dryRun
+        };
+      }
+
+      // Commit updated files to the PR branch
+      const createdFiles = [];
+      const updatedFiles = [];
+
+      for (const file of prBranchFilesToUpdate) {
+        const commitMessage = file.isNew ? `chore: add ${file.targetPath}` : `chore: update ${file.targetPath}`;
+        const contentToCommit = file.finalContent || file.content;
+
+        await octokit.rest.repos.createOrUpdateFileContents({
+          owner,
+          repo: repoName,
+          path: file.targetPath,
+          message: commitMessage,
+          content: Buffer.from(contentToCommit).toString('base64'),
+          branch: branchName,
+          sha: file.existingSha || undefined
+        });
+
+        if (file.isNew) {
+          createdFiles.push(file.targetPath);
+        } else {
+          updatedFiles.push(file.targetPath);
+        }
+
+        core.info(`  ✍️  Committed changes to ${file.targetPath} in PR #${existingPR.number}`);
+      }
+
+      // Determine status
+      let status;
+      if (createdFiles.length > 0 && updatedFiles.length > 0) {
+        status = 'pr-updated-mixed';
+      } else if (createdFiles.length > 0) {
+        status = 'pr-updated-created';
+      } else {
+        status = 'pr-updated';
+      }
+
+      // Build message
+      let message;
+      if (fileInfos.length === 1) {
+        message = prBranchFilesToUpdate[0].isNew
+          ? `Created ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
+          : `Updated ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+      } else {
+        message = `Updated ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+      }
+
       return {
         repository: repo,
         success: true,
-        [resultKey]: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetDesc}`,
+        [resultKey]: status,
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
+        message,
+        filesCreated: createdFiles.length > 0 ? createdFiles : undefined,
+        filesUpdated: updatedFiles.length > 0 ? updatedFiles : undefined,
         filesProcessed: fileInfos.map(f => f.targetPath),
         dryRun
       };
