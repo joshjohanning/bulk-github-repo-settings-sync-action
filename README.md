@@ -9,6 +9,9 @@
 
 Update repository settings in bulk across multiple GitHub repositories.
 
+> [!TIP]
+> **Looking for a working example?** See the [Working Example](#working-example) section for a complete workflow with GitHub App authentication and a real `repos.yml` configuration file.
+
 ## Features
 
 - 🔧 Update pull request merge strategies (squash, merge, rebase)
@@ -626,6 +629,58 @@ Alternatively, use a PAT with `repo` scope:
   with:
     github-token: ${{ secrets.PAT_TOKEN }}
     # ... other inputs
+```
+
+## Working Example
+
+For a complete working example of this action in use, see the [sync-github-repo-settings](https://github.com/joshjohanning/sync-github-repo-settings) repository:
+
+- **[repos.yml](https://github.com/joshjohanning/sync-github-repo-settings/blob/main/repos.yml)** - Example configuration file with per-repository overrides for topics, dependabot, rulesets, workflow files, gitignore, and copilot instructions
+- **[sync-github-repo-settings.yml](https://github.com/joshjohanning/sync-github-repo-settings/blob/main/.github/workflows/sync-github-repo-settings.yml)** - Example workflow using a GitHub App token
+
+**Example workflow:**
+
+```yml
+name: sync-github-repo-settings
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+jobs:
+  sync-github-repo-settings:
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Update Repository Settings
+        uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          repositories-file: 'repos.yml'
+          allow-squash-merge: true
+          allow-merge-commit: false
+          allow-rebase-merge: false
+          allow-auto-merge: true
+          delete-branch-on-merge: true
+          allow-update-branch: true
+          enable-default-code-scanning: true
+          dependabot-pr-title: 'chore: update dependabot.yml'
+          dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
 
 ## YAML Configuration
