@@ -100,11 +100,11 @@ inputs:
   package-json-sync-scripts:
     description: 'Sync npm scripts from package-json-file to target repositories'
     required: false
-    default: 'false'
+    default: 'true'
   package-json-sync-engines:
     description: 'Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)'
     required: false
-    default: 'false'
+    default: 'true'
   package-json-pr-title:
     description: 'Title for pull requests when updating package.json'
     required: false
