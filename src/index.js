@@ -86,6 +86,14 @@ function getCachedKnownRepoConfigKeys() {
 }
 
 /**
+ * Reset the known repo config keys cache.
+ * Exported for testing purposes to ensure test isolation.
+ */
+export function resetKnownRepoConfigKeysCache() {
+  _knownRepoConfigKeys = null;
+}
+
+/**
  * Validate repository configuration and warn about unknown keys
  * @param {Object} repoConfig - Repository configuration object from YAML
  * @param {string} repoName - Repository name for logging context

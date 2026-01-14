@@ -575,8 +575,8 @@ Output shows what would change:
 | `copilot-instructions-md`        | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
 | `copilot-instructions-pr-title`  | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
 | `package-json-file`              | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
-| `package-json-sync-scripts`      | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `false`                                 |
-| `package-json-sync-engines`      | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `false`                                 |
+| `package-json-sync-scripts`      | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `true`                                  |
+| `package-json-sync-engines`      | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                  |
 | `package-json-pr-title`          | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
