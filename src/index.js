@@ -34,35 +34,56 @@ import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as url from 'url';
 import * as yaml from 'js-yaml';
 
 /**
- * Known configuration keys that can be used in repo config YAML files.
- * This list is used to warn users about typos or unsupported settings.
+ * Get the known configuration keys from action.yml.
+ * This dynamically reads the action.yml file to determine valid input keys,
+ * avoiding the need to maintain a hardcoded list.
+ * @returns {Set<string>} Set of valid configuration keys
  */
-const KNOWN_REPO_CONFIG_KEYS = new Set([
-  'repo',
-  'allow-squash-merge',
-  'allow-merge-commit',
-  'allow-rebase-merge',
-  'allow-auto-merge',
-  'delete-branch-on-merge',
-  'allow-update-branch',
-  'enable-default-code-scanning',
-  'immutable-releases',
-  'topics',
-  'dependabot-yml',
-  'gitignore',
-  'rulesets-file',
-  'delete-unmanaged-rulesets',
-  'pull-request-template',
-  'workflow-files',
-  'autolinks-file',
-  'copilot-instructions-md',
-  'package-json-file',
-  'package-json-sync-scripts',
-  'package-json-sync-engines'
-]);
+function getKnownRepoConfigKeys() {
+  // 'repo' is always valid as it's the repository identifier in YAML config
+  const keys = new Set(['repo']);
+
+  try {
+    // Get the directory where this script is located
+    const __filename = url.fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    // action.yml is in the root directory (parent of src/)
+    const actionYmlPath = path.join(__dirname, '..', 'action.yml');
+    const actionYmlContent = fs.readFileSync(actionYmlPath, 'utf8');
+    const actionConfig = yaml.load(actionYmlContent);
+
+    if (actionConfig?.inputs) {
+      for (const inputName of Object.keys(actionConfig.inputs)) {
+        keys.add(inputName);
+      }
+    }
+  } catch (error) {
+    // If we can't read action.yml, log a warning but don't fail
+    // This allows the action to still work even if there's an issue
+    core.warning(`Could not read action.yml to determine valid configuration keys: ${error.message}`);
+  }
+
+  return keys;
+}
+
+// Cache the known keys to avoid re-reading action.yml multiple times
+let _knownRepoConfigKeys = null;
+
+/**
+ * Get cached known configuration keys
+ * @returns {Set<string>} Set of valid configuration keys
+ */
+function getCachedKnownRepoConfigKeys() {
+  if (_knownRepoConfigKeys === null) {
+    _knownRepoConfigKeys = getKnownRepoConfigKeys();
+  }
+  return _knownRepoConfigKeys;
+}
 
 /**
  * Validate repository configuration and warn about unknown keys
@@ -74,8 +95,10 @@ function validateRepoConfig(repoConfig, repoName) {
     return;
   }
 
+  const knownKeys = getCachedKnownRepoConfigKeys();
+
   for (const key of Object.keys(repoConfig)) {
-    if (!KNOWN_REPO_CONFIG_KEYS.has(key)) {
+    if (!knownKeys.has(key)) {
       core.warning(
         `⚠️  Unknown configuration key "${key}" found for repository "${repoName}". ` +
           `This setting may not exist, may not be available in this version, or may have a typo.`
