@@ -606,7 +606,7 @@ For better security and rate limits, use a GitHub App:
 ```yml
 - name: Generate GitHub App Token
   id: app-token
-  uses: actions/create-github-app-token@v1
+  uses: actions/create-github-app-token@v2
   with:
     app-id: ${{ secrets.APP_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -664,7 +664,7 @@ jobs:
         id: app-token
         with:
           app-id: ${{ vars.APP_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
       - name: Update Repository Settings
