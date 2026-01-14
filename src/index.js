@@ -60,8 +60,8 @@ const KNOWN_REPO_CONFIG_KEYS = new Set([
   'autolinks-file',
   'copilot-instructions-md',
   'package-json-file',
-  'sync-scripts',
-  'sync-engines'
+  'package-json-sync-scripts',
+  'package-json-sync-engines'
 ]);
 
 /**
@@ -2209,8 +2209,8 @@ export async function run() {
 
     // Get package.json sync settings
     const packageJsonFile = getInput('package-json-file');
-    const syncScripts = getBooleanInput('sync-scripts');
-    const syncEngines = getBooleanInput('sync-engines');
+    const syncScripts = getBooleanInput('package-json-sync-scripts');
+    const syncEngines = getBooleanInput('package-json-sync-engines');
     const packageJsonPrTitle = getInput('package-json-pr-title') || 'chore: update package.json';
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
@@ -2239,7 +2239,7 @@ export async function run() {
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with sync-scripts or sync-engines must be specified)'
+        'At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -2546,8 +2546,10 @@ export async function run() {
 
       // Sync package.json if specified
       const repoPackageJsonFile = repoConfig?.['package-json-file'] || packageJsonFile;
-      const repoSyncScripts = repoConfig?.['sync-scripts'] !== undefined ? repoConfig['sync-scripts'] : syncScripts;
-      const repoSyncEngines = repoConfig?.['sync-engines'] !== undefined ? repoConfig['sync-engines'] : syncEngines;
+      const repoSyncScripts =
+        repoConfig?.['package-json-sync-scripts'] !== undefined ? repoConfig['package-json-sync-scripts'] : syncScripts;
+      const repoSyncEngines =
+        repoConfig?.['package-json-sync-engines'] !== undefined ? repoConfig['package-json-sync-engines'] : syncEngines;
 
       if (repoPackageJsonFile && (repoSyncScripts || repoSyncEngines)) {
         core.info(`  📦 Checking package.json...`);

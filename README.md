@@ -454,8 +454,8 @@ Sync npm `scripts` and/or `engines` from a source `package.json` to target repos
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
     package-json-file: './config/package-json/package.json'
-    sync-scripts: true
-    sync-engines: true
+    package-json-sync-scripts: true
+    package-json-sync-engines: true
     package-json-pr-title: 'chore: update package.json'
 ```
 
@@ -465,11 +465,11 @@ Or with repo-specific overrides in `repos.yml`:
 repos:
   - repo: owner/repo1
     package-json-file: './config/package-json/node-package.json'
-    sync-scripts: true
-    sync-engines: true
+    package-json-sync-scripts: true
+    package-json-sync-engines: true
   - repo: owner/repo2
     # Only sync engines (e.g., for Node.js version upgrade)
-    sync-engines: true
+    package-json-sync-engines: true
   - repo: owner/repo3
     # Skip package.json sync for this repo
 ```
@@ -497,9 +497,9 @@ repos:
 }
 ```
 
-Only the fields you enable for syncing (`sync-scripts`, `sync-engines`) will be updated in target repositories. Other fields like `name`, `version`, `dependencies`, `devDependencies`, etc. will be preserved in the target.
+Only the fields you enable for syncing (`package-json-sync-scripts`, `package-json-sync-engines`) will be updated in target repositories. Other fields like `name`, `version`, `dependencies`, `devDependencies`, etc. will be preserved in the target.
 
-> **Tip:** Use `sync-engines` to prepare your repositories for Node.js version upgrades (e.g., Node 20 → Node 22 before GitHub Actions deprecates Node 20 in April 2026).
+> **Tip:** Use `package-json-sync-engines` to prepare your repositories for Node.js version upgrades (e.g., Node 20 → Node 22 before GitHub Actions deprecates Node 20 in April 2026).
 
 ### Organization-wide Updates
 
@@ -572,8 +572,8 @@ Output shows what would change:
 | `copilot-instructions-md`        | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
 | `copilot-instructions-pr-title`  | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
 | `package-json-file`              | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
-| `sync-scripts`                   | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `false`                                 |
-| `sync-engines`                   | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `false`                                 |
+| `package-json-sync-scripts`      | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `false`                                 |
+| `package-json-sync-engines`      | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `false`                                 |
 | `package-json-pr-title`          | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
