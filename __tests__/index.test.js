@@ -70,15 +70,175 @@ const mockOctokit = {
   request: jest.fn()
 };
 
-// Mock fs module
+// Mock fs module - use a real implementation that tracks test content
 const mockFs = {
   readFileSync: jest.fn()
 };
 
-// Mock yaml module
+// Mock yaml module - use a real implementation that tracks test content
 const mockYaml = {
   load: jest.fn()
 };
+
+// Action.yml content for mocking - this represents the inputs that should be considered valid
+const mockActionYmlContent = `
+name: 'Bulk GitHub Repository Settings Sync'
+inputs:
+  github-token:
+    description: 'GitHub token'
+  github-api-url:
+    description: 'GitHub API URL'
+  repositories:
+    description: 'Repositories'
+  repositories-file:
+    description: 'Repositories file'
+  owner:
+    description: 'Owner'
+  allow-squash-merge:
+    description: 'Allow squash merge'
+  allow-merge-commit:
+    description: 'Allow merge commit'
+  allow-rebase-merge:
+    description: 'Allow rebase merge'
+  allow-auto-merge:
+    description: 'Allow auto merge'
+  delete-branch-on-merge:
+    description: 'Delete branch on merge'
+  allow-update-branch:
+    description: 'Allow update branch'
+  immutable-releases:
+    description: 'Immutable releases'
+  enable-default-code-scanning:
+    description: 'Enable default code scanning'
+  topics:
+    description: 'Topics'
+  dependabot-yml:
+    description: 'Dependabot yml'
+  dependabot-pr-title:
+    description: 'Dependabot PR title'
+  gitignore:
+    description: 'Gitignore'
+  gitignore-pr-title:
+    description: 'Gitignore PR title'
+  rulesets-file:
+    description: 'Rulesets file'
+  delete-unmanaged-rulesets:
+    description: 'Delete unmanaged rulesets'
+  pull-request-template:
+    description: 'Pull request template'
+  pull-request-template-pr-title:
+    description: 'Pull request template PR title'
+  workflow-files:
+    description: 'Workflow files'
+  workflow-files-pr-title:
+    description: 'Workflow files PR title'
+  autolinks-file:
+    description: 'Autolinks file'
+  copilot-instructions-md:
+    description: 'Copilot instructions md'
+  copilot-instructions-pr-title:
+    description: 'Copilot instructions PR title'
+  package-json-file:
+    description: 'Package json file'
+  package-json-sync-scripts:
+    description: 'Sync scripts'
+  package-json-sync-engines:
+    description: 'Sync engines'
+  package-json-pr-title:
+    description: 'Package json PR title'
+  dry-run:
+    description: 'Dry run'
+`;
+
+const mockActionYmlParsed = {
+  name: 'Bulk GitHub Repository Settings Sync',
+  inputs: {
+    'github-token': { description: 'GitHub token' },
+    'github-api-url': { description: 'GitHub API URL' },
+    repositories: { description: 'Repositories' },
+    'repositories-file': { description: 'Repositories file' },
+    owner: { description: 'Owner' },
+    'allow-squash-merge': { description: 'Allow squash merge' },
+    'allow-merge-commit': { description: 'Allow merge commit' },
+    'allow-rebase-merge': { description: 'Allow rebase merge' },
+    'allow-auto-merge': { description: 'Allow auto merge' },
+    'delete-branch-on-merge': { description: 'Delete branch on merge' },
+    'allow-update-branch': { description: 'Allow update branch' },
+    'immutable-releases': { description: 'Immutable releases' },
+    'enable-default-code-scanning': { description: 'Enable default code scanning' },
+    topics: { description: 'Topics' },
+    'dependabot-yml': { description: 'Dependabot yml' },
+    'dependabot-pr-title': { description: 'Dependabot PR title' },
+    gitignore: { description: 'Gitignore' },
+    'gitignore-pr-title': { description: 'Gitignore PR title' },
+    'rulesets-file': { description: 'Rulesets file' },
+    'delete-unmanaged-rulesets': { description: 'Delete unmanaged rulesets' },
+    'pull-request-template': { description: 'Pull request template' },
+    'pull-request-template-pr-title': { description: 'Pull request template PR title' },
+    'workflow-files': { description: 'Workflow files' },
+    'workflow-files-pr-title': { description: 'Workflow files PR title' },
+    'autolinks-file': { description: 'Autolinks file' },
+    'copilot-instructions-md': { description: 'Copilot instructions md' },
+    'copilot-instructions-pr-title': { description: 'Copilot instructions PR title' },
+    'package-json-file': { description: 'Package json file' },
+    'package-json-sync-scripts': { description: 'Sync scripts' },
+    'package-json-sync-engines': { description: 'Sync engines' },
+    'package-json-pr-title': { description: 'Package json PR title' },
+    'dry-run': { description: 'Dry run' }
+  }
+};
+
+// Track test-specific mock content
+let testMockFiles = {};
+let testMockYamlResults = {};
+
+// Setup default mock implementations for fs and yaml that handle action.yml
+function setupDefaultMocks() {
+  // Reset test-specific content
+  testMockFiles = {};
+  testMockYamlResults = {};
+
+  // Default fs.readFileSync that handles action.yml and test files
+  mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+    if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+      return mockActionYmlContent;
+    }
+    // Check if there's test-specific content for this path
+    if (testMockFiles[filePath]) {
+      return testMockFiles[filePath];
+    }
+    // Return the default test content if set
+    if (testMockFiles['__default__']) {
+      return testMockFiles['__default__'];
+    }
+    return '';
+  });
+
+  // Default yaml.load that handles action.yml parsed content and test content
+  mockYaml.load.mockImplementation(content => {
+    if (content === mockActionYmlContent) {
+      return mockActionYmlParsed;
+    }
+    // Check if there's test-specific parsed result for this content
+    if (testMockYamlResults[content]) {
+      return testMockYamlResults[content];
+    }
+    // Return the default test yaml if set
+    if (testMockYamlResults['__default__']) {
+      return testMockYamlResults['__default__'];
+    }
+    return {};
+  });
+}
+
+// Helper functions for tests to set mock content without breaking action.yml handling
+function setMockFileContent(content, filePath = '__default__') {
+  testMockFiles[filePath] = content;
+}
+
+function setMockYamlContent(result, forContent = '__default__') {
+  testMockYamlResults[forContent] = result;
+}
 
 // Mock the modules before importing the main module
 jest.unstable_mockModule('@actions/core', () => mockCore);
@@ -88,6 +248,9 @@ jest.unstable_mockModule('@octokit/rest', () => ({
 }));
 jest.unstable_mockModule('fs', () => mockFs);
 jest.unstable_mockModule('js-yaml', () => mockYaml);
+
+// Setup default mocks before importing (for action.yml reading during module load)
+setupDefaultMocks();
 
 // Import the main module and helper functions after mocking
 const {
@@ -107,6 +270,9 @@ const {
 describe('Bulk GitHub Repository Settings Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Re-setup default mocks after clearing (needed for action.yml reading)
+    setupDefaultMocks();
 
     // Reset Octokit mock
     mockOctokit.rest.repos.update.mockClear();
@@ -165,8 +331,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should parse repository list from YAML with repos array', async () => {
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n  - repo: owner/repo2');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n  - repo: owner/repo2');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]
       });
 
@@ -175,10 +341,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should parse repository list with settings overrides', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        'repos:\n  - repo: owner/repo1\n    allow-squash-merge: false\n  - repo: owner/repo2'
-      );
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false\n  - repo: owner/repo2');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false }, { repo: 'owner/repo2' }]
       });
 
@@ -187,8 +351,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle mixed string and object format in repos array', async () => {
-      mockFs.readFileSync.mockReturnValue('repos:\n  - owner/repo1\n  - repo: owner/repo2');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - owner/repo1\n  - repo: owner/repo2');
+      setMockYamlContent({
         repos: ['owner/repo1', { repo: 'owner/repo2' }]
       });
 
@@ -197,8 +361,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should warn about unknown configuration keys in repo config', async () => {
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    unknown-setting: true');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    unknown-setting: true');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'unknown-setting': true, gitignor: 'path/to/file' }]
       });
 
@@ -211,8 +375,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should not warn about known configuration keys in repo config', async () => {
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false, gitignore: 'path/to/file' }]
       });
 
@@ -224,8 +388,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should reject YAML file without repos array', async () => {
-      mockFs.readFileSync.mockReturnValue('repositories:\n  - owner/repo1');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repositories:\n  - owner/repo1');
+      setMockYamlContent({
         repositories: ['owner/repo1']
       });
 
@@ -1144,8 +1308,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    allow-squash-merge: false');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false }, { repo: 'owner/repo2' }]
       });
 
@@ -1195,8 +1359,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    topics: repo-topic1,repo-topic2');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    topics: repo-topic1,repo-topic2');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', topics: 'repo-topic1,repo-topic2' }]
       });
 
@@ -1234,8 +1398,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('repos:\n  - repo: owner/repo1\n    topics:\n      - topic1\n      - topic2');
-      mockYaml.load.mockReturnValue({
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    topics:\n      - topic1\n      - topic2');
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', topics: ['topic1', 'topic2'] }]
       });
 
@@ -1273,13 +1437,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockImplementation(filePath => {
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
         if (filePath === 'repos.yml') {
           return 'repos:\n  - repo: owner/repo1\n    workflow-files: repo-workflow.yml';
         }
         return 'name: Test Workflow';
       });
-      mockYaml.load.mockReturnValue({
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'workflow-files': 'repo-workflow.yml' }]
       });
 
@@ -1321,13 +1488,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockImplementation(filePath => {
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
         if (filePath === 'repos.yml') {
           return 'repos:\n  - repo: owner/repo1\n    workflow-files:\n      - file1.yml\n      - file2.yml';
         }
         return 'name: Test Workflow';
       });
-      mockYaml.load.mockReturnValue({
+      setMockYamlContent({
         repos: [{ repo: 'owner/repo1', 'workflow-files': ['file1.yml', 'file2.yml'] }]
       });
 
@@ -1369,7 +1539,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('version: 2\nupdates: []');
+      setMockFileContent('version: 2\nupdates: []');
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           default_branch: 'main',
@@ -1413,7 +1583,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('node_modules/\n.env');
+      setMockFileContent('node_modules/\n.env');
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           default_branch: 'main',
@@ -1493,7 +1663,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('name: CI\non: push');
+      setMockFileContent('name: CI\non: push');
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           default_branch: 'main',
@@ -1573,7 +1743,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('# Copilot Instructions\n\nBe helpful.');
+      setMockFileContent('# Copilot Instructions\n\nBe helpful.');
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           default_branch: 'main',
@@ -1675,7 +1845,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      mockFs.readFileSync.mockReturnValue('## Description\n\nPlease describe your changes.');
+      setMockFileContent('## Description\n\nPlease describe your changes.');
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
           default_branch: 'main',
@@ -1803,7 +1973,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const testDependabotContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
 
-      mockFs.readFileSync.mockReturnValue(testDependabotContent);
+      setMockFileContent(testDependabotContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -1867,7 +2037,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const oldContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -1924,7 +2094,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const content =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
 
-      mockFs.readFileSync.mockReturnValue(content);
+      setMockFileContent(content);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -1961,7 +2131,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const oldContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2031,7 +2201,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const oldContent =
         'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2078,7 +2248,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle dry-run mode', async () => {
       const newContent = 'version: 2\nupdates:\n  - package-ecosystem: "npm"';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2142,7 +2312,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue('version: 2');
+      setMockFileContent('version: 2');
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
@@ -2168,7 +2338,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
         data: { id: 123, name: 'ci' }
@@ -2206,7 +2376,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
       });
@@ -2256,7 +2426,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         updated_at: '2024-01-01T00:00:00Z'
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 789, name: 'ci' }]
       });
@@ -2321,7 +2491,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         current_user_can_bypass: 'always'
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 456, name: 'ci' }]
       });
@@ -2348,7 +2518,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, true);
@@ -2375,7 +2545,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
       });
@@ -2412,7 +2582,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle invalid JSON in ruleset file', async () => {
-      mockFs.readFileSync.mockReturnValue('{ invalid json }');
+      setMockFileContent('{ invalid json }');
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './invalid.json', false, false);
 
@@ -2427,7 +2597,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
 
@@ -2443,7 +2613,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(new Error('API rate limit exceeded'));
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
@@ -2460,7 +2630,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         rules: [{ type: 'deletion' }]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       const error404 = new Error('Not Found');
       error404.status = 404;
       mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(error404);
@@ -2487,7 +2657,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 456, name: 'old-ruleset' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2531,7 +2701,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 789, name: 'another-old-ruleset' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2568,7 +2738,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 789, name: 'old-ruleset' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2618,7 +2788,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 456, name: 'ci2' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2656,7 +2826,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 456, name: 'unmanaged-ruleset' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2692,7 +2862,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const existingRulesets = [{ id: 456, name: 'unmanaged-ruleset' }];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2722,7 +2892,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 456, name: 'ci2' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2757,7 +2927,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { id: 456, name: 'ci2' }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(rulesetConfig));
+      setMockFileContent(JSON.stringify(rulesetConfig));
       mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
         data: existingRulesets
       });
@@ -2800,7 +2970,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should create pull request template when it does not exist', async () => {
       const testTemplateContent = '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added';
 
-      mockFs.readFileSync.mockReturnValue(testTemplateContent);
+      setMockFileContent(testTemplateContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2863,7 +3033,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         '## Description\n\nDescribe your changes here\n\n## Checklist\n\n- [ ] Tests added\n- [ ] Docs updated';
       const oldContent = '## Description\n\nDescribe your changes here';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2919,7 +3089,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should not create PR when content is unchanged', async () => {
       const content = '## Description\n\nDescribe your changes here';
 
-      mockFs.readFileSync.mockReturnValue(content);
+      setMockFileContent(content);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -2954,7 +3124,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = '## Description\n\nNew content';
       const oldContent = '## Description\n\nOld content';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -3022,7 +3192,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = '## Description\n\nNew content';
       const oldContent = '## Description\n\nOld content';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -3069,7 +3239,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle dry-run mode', async () => {
       const newContent = '## Description\n\nNew template';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -3133,7 +3303,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue('## Description');
+      setMockFileContent('## Description');
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
@@ -3167,7 +3337,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should create workflow files when they do not exist', async () => {
       const testWorkflowContent = 'name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest';
 
-      mockFs.readFileSync.mockReturnValue(testWorkflowContent);
+      setMockFileContent(testWorkflowContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -3230,7 +3400,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'name: CI\non: [push, pull_request]\njobs:\n  build:\n    runs-on: ubuntu-latest';
       const oldContent = 'name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -3335,7 +3505,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should not create PR when all files are unchanged', async () => {
       const content = 'name: CI\non: [push]';
 
-      mockFs.readFileSync.mockReturnValue(content);
+      setMockFileContent(content);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -3368,7 +3538,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'name: CI\non: [push, pull_request]';
       const oldContent = 'name: CI\non: [push]';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -3422,7 +3592,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'name: CI\non: [push, pull_request]';
       const oldContent = 'name: CI\non: [push]';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -3466,7 +3636,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle dry-run mode for new file creation', async () => {
       const newContent = 'name: CI\non: [push]';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -3497,7 +3667,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'name: CI\non: [push, pull_request]';
       const oldContent = 'name: CI\non: [push]';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -3664,7 +3834,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue('name: CI');
+      setMockFileContent('name: CI');
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
@@ -3761,7 +3931,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
       mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
 
@@ -3809,7 +3979,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
       mockOctokit.rest.repos.deleteAutolink.mockResolvedValue({});
 
@@ -3847,7 +4017,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
       mockOctokit.rest.repos.deleteAutolink.mockResolvedValue({});
       mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
@@ -3892,7 +4062,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
@@ -3921,7 +4091,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
       mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
 
@@ -3945,7 +4115,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', true);
@@ -3972,7 +4142,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', true);
@@ -4004,7 +4174,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle invalid JSON in autolinks file', async () => {
-      mockFs.readFileSync.mockReturnValue('not valid json');
+      setMockFileContent('not valid json');
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
 
@@ -4013,7 +4183,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle missing autolinks array in config', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify({ links: [] }));
+      setMockFileContent(JSON.stringify({ links: [] }));
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
 
@@ -4031,7 +4201,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
 
@@ -4050,7 +4220,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockRejectedValue({ status: 404 });
       mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
 
@@ -4072,7 +4242,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockRejectedValue(new Error('API rate limit exceeded'));
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
@@ -4092,7 +4262,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: [] });
       mockOctokit.rest.repos.createAutolink.mockResolvedValue({});
 
@@ -4128,7 +4298,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       ];
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(autolinksConfig));
+      setMockFileContent(JSON.stringify(autolinksConfig));
       mockOctokit.rest.repos.listAutolinks.mockResolvedValue({ data: existingAutolinks });
 
       const result = await syncAutolinks(mockOctokit, 'owner/repo', './autolinks.json', false);
@@ -4156,7 +4326,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should create .gitignore when it does not exist', async () => {
       const testContent = 'node_modules/\n.env\n';
 
-      mockFs.readFileSync.mockReturnValue(testContent);
+      setMockFileContent(testContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4200,7 +4370,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'node_modules/\n.env\ndist/\n';
       const oldContent = 'node_modules/\n.env\n';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4244,7 +4414,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoSpecific = `${marker}\n# Custom entries\n*.custom\n`;
       const oldContent = `node_modules/\nold-entry/\n${repoSpecific}`;
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4291,7 +4461,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should not create PR when content is unchanged', async () => {
       const content = 'node_modules/\n.env\n';
 
-      mockFs.readFileSync.mockReturnValue(content);
+      setMockFileContent(content);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4318,7 +4488,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = 'node_modules/\n.env\ndist/\n';
       const oldContent = 'node_modules/\n.env\n';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4349,7 +4519,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle dry-run mode', async () => {
       const newContent = 'node_modules/\n.env\n';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4408,7 +4578,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue('node_modules/\n');
+      setMockFileContent('node_modules/\n');
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
@@ -4436,7 +4606,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should create copilot-instructions.md when it does not exist', async () => {
       const testContent = '# GitHub Copilot Instructions\n\nPlease follow our coding standards.';
 
-      mockFs.readFileSync.mockReturnValue(testContent);
+      setMockFileContent(testContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -4498,7 +4668,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = '# GitHub Copilot Instructions\n\nUpdated coding standards.';
       const oldContent = '# GitHub Copilot Instructions\n\nOld coding standards.';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -4554,7 +4724,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should not create PR when content is unchanged', async () => {
       const content = '# GitHub Copilot Instructions\n\nCoding standards.';
 
-      mockFs.readFileSync.mockReturnValue(content);
+      setMockFileContent(content);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -4589,7 +4759,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const newContent = '# GitHub Copilot Instructions\n\nUpdated standards.';
       const oldContent = '# GitHub Copilot Instructions\n\nOld standards.';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -4636,7 +4806,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should handle dry-run mode', async () => {
       const newContent = '# GitHub Copilot Instructions\n\nNew standards.';
 
-      mockFs.readFileSync.mockReturnValue(newContent);
+      setMockFileContent(newContent);
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -4701,7 +4871,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue('# Copilot Instructions');
+      setMockFileContent('# Copilot Instructions');
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
@@ -4747,7 +4917,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+      setMockFileContent(JSON.stringify(sourcePackageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4813,7 +4983,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+      setMockFileContent(JSON.stringify(sourcePackageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4873,7 +5043,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         engines: { node: '>=20.0.0' }
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+      setMockFileContent(JSON.stringify(sourcePackageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4921,7 +5091,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         scripts: { test: 'jest' }
       };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(packageJson));
+      setMockFileContent(JSON.stringify(packageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4953,7 +5123,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const sourcePackageJson = { scripts: { test: 'jest' } };
       const existingPackageJson = { scripts: { test: 'mocha' } };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+      setMockFileContent(JSON.stringify(sourcePackageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -4990,7 +5160,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const sourcePackageJson = { scripts: { test: 'jest' } };
       const existingPackageJson = { scripts: { test: 'mocha' } };
 
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(sourcePackageJson));
+      setMockFileContent(JSON.stringify(sourcePackageJson));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -5024,7 +5194,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should fail when package.json does not exist in target repo', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify({ scripts: {} }));
+      setMockFileContent(JSON.stringify({ scripts: {} }));
 
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: { default_branch: 'main' }
@@ -5096,7 +5266,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should handle API errors', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify({ scripts: {} }));
+      setMockFileContent(JSON.stringify({ scripts: {} }));
 
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
 
