@@ -264,12 +264,16 @@ const {
   syncWorkflowFiles,
   syncAutolinks,
   syncCopilotInstructions,
-  syncPackageJson
+  syncPackageJson,
+  resetKnownRepoConfigKeysCache
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Reset the known repo config keys cache for test isolation
+    resetKnownRepoConfigKeysCache();
 
     // Re-setup default mocks after clearing (needed for action.yml reading)
     setupDefaultMocks();
@@ -5282,6 +5286,89 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync package.json');
+    });
+  });
+
+  describe('getKnownRepoConfigKeys cache and error handling', () => {
+    test('should cache known repo config keys across calls', async () => {
+      // Reset cache to start fresh
+      resetKnownRepoConfigKeysCache();
+
+      // Setup mock that tracks calls
+      let readCount = 0;
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          readCount++;
+          return mockActionYmlContent;
+        }
+        return '';
+      });
+
+      // Parse repositories twice - should only read action.yml once due to caching
+      setMockYamlContent({ repos: [{ repo: 'owner/repo1', 'unknown-key': true }] });
+      await parseRepositories('', 'repos.yml', '', mockOctokit);
+
+      setMockYamlContent({ repos: [{ repo: 'owner/repo2', 'another-unknown': true }] });
+      await parseRepositories('', 'repos2.yml', '', mockOctokit);
+
+      // action.yml should only be read once (cached after first call)
+      expect(readCount).toBe(1);
+    });
+
+    test('should warn and fallback when action.yml cannot be read', async () => {
+      // Reset cache to force re-read
+      resetKnownRepoConfigKeysCache();
+
+      // Mock fs.readFileSync to throw error for action.yml
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          throw new Error('ENOENT: no such file or directory');
+        }
+        return '';
+      });
+
+      // Parse repositories with a known key (repo) and unknown key
+      setMockYamlContent({ repos: [{ repo: 'owner/repo1', 'allow-squash-merge': false }] });
+      await parseRepositories('', 'repos.yml', '', mockOctokit);
+
+      // Should warn about failing to read action.yml
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Could not read action.yml to determine valid configuration keys')
+      );
+
+      // With fallback, only 'repo' is known, so 'allow-squash-merge' should be flagged as unknown
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown configuration key "allow-squash-merge"')
+      );
+    });
+
+    test('should reset cache when resetKnownRepoConfigKeysCache is called', async () => {
+      // Setup mock that tracks calls
+      let readCount = 0;
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          readCount++;
+          return mockActionYmlContent;
+        }
+        return '';
+      });
+
+      // Reset and parse - should read action.yml
+      resetKnownRepoConfigKeysCache();
+      setMockYamlContent({ repos: [{ repo: 'owner/repo1' }] });
+      await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(readCount).toBe(1);
+
+      // Parse again without reset - should NOT read action.yml (cached)
+      setMockYamlContent({ repos: [{ repo: 'owner/repo2' }] });
+      await parseRepositories('', 'repos2.yml', '', mockOctokit);
+      expect(readCount).toBe(1);
+
+      // Reset and parse again - should read action.yml again
+      resetKnownRepoConfigKeysCache();
+      setMockYamlContent({ repos: [{ repo: 'owner/repo3' }] });
+      await parseRepositories('', 'repos3.yml', '', mockOctokit);
+      expect(readCount).toBe(2);
     });
   });
 });
