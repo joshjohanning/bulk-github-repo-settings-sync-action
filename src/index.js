@@ -54,10 +54,14 @@ const KNOWN_REPO_CONFIG_KEYS = new Set([
   'dependabot-yml',
   'gitignore',
   'rulesets-file',
+  'delete-unmanaged-rulesets',
   'pull-request-template',
   'workflow-files',
   'autolinks-file',
-  'copilot-instructions-md'
+  'copilot-instructions-md',
+  'package-json-file',
+  'sync-scripts',
+  'sync-engines'
 ]);
 
 /**
