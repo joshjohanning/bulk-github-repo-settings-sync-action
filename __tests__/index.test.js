@@ -108,8 +108,10 @@ inputs:
     description: 'Allow update branch'
   immutable-releases:
     description: 'Immutable releases'
+  code-scanning:
+    description: 'Code scanning'
   enable-default-code-scanning:
-    description: 'Enable default code scanning'
+    description: 'Enable default code scanning (deprecated)'
   topics:
     description: 'Topics'
   dependabot-yml:
@@ -165,7 +167,8 @@ const mockActionYmlParsed = {
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
     'immutable-releases': { description: 'Immutable releases' },
-    'enable-default-code-scanning': { description: 'Enable default code scanning' },
+    'code-scanning': { description: 'Code scanning' },
+    'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
     topics: { description: 'Topics' },
     'dependabot-yml': { description: 'Dependabot yml' },
     'dependabot-pr-title': { description: 'Dependabot PR title' },
@@ -316,7 +319,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'allow-auto-merge': '',
         'delete-branch-on-merge': '',
         'allow-update-branch': '',
-        'enable-default-code-scanning': '',
+        'code-scanning': '',
         'immutable-releases': '',
         topics: '',
         'dependabot-yml': '',
@@ -465,7 +468,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: true
       };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
@@ -495,7 +507,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningEnabled).toBe(true);
@@ -520,7 +532,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningWarning).toContain('Could not process CodeQL');
@@ -543,7 +555,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'github-actions', 'automation'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        topics,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.topicsUpdated).toBe(true);
@@ -572,7 +593,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        topics,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.topicsWarning).toContain('Could not process topics');
@@ -589,7 +619,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(mockOctokit.rest.repos.getAllTopics).not.toHaveBeenCalled();
@@ -611,7 +650,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUpdated).toBe(true);
@@ -649,7 +697,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, false, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        false,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUpdated).toBe(true);
@@ -678,7 +735,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUnchanged).toBe(true);
@@ -699,7 +765,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesWarning).toContain('Could not process immutable releases');
@@ -721,7 +796,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.currentImmutableReleases).toBe(false);
@@ -742,7 +826,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       // request should not be called at all when immutableReleases is null
@@ -772,7 +865,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: null
       };
 
-      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, false);
 
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
@@ -784,7 +877,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'invalid-repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
@@ -794,7 +896,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('API Error');
@@ -806,7 +917,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(error403);
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.accessDenied).toBe(true);
@@ -825,7 +945,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -852,7 +981,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -877,7 +1015,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.changes).toHaveLength(1);
@@ -899,7 +1046,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, true); // dry-run
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, true); // dry-run
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -931,7 +1078,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, true, topics, true);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        true,
+        true,
+        topics,
+        null,
+        true
+      );
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -1023,7 +1179,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -1056,7 +1212,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'enable-default-code-scanning': 'true'
+          'code-scanning': 'true'
         };
         return inputs[name] || '';
       });
@@ -1200,7 +1356,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'enable-default-code-scanning': 'true'
+          'code-scanning': 'true'
         };
         return inputs[name] || '';
       });
