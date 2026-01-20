@@ -43,8 +43,24 @@ inputs:
   immutable-releases:
     description: 'Enable immutable releases to prevent release deletion and modification'
     required: false
+  code-scanning:
+    description: 'Enable or disable default code scanning setup'
+    required: false
   enable-default-code-scanning:
-    description: 'Enable default code scanning setup'
+    description: 'DEPRECATED: Use code-scanning instead. Enable default code scanning setup.'
+    required: false
+    deprecationMessage: 'enable-default-code-scanning is deprecated. Use code-scanning instead.'
+  secret-scanning:
+    description: 'Enable or disable secret scanning for repositories'
+    required: false
+  secret-scanning-push-protection:
+    description: 'Enable or disable secret scanning push protection for repositories'
+    required: false
+  dependabot-alerts:
+    description: 'Enable or disable Dependabot alerts (vulnerability alerts) for repositories. Also enables the dependency graph.'
+    required: false
+  dependabot-security-updates:
+    description: 'Enable or disable Dependabot security updates for repositories'
     required: false
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'

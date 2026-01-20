@@ -20,6 +20,10 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔄 Configure pull request branch update suggestions
 - 📊 Enable default CodeQL code scanning
 - 🔒 **Enable or disable immutable releases** to prevent release deletion and modification
+- 🔍 **Enable or disable secret scanning** to detect exposed secrets
+- 🛡️ **Enable or disable secret scanning push protection** to block commits with secrets
+- 🤖 **Enable or disable Dependabot alerts** for vulnerability notifications
+- 🔄 **Enable or disable Dependabot security updates** for automated security fixes
 - 🏷️ Manage repository topics
 - 🔄 **Sync dependabot.yml files** across repositories via pull requests
 - 🔄 **Sync .gitignore files** across repositories via pull requests (preserves repo-specific content)
@@ -47,8 +51,12 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-squash-merge: true
     allow-merge-commit: false
     delete-branch-on-merge: true
-    enable-default-code-scanning: true
+    code-scanning: true
     immutable-releases: true
+    secret-scanning: true
+    secret-scanning-push-protection: true
+    dependabot-alerts: true
+    dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     pull-request-template: './config/templates/pull_request_template.md'
@@ -69,7 +77,7 @@ repos:
     topics: 'javascript,special-config'
   - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
-    enable-default-code-scanning: false
+    code-scanning: false
 ```
 
 Use in workflow:
@@ -83,7 +91,7 @@ Use in workflow:
     # Global defaults (overridden per-repo in YAML)
     allow-squash-merge: true
     delete-branch-on-merge: true
-    enable-default-code-scanning: true
+    code-scanning: true
     topics: 'javascript,github-actions'
 ```
 
@@ -545,40 +553,44 @@ Output shows what would change:
 
 ## Action Inputs
 
-| Input                            | Description                                                                                                                                | Required | Default                                 |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --------------------------------------- |
-| `github-token`                   | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                                       |
-| `github-api-url`                 | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`                 |
-| `repositories`                   | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                       |
-| `repositories-file`              | Path to YAML file containing repository list                                                                                               | No\*     | -                                       |
-| `owner`                          | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                                       |
-| `allow-squash-merge`             | Allow squash merging pull requests                                                                                                         | No       | -                                       |
-| `allow-merge-commit`             | Allow merge commits for pull requests                                                                                                      | No       | -                                       |
-| `allow-rebase-merge`             | Allow rebase merging pull requests                                                                                                         | No       | -                                       |
-| `allow-auto-merge`               | Allow auto-merge on pull requests                                                                                                          | No       | -                                       |
-| `delete-branch-on-merge`         | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                       |
-| `allow-update-branch`            | Always suggest updating pull request branches                                                                                              | No       | -                                       |
-| `immutable-releases`             | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                                       |
-| `enable-default-code-scanning`   | Enable default code scanning setup                                                                                                         | No       | -                                       |
-| `topics`                         | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                       |
-| `dependabot-yml`                 | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                       |
-| `dependabot-pr-title`            | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`          |
-| `gitignore`                      | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                    | No       | -                                       |
-| `gitignore-pr-title`             | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`              |
-| `rulesets-file`                  | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                       |
-| `delete-unmanaged-rulesets`      | Delete all other rulesets besides the one being synced                                                                                     | No       | `false`                                 |
-| `pull-request-template`          | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                       |
-| `pull-request-template-pr-title` | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template`   |
-| `workflow-files`                 | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                       |
-| `workflow-files-pr-title`        | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`    |
-| `autolinks-file`                 | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                       |
-| `copilot-instructions-md`        | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
-| `copilot-instructions-pr-title`  | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
-| `package-json-file`              | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
-| `package-json-sync-scripts`      | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `true`                                  |
-| `package-json-sync-engines`      | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                  |
-| `package-json-pr-title`          | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
-| `dry-run`                        | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
+| Input                             | Description                                                                                                                                | Required | Default                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --------------------------------------- |
+| `github-token`                    | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                                       |
+| `github-api-url`                  | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`                 |
+| `repositories`                    | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                       |
+| `repositories-file`               | Path to YAML file containing repository list                                                                                               | No\*     | -                                       |
+| `owner`                           | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                                       |
+| `allow-squash-merge`              | Allow squash merging pull requests                                                                                                         | No       | -                                       |
+| `allow-merge-commit`              | Allow merge commits for pull requests                                                                                                      | No       | -                                       |
+| `allow-rebase-merge`              | Allow rebase merging pull requests                                                                                                         | No       | -                                       |
+| `allow-auto-merge`                | Allow auto-merge on pull requests                                                                                                          | No       | -                                       |
+| `delete-branch-on-merge`          | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                       |
+| `allow-update-branch`             | Always suggest updating pull request branches                                                                                              | No       | -                                       |
+| `immutable-releases`              | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                                       |
+| `code-scanning`                   | Enable or disable default code scanning setup                                                                                              | No       | -                                       |
+| `secret-scanning`                 | Enable or disable secret scanning                                                                                                          | No       | -                                       |
+| `secret-scanning-push-protection` | Enable or disable secret scanning push protection                                                                                          | No       | -                                       |
+| `dependabot-alerts`               | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                 | No       | -                                       |
+| `dependabot-security-updates`     | Enable or disable Dependabot security updates (automated security fixes)                                                                   | No       | -                                       |
+| `topics`                          | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                       |
+| `dependabot-yml`                  | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                       |
+| `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`          |
+| `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                    | No       | -                                       |
+| `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`              |
+| `rulesets-file`                   | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                       |
+| `delete-unmanaged-rulesets`       | Delete all other rulesets besides the one being synced                                                                                     | No       | `false`                                 |
+| `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                       |
+| `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template`   |
+| `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                       |
+| `workflow-files-pr-title`         | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`    |
+| `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                       |
+| `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
+| `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
+| `package-json-file`               | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
+| `package-json-sync-scripts`       | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `true`                                  |
+| `package-json-sync-engines`       | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                  |
+| `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
+| `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
 \* Either `repositories` or `repositories-file` must be provided
 
@@ -678,7 +690,7 @@ jobs:
           allow-auto-merge: true
           delete-branch-on-merge: true
           allow-update-branch: true
-          enable-default-code-scanning: true
+          code-scanning: true
           dependabot-pr-title: 'chore: update dependabot.yml'
           dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -705,7 +717,7 @@ repos:
     topics: 'javascript,custom-topic'
   - repo: owner/repo2 # Uses global defaults
   - repo: owner/repo3
-    enable-default-code-scanning: false
+    code-scanning: false
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/custom-ruleset.json'
     pull-request-template: './config/templates/feature-template.md'

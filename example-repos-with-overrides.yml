@@ -6,7 +6,7 @@ repos:
     allow-auto-merge: false
     delete-branch-on-merge: false
     allow-update-branch: false
-    enable-default-code-scanning: false
+    code-scanning: false
     topics: 'javascript,github-actions,automation,different'
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'

@@ -108,8 +108,18 @@ inputs:
     description: 'Allow update branch'
   immutable-releases:
     description: 'Immutable releases'
+  code-scanning:
+    description: 'Code scanning'
   enable-default-code-scanning:
-    description: 'Enable default code scanning'
+    description: 'Enable default code scanning (deprecated)'
+  secret-scanning:
+    description: 'Secret scanning'
+  secret-scanning-push-protection:
+    description: 'Secret scanning push protection'
+  dependabot-alerts:
+    description: 'Dependabot alerts'
+  dependabot-security-updates:
+    description: 'Dependabot security updates'
   topics:
     description: 'Topics'
   dependabot-yml:
@@ -165,7 +175,12 @@ const mockActionYmlParsed = {
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
     'immutable-releases': { description: 'Immutable releases' },
-    'enable-default-code-scanning': { description: 'Enable default code scanning' },
+    'code-scanning': { description: 'Code scanning' },
+    'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
+    'secret-scanning': { description: 'Secret scanning' },
+    'secret-scanning-push-protection': { description: 'Secret scanning push protection' },
+    'dependabot-alerts': { description: 'Dependabot alerts' },
+    'dependabot-security-updates': { description: 'Dependabot security updates' },
     topics: { description: 'Topics' },
     'dependabot-yml': { description: 'Dependabot yml' },
     'dependabot-pr-title': { description: 'Dependabot PR title' },
@@ -316,7 +331,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'allow-auto-merge': '',
         'delete-branch-on-merge': '',
         'allow-update-branch': '',
-        'enable-default-code-scanning': '',
+        'code-scanning': '',
         'immutable-releases': '',
         topics: '',
         'dependabot-yml': '',
@@ -465,7 +480,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: true
       };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
@@ -495,7 +519,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningEnabled).toBe(true);
@@ -520,7 +544,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, false);
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, null, false);
 
       expect(result.success).toBe(true);
       expect(result.codeScanningWarning).toContain('Could not process CodeQL');
@@ -543,7 +567,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'github-actions', 'automation'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        topics,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.topicsUpdated).toBe(true);
@@ -572,7 +605,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, topics, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        topics,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.topicsWarning).toContain('Could not process topics');
@@ -589,7 +631,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(mockOctokit.rest.repos.getAllTopics).not.toHaveBeenCalled();
@@ -611,7 +662,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUpdated).toBe(true);
@@ -649,7 +709,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, false, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        false,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUpdated).toBe(true);
@@ -678,7 +747,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesUnchanged).toBe(true);
@@ -699,7 +777,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.immutableReleasesWarning).toContain('Could not process immutable releases');
@@ -721,7 +808,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, true, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        true,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.currentImmutableReleases).toBe(false);
@@ -742,10 +838,511 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       const settings = { allow_squash_merge: true };
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       // request should not be called at all when immutableReleases is null
+      expect(mockOctokit.request).not.toHaveBeenCalled();
+    });
+
+    test('should enable secret scanning when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: true,
+        secretScanningPushProtection: null,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningUpdated).toBe(true);
+      expect(result.secretScanningChange).toBeDefined();
+      expect(result.secretScanningChange.from).toBe(false);
+      expect(result.secretScanningChange.to).toBe(true);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' }
+          }
+        })
+      );
+    });
+
+    test('should handle secret scanning already enabled', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: true,
+        secretScanningPushProtection: null,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningUnchanged).toBe(true);
+      expect(result.currentSecretScanning).toBe(true);
+    });
+
+    test('should handle secret scanning failures gracefully', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update
+        .mockResolvedValueOnce({}) // First call for settings
+        .mockRejectedValueOnce(new Error('Secret scanning not available')); // Second call for security
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: true,
+        secretScanningPushProtection: null,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningWarning).toContain('Could not process secret scanning');
+    });
+
+    test('should enable secret scanning push protection when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: true,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUpdated).toBe(true);
+      expect(result.secretScanningPushProtectionChange).toBeDefined();
+      expect(result.secretScanningPushProtectionChange.from).toBe(false);
+      expect(result.secretScanningPushProtectionChange.to).toBe(true);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          security_and_analysis: {
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        })
+      );
+    });
+
+    test('should handle secret scanning push protection already enabled', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: true,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUnchanged).toBe(true);
+      expect(result.currentSecretScanningPushProtection).toBe(true);
+    });
+
+    test('should disable secret scanning push protection when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: false,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUpdated).toBe(true);
+      expect(result.secretScanningPushProtectionChange).toBeDefined();
+      expect(result.secretScanningPushProtectionChange.from).toBe(true);
+      expect(result.secretScanningPushProtectionChange.to).toBe(false);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          security_and_analysis: {
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        })
+      );
+    });
+
+    test('should enable Dependabot alerts when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return 404 (disabled)
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: null,
+        dependabotAlerts: true,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotAlertsUpdated).toBe(true);
+      expect(result.dependabotAlertsChange).toBeDefined();
+      expect(result.dependabotAlertsChange.from).toBe(false);
+      expect(result.dependabotAlertsChange.to).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/vulnerability-alerts',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo'
+        })
+      );
+    });
+
+    test('should disable Dependabot alerts when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return 204 (enabled)
+      mockOctokit.request.mockResolvedValueOnce({});
+      // Mock DELETE to disable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: null,
+        dependabotAlerts: false,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotAlertsUpdated).toBe(true);
+      expect(result.dependabotAlertsChange.from).toBe(true);
+      expect(result.dependabotAlertsChange.to).toBe(false);
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/vulnerability-alerts',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo'
+        })
+      );
+    });
+
+    test('should handle Dependabot alerts already in desired state', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return 204 (enabled)
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: null,
+        dependabotAlerts: true,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotAlertsUnchanged).toBe(true);
+      expect(result.currentDependabotAlerts).toBe(true);
+    });
+
+    test('should handle Dependabot security updates enable', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET to return disabled
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: false } });
+      // Mock PUT to enable
+      mockOctokit.request.mockResolvedValueOnce({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: null,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: true
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotSecurityUpdatesUpdated).toBe(true);
+      expect(result.dependabotSecurityUpdatesChange).toBeDefined();
+      expect(result.dependabotSecurityUpdatesChange.from).toBe(false);
+      expect(result.dependabotSecurityUpdatesChange.to).toBe(true);
+    });
+
+    test('should handle security settings in dry-run mode', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      // Mock GET for Dependabot alerts to return 404 (disabled)
+      mockOctokit.request.mockRejectedValueOnce({ status: 404 });
+      // Mock GET for Dependabot security updates to return disabled
+      mockOctokit.request.mockResolvedValueOnce({ data: { enabled: false } });
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: true,
+        secretScanningPushProtection: null,
+        dependabotAlerts: true,
+        dependabotSecurityUpdates: true
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dryRun).toBe(true);
+      expect(result.secretScanningWouldUpdate).toBe(true);
+      expect(result.dependabotAlertsWouldUpdate).toBe(true);
+      expect(result.dependabotSecurityUpdatesWouldUpdate).toBe(true);
+      // Should not call PUT/DELETE in dry-run mode (only GETs for checking status)
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/vulnerability-alerts',
+        expect.anything()
+      );
+    });
+
+    test('should not check security settings when all are null', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: null,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      // Should not call request for security settings when all are null
       expect(mockOctokit.request).not.toHaveBeenCalled();
     });
 
@@ -772,7 +1369,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_update_branch: null
       };
 
-      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, false);
 
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
@@ -784,7 +1381,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'invalid-repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'invalid-repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
@@ -794,7 +1400,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('API Error');
@@ -806,7 +1421,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockRejectedValue(error403);
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.accessDenied).toBe(true);
@@ -825,7 +1449,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -852,7 +1485,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(false);
       expect(result.insufficientPermissions).toBe(true);
@@ -877,7 +1519,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: false };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, false);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
 
       expect(result.success).toBe(true);
       expect(result.changes).toHaveLength(1);
@@ -899,7 +1550,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       const settings = { allow_squash_merge: true };
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, true); // dry-run
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, true); // dry-run
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -931,7 +1582,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const settings = { allow_squash_merge: true };
       const topics = ['javascript', 'test'];
 
-      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, true, topics, true);
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        true,
+        true,
+        topics,
+        null,
+        true
+      );
 
       expect(result.success).toBe(true);
       expect(result.dryRun).toBe(true);
@@ -1023,7 +1683,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or enable-default-code-scanning must be true, or immutable-releases must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -1056,7 +1716,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'enable-default-code-scanning': 'true'
+          'code-scanning': 'true'
         };
         return inputs[name] || '';
       });
@@ -1074,6 +1734,97 @@ describe('Bulk GitHub Repository Settings Action', () => {
         state: 'configured',
         query_suite: 'default'
       });
+    });
+
+    test('should allow code-scanning false as a valid setting (no API call made)', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // code-scanning: false is a valid setting (doesn't fail with "no settings specified")
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      // But the current implementation only supports enabling, so no API call is made
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should show deprecation warning when using old enable-default-code-scanning input', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'enable-default-code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should show deprecation warning when both old and new code-scanning inputs are provided', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false',
+          'enable-default-code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // Should warn about deprecated input
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
+      // New input takes precedence (false means no action, only true enables)
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should not show deprecation warning when only new code-scanning input is used', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      // Should not warn about deprecated input
+      expect(mockCore.warning).not.toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
     });
 
     test('should allow immutable releases as the only setting', async () => {
@@ -1200,7 +1951,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'enable-default-code-scanning': 'true'
+          'code-scanning': 'true'
         };
         return inputs[name] || '';
       });
