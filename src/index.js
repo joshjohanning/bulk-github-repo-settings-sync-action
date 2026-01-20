@@ -2761,7 +2761,7 @@ export async function run() {
     const hasSecuritySettings = Object.values(securitySettings).some(value => value !== null);
     const hasSettings =
       Object.values(settings).some(value => value !== null) ||
-      enableCodeScanning ||
+      enableCodeScanning !== null ||
       immutableReleases !== null ||
       hasSecuritySettings ||
       topics !== null ||

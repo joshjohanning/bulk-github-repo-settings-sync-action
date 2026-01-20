@@ -1595,6 +1595,97 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
+    test('should allow code-scanning false as a valid setting (no API call made)', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // code-scanning: false is a valid setting (doesn't fail with "no settings specified")
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      // But the current implementation only supports enabling, so no API call is made
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should show deprecation warning when using old enable-default-code-scanning input', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'enable-default-code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should show deprecation warning when both old and new code-scanning inputs are provided', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false',
+          'enable-default-code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // Should warn about deprecated input
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
+      // New input takes precedence (false means no action, only true enables)
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should not show deprecation warning when only new code-scanning input is used', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      // Should not warn about deprecated input
+      expect(mockCore.warning).not.toHaveBeenCalledWith(
+        'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
+      );
+    });
+
     test('should allow immutable releases as the only setting', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
