@@ -51,8 +51,8 @@ Update repository settings in bulk across multiple GitHub repositories.
     allow-squash-merge: true
     allow-merge-commit: false
     delete-branch-on-merge: true
-    code-scanning: true
     immutable-releases: true
+    code-scanning: true
     secret-scanning: true
     secret-scanning-push-protection: true
     dependabot-alerts: true
