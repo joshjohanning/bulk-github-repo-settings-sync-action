@@ -2679,9 +2679,11 @@ export async function run() {
     const codeScanningNew = getBooleanInput('code-scanning');
     const codeScanningOld = getBooleanInput('enable-default-code-scanning');
     let enableCodeScanning = codeScanningNew;
-    if (codeScanningNew === null && codeScanningOld !== null) {
+    if (codeScanningOld !== null) {
       core.warning('The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.');
-      enableCodeScanning = codeScanningOld;
+      if (codeScanningNew === null) {
+        enableCodeScanning = codeScanningOld;
+      }
     }
     const immutableReleases = getBooleanInput('immutable-releases');
 
