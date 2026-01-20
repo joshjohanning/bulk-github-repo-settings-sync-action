@@ -112,6 +112,14 @@ inputs:
     description: 'Code scanning'
   enable-default-code-scanning:
     description: 'Enable default code scanning (deprecated)'
+  secret-scanning:
+    description: 'Secret scanning'
+  secret-scanning-push-protection:
+    description: 'Secret scanning push protection'
+  dependabot-alerts:
+    description: 'Dependabot alerts'
+  dependabot-security-updates:
+    description: 'Dependabot security updates'
   topics:
     description: 'Topics'
   dependabot-yml:
@@ -169,6 +177,10 @@ const mockActionYmlParsed = {
     'immutable-releases': { description: 'Immutable releases' },
     'code-scanning': { description: 'Code scanning' },
     'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
+    'secret-scanning': { description: 'Secret scanning' },
+    'secret-scanning-push-protection': { description: 'Secret scanning push protection' },
+    'dependabot-alerts': { description: 'Dependabot alerts' },
+    'dependabot-security-updates': { description: 'Dependabot security updates' },
     topics: { description: 'Topics' },
     'dependabot-yml': { description: 'Dependabot yml' },
     'dependabot-pr-title': { description: 'Dependabot PR title' },
@@ -958,6 +970,135 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.secretScanningWarning).toContain('Could not process secret scanning');
+    });
+
+    test('should enable secret scanning push protection when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: true,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUpdated).toBe(true);
+      expect(result.secretScanningPushProtectionChange).toBeDefined();
+      expect(result.secretScanningPushProtectionChange.from).toBe(false);
+      expect(result.secretScanningPushProtectionChange.to).toBe(true);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          security_and_analysis: {
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        })
+      );
+    });
+
+    test('should handle secret scanning push protection already enabled', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: true,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUnchanged).toBe(true);
+      expect(result.currentSecretScanningPushProtection).toBe(true);
+    });
+
+    test('should disable secret scanning push protection when requested', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true },
+          security_and_analysis: {
+            secret_scanning: { status: 'enabled' },
+            secret_scanning_push_protection: { status: 'enabled' }
+          }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+      const securitySettings = {
+        secretScanning: null,
+        secretScanningPushProtection: false,
+        dependabotAlerts: null,
+        dependabotSecurityUpdates: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        securitySettings,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.secretScanningPushProtectionUpdated).toBe(true);
+      expect(result.secretScanningPushProtectionChange).toBeDefined();
+      expect(result.secretScanningPushProtectionChange.from).toBe(true);
+      expect(result.secretScanningPushProtectionChange.to).toBe(false);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          security_and_analysis: {
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        })
+      );
     });
 
     test('should enable Dependabot alerts when requested', async () => {
