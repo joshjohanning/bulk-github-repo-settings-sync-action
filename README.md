@@ -127,7 +127,7 @@ repos:
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
 - PRs are created using the GitHub API so commits are verified
-- Skips creating new PRs if an open PR already exists for the sync branch
+- If an open PR already exists, updates the PR branch if the source content has changed
 
 ### Syncing Repository Rulesets
 
@@ -260,7 +260,7 @@ repos:
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
 - PRs are created using the GitHub API so commits are verified
-- Skips creating new PRs if an open PR already exists for the sync branch
+- If an open PR already exists, updates the PR branch if the source content has changed
 
 For more information on pull request templates, see the [GitHub documentation](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
 
@@ -298,8 +298,8 @@ repos:
 - If a workflow file doesn't exist, it creates it
 - If it exists but differs, it updates it via PR
 - If all files are identical, no PR is created
-- PRs are created/updated using the GitHub API so commits are verified
-- Avoids creating duplicate PRs when one already exists
+- PRs are created using the GitHub API so commits are verified
+- If an open PR already exists, updates the PR branch if the source content has changed
 - Workflow files are synced to `.github/workflows/<filename>` (preserving the original filename)
 
 For more information on GitHub Actions workflows, see the [GitHub Actions documentation](https://docs.github.com/en/actions/using-workflows).
@@ -396,7 +396,7 @@ repos:
 - If it exists but differs, it updates it via PR
 - If content is identical, no PR is created
 - PRs are created using the GitHub API so commits are verified
-- Skips creating new PRs if an open PR already exists for the sync branch
+- If an open PR already exists, updates the PR branch if the source content has changed
 
 For more information on Copilot instructions, see the [GitHub Copilot documentation](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot).
 
@@ -433,7 +433,7 @@ repos:
 - **Repository-specific entries are preserved**: Content after a `# Repository-specific entries (preserved during sync)` marker is kept intact
 - If content is identical, no PR is created
 - PRs are created using the GitHub API so commits are verified
-- Skips creating new PRs if an open PR already exists for the sync branch
+- If an open PR already exists, updates the PR branch if the source content has changed
 
 **Example: Preserving repo-specific entries**
 
@@ -491,7 +491,7 @@ repos:
 - Merges selected fields (`scripts`, `engines`) while preserving all other fields
 - If selected fields are identical, no PR is created
 - PRs are created using the GitHub API so commits are verified
-- Skips creating new PRs if an open PR already exists for the sync branch
+- If an open PR already exists, updates the PR branch if the source content has changed
 
 **Example source `package.json`:**
 
