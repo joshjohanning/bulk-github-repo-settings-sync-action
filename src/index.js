@@ -623,7 +623,19 @@ export async function updateRepositorySettings(
  * @param {Function} [options.contentProcessor.getComparableExisting] - (existingContent) => content to compare against source
  * @param {Function} [options.contentProcessor.getFinalContent] - (sourceContent, existingContent) => content to commit
  * @param {boolean} dryRun - Preview mode without making actual changes
- * @returns {Promise<Object>} Result object
+ * @returns {Promise<Object>} Result object with `success` boolean and `[resultKey]` status string.
+ *   Possible status values:
+ *   - 'unchanged': File(s) already match source, no action needed
+ *   - 'created': New file(s) created via new PR
+ *   - 'updated': Existing file(s) updated via new PR
+ *   - 'mixed': Both new and existing files synced via new PR
+ *   - 'pr-up-to-date': Existing PR already has the latest content
+ *   - 'pr-updated': Existing PR branch updated with new content
+ *   - 'pr-updated-created': New file(s) added to existing PR branch
+ *   - 'pr-updated-mixed': Both new and updated files committed to existing PR branch
+ *   - 'would-create': Dry-run - would create new file(s)
+ *   - 'would-update': Dry-run - would update existing file(s)
+ *   - 'would-update-pr': Dry-run - would update existing PR branch
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
   const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription, contentProcessor } =
@@ -1454,15 +1466,19 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
 
       // Commit updated package.json to PR branch
       const newContent = `${JSON.stringify(prUpdatedPackageJson, null, 2)}\n`;
-      await octokit.rest.repos.createOrUpdateFileContents({
+      const fileParams = {
         owner,
         repo: repoName,
         path: targetPath,
         message: `chore: update ${targetPath}`,
         content: Buffer.from(newContent).toString('base64'),
-        branch: branchName,
-        sha: prBranchSha || existingSha
-      });
+        branch: branchName
+      };
+      // Only include SHA if file exists in PR branch (for update), omit for creation
+      if (prBranchSha) {
+        fileParams.sha = prBranchSha;
+      }
+      await octokit.rest.repos.createOrUpdateFileContents(fileParams);
       core.info(`  ✍️  Committed changes to ${targetPath} in PR #${existingPR.number}`);
 
       return {

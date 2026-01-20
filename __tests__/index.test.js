@@ -3899,6 +3899,70 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
+    test('should return pr-updated-mixed when existing PR has files created and updated', async () => {
+      const ciContent = 'name: CI\non: [push, pull_request]';
+      const releaseContent = 'name: Release\non: [release]';
+      const oldCiContent = 'name: CI\non: [push]';
+
+      mockFs.readFileSync.mockImplementation(path => {
+        if (path.includes('ci.yml')) return ciContent;
+        if (path.includes('release.yml')) return releaseContent;
+        throw new Error('Unknown file');
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // Mock getContent for default branch check and PR branch check
+      // Default branch: ci.yml exists with old content, release.yml doesn't exist
+      // PR branch: ci.yml exists with old content (needs update), release.yml doesn't exist (needs creation)
+      mockOctokit.rest.repos.getContent.mockImplementation(({ path, ref }) => {
+        if (path === '.github/workflows/ci.yml') {
+          return Promise.resolve({
+            data: {
+              sha: ref === 'main' ? 'ci-sha-default' : 'ci-sha-pr',
+              content: Buffer.from(oldCiContent).toString('base64')
+            }
+          });
+        }
+        // release.yml doesn't exist in default branch or PR branch
+        const error = new Error('Not Found');
+        error.status = 404;
+        return Promise.reject(error);
+      });
+
+      // Existing PR found
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 50,
+            html_url: 'https://github.com/owner/repo/pull/50'
+          }
+        ]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'new-commit-sha' } }
+      });
+
+      const result = await syncWorkflowFiles(
+        mockOctokit,
+        'owner/repo',
+        ['./workflows/ci.yml', './workflows/release.yml'],
+        'chore: update workflow files',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workflowFiles).toBe('pr-updated-mixed');
+      expect(result.prNumber).toBe(50);
+      expect(result.filesCreated).toContain('.github/workflows/release.yml');
+      expect(result.filesUpdated).toContain('.github/workflows/ci.yml');
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
     test('should report pr-up-to-date when PR exists with same content', async () => {
       const content = 'name: CI\non: [push]';
       const oldContent = 'name: CI\non: [pull_request]';
