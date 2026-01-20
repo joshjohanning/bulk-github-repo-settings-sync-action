@@ -788,7 +788,10 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
           finalContent = contentProcessor.getFinalContent(fileInfo.content, prBranchContent);
         }
 
-        const prNeedsUpdate = !prBranchContent || comparablePrContent.trim() !== fileInfo.content.trim();
+        // Use nullish coalescing for safety in case comparablePrContent is null
+        const comparablePrContentTrimmed = (comparablePrContent ?? '').trim();
+        const sourceContentTrimmed = (fileInfo.content ?? '').trim();
+        const prNeedsUpdate = !prBranchContent || comparablePrContentTrimmed !== sourceContentTrimmed;
 
         if (prNeedsUpdate) {
           prBranchFilesToUpdate.push({
@@ -1373,14 +1376,102 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
       core.warning(`  ⚠️  Could not check for existing PRs: ${error.message}`);
     }
 
+    // If there's already an open PR, check if content differs and update if needed
     if (existingPR) {
+      // Fetch package.json from PR branch to compare
+      let prBranchPackageJson = null;
+      let prBranchSha = null;
+
+      try {
+        const { data } = await octokit.rest.repos.getContent({
+          owner,
+          repo: repoName,
+          path: targetPath,
+          ref: branchName
+        });
+        prBranchSha = data.sha;
+        const prBranchContent = Buffer.from(data.content, 'base64').toString('utf8');
+        prBranchPackageJson = JSON.parse(prBranchContent);
+      } catch (error) {
+        if (error.status !== 404) {
+          throw error;
+        }
+        // File doesn't exist in PR branch yet (shouldn't happen for package.json, but handle gracefully)
+        core.info(`  📄 ${targetPath} does not exist in PR branch ${branchName}`);
+      }
+
+      // Check if the PR branch already has the desired content
+      let prNeedsUpdate = true;
+      if (prBranchPackageJson) {
+        const prBranchScripts = prBranchPackageJson.scripts || {};
+        const prBranchEngines = prBranchPackageJson.engines || {};
+        const sourceScripts = sourcePackageJson.scripts || {};
+        const sourceEngines = sourcePackageJson.engines || {};
+
+        const scriptsMatch = !syncScripts || deepEqual(sourceScripts, prBranchScripts);
+        const enginesMatch = !syncEngines || deepEqual(sourceEngines, prBranchEngines);
+
+        prNeedsUpdate = !scriptsMatch || !enginesMatch;
+      }
+
+      if (!prNeedsUpdate) {
+        core.info(`  ✓ PR #${existingPR.number} already has the latest ${targetPath}`);
+        return {
+          repository: repo,
+          success: true,
+          packageJson: 'pr-up-to-date',
+          message: `PR #${existingPR.number} already has the latest ${targetPath}`,
+          prNumber: existingPR.number,
+          prUrl: existingPR.html_url,
+          dryRun
+        };
+      }
+
+      // PR exists but content differs - update the PR branch
+      core.info(`  🔄 PR #${existingPR.number} exists but content differs, will update`);
+
+      if (dryRun) {
+        return {
+          repository: repo,
+          success: true,
+          packageJson: 'would-update-pr',
+          message: `Would update ${targetPath} in existing PR #${existingPR.number}`,
+          prNumber: existingPR.number,
+          prUrl: existingPR.html_url,
+          changes,
+          dryRun
+        };
+      }
+
+      // Build the updated package.json using PR branch content as base (to preserve other fields)
+      const prUpdatedPackageJson = prBranchPackageJson ? { ...prBranchPackageJson } : { ...existingPackageJson };
+      if (syncScripts) {
+        prUpdatedPackageJson.scripts = sourcePackageJson.scripts || {};
+      }
+      if (syncEngines) {
+        prUpdatedPackageJson.engines = sourcePackageJson.engines || {};
+      }
+
+      // Commit updated package.json to PR branch
+      const newContent = `${JSON.stringify(prUpdatedPackageJson, null, 2)}\n`;
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo: repoName,
+        path: targetPath,
+        message: `chore: update ${targetPath}`,
+        content: Buffer.from(newContent).toString('base64'),
+        branch: branchName,
+        sha: prBranchSha || existingSha
+      });
+      core.info(`  ✍️  Committed changes to ${targetPath} in PR #${existingPR.number}`);
+
       return {
         repository: repo,
         success: true,
-        packageJson: 'pr-exists',
-        message: `Open PR #${existingPR.number} already exists for ${targetPath}`,
+        packageJson: 'pr-updated',
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
+        message: `Updated ${targetPath} in existing PR #${existingPR.number}`,
         changes,
         dryRun
       };

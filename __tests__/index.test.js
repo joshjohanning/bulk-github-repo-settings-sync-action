@@ -5563,9 +5563,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
-    test('should report existing open PR when one exists', async () => {
+    test('should update existing PR when content differs', async () => {
       const sourcePackageJson = { scripts: { test: 'jest' } };
       const existingPackageJson = { scripts: { test: 'mocha' } };
+      const prBranchPackageJson = { scripts: { test: 'old-test' } };
 
       setMockFileContent(JSON.stringify(sourcePackageJson));
 
@@ -5573,15 +5574,28 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { default_branch: 'main' }
       });
 
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
-        data: {
-          sha: 'file-sha-111',
-          content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
-        }
-      });
+      // First call: get existing package.json from default branch
+      // Second call: get package.json from PR branch
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-111',
+            content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'pr-file-sha-111',
+            content: Buffer.from(JSON.stringify(prBranchPackageJson)).toString('base64')
+          }
+        });
 
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
+      });
+
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({
+        data: { commit: { sha: 'updated-sha' } }
       });
 
       const result = await syncPackageJson(
@@ -5594,17 +5608,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
         false
       );
 
-      // Note: syncPackageJson has its own implementation that returns pr-exists
-      // (it doesn't use the common syncFilesViaPullRequest function)
       expect(result.success).toBe(true);
-      expect(result.packageJson).toBe('pr-exists');
+      expect(result.packageJson).toBe('pr-updated');
       expect(result.prNumber).toBe(50);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch: 'package-json-sync',
+          sha: 'pr-file-sha-111'
+        })
+      );
       expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
     test('should report pr-up-to-date when PR exists with same content', async () => {
       const sourcePackageJson = { scripts: { test: 'jest' } };
       const existingPackageJson = { scripts: { test: 'mocha' } };
+      // PR branch already has the source scripts
+      const prBranchPackageJson = { scripts: { test: 'jest' } };
 
       setMockFileContent(JSON.stringify(sourcePackageJson));
 
@@ -5612,15 +5633,21 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: { default_branch: 'main' }
       });
 
-      // Note: syncPackageJson has its own implementation that returns pr-exists
-      // when a PR exists (it doesn't use the common syncFilesViaPullRequest function)
-      // This test verifies the current behavior of returning pr-exists
-      mockOctokit.rest.repos.getContent.mockResolvedValue({
-        data: {
-          sha: 'file-sha-default',
-          content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
-        }
-      });
+      // First call: get existing package.json from default branch (different from source)
+      // Second call: get package.json from PR branch (same as source)
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'pr-file-sha',
+            content: Buffer.from(JSON.stringify(prBranchPackageJson)).toString('base64')
+          }
+        });
 
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
@@ -5637,7 +5664,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.packageJson).toBe('pr-exists');
+      expect(result.packageJson).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
@@ -5676,6 +5703,56 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.packageJson).toBe('would-update');
       expect(result.dryRun).toBe(true);
       expect(result.changes).toHaveLength(1);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should return would-update-pr in dry-run mode when PR exists and needs update', async () => {
+      const sourcePackageJson = { scripts: { test: 'jest' } };
+      const existingPackageJson = { scripts: { test: 'mocha' } };
+      const prBranchPackageJson = { scripts: { test: 'old-test' } };
+
+      setMockFileContent(JSON.stringify(sourcePackageJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // First call: get existing package.json from default branch
+      // Second call: get package.json from PR branch (different from source, needs update)
+      mockOctokit.rest.repos.getContent
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'file-sha-default',
+            content: Buffer.from(JSON.stringify(existingPackageJson)).toString('base64')
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            sha: 'pr-file-sha',
+            content: Buffer.from(JSON.stringify(prBranchPackageJson)).toString('base64')
+          }
+        });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 50, html_url: 'https://github.com/owner/repo/pull/50' }]
+      });
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true, // syncScripts
+        false, // syncEngines
+        'chore: update package.json',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('would-update-pr');
+      expect(result.prNumber).toBe(50);
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
