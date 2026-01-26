@@ -294,6 +294,10 @@ export async function parseRepositories(
       .map(v => v.trim())
       .filter(v => v.length > 0);
 
+    if (propertyValues.length === 0) {
+      throw new Error('custom-property-value must contain at least one non-empty value after trimming');
+    }
+
     repoList = await filterRepositoriesByCustomProperty(octokit, owner, customPropertyName, propertyValues);
   }
   // Parse from YAML file if provided

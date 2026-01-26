@@ -539,6 +539,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'custom-property-name must be specified when custom-property-value is provided'
       );
     });
+
+    test('should throw error when custom-property-value contains only empty values', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', ' , , ')).rejects.toThrow(
+        'custom-property-value must contain at least one non-empty value after trimming'
+      );
+    });
   });
 
   describe('filterRepositoriesByCustomProperty', () => {
