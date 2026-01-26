@@ -2484,7 +2484,8 @@ function getChangesList(result, dryRun) {
   if (
     result.dependabotSync?.success &&
     result.dependabotSync.dependabotYml &&
-    result.dependabotSync.dependabotYml !== 'unchanged'
+    result.dependabotSync.dependabotYml !== 'unchanged' &&
+    result.dependabotSync.dependabotYml !== 'pr-up-to-date'
   ) {
     const status = result.dependabotSync.dependabotYml;
     if (status === 'pr-exists') {
@@ -2500,7 +2501,8 @@ function getChangesList(result, dryRun) {
   if (
     result.gitignoreSync?.success &&
     result.gitignoreSync.gitignore &&
-    result.gitignoreSync.gitignore !== 'unchanged'
+    result.gitignoreSync.gitignore !== 'unchanged' &&
+    result.gitignoreSync.gitignore !== 'pr-up-to-date'
   ) {
     const status = result.gitignoreSync.gitignore;
     if (status === 'pr-exists') {
@@ -2513,7 +2515,12 @@ function getChangesList(result, dryRun) {
   }
 
   // Ruleset changes
-  if (result.rulesetSync?.success && result.rulesetSync.ruleset && result.rulesetSync.ruleset !== 'unchanged') {
+  if (
+    result.rulesetSync?.success &&
+    result.rulesetSync.ruleset &&
+    result.rulesetSync.ruleset !== 'unchanged' &&
+    result.rulesetSync.ruleset !== 'pr-up-to-date'
+  ) {
     const status = result.rulesetSync.ruleset;
     if (status.startsWith('would-')) {
       changes.push(`Would sync ruleset`);
@@ -2526,7 +2533,8 @@ function getChangesList(result, dryRun) {
   if (
     result.pullRequestTemplateSync?.success &&
     result.pullRequestTemplateSync.pullRequestTemplate &&
-    result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged'
+    result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged' &&
+    result.pullRequestTemplateSync.pullRequestTemplate !== 'pr-up-to-date'
   ) {
     const status = result.pullRequestTemplateSync.pullRequestTemplate;
     if (status === 'pr-exists') {
@@ -2542,7 +2550,8 @@ function getChangesList(result, dryRun) {
   if (
     result.workflowFilesSync?.success &&
     result.workflowFilesSync.workflowFiles &&
-    result.workflowFilesSync.workflowFiles !== 'unchanged'
+    result.workflowFilesSync.workflowFiles !== 'unchanged' &&
+    result.workflowFilesSync.workflowFiles !== 'pr-up-to-date'
   ) {
     const status = result.workflowFilesSync.workflowFiles;
     if (status === 'pr-exists') {
@@ -2558,7 +2567,8 @@ function getChangesList(result, dryRun) {
   if (
     result.autolinksSync?.success &&
     result.autolinksSync.autolinks &&
-    result.autolinksSync.autolinks !== 'unchanged'
+    result.autolinksSync.autolinks !== 'unchanged' &&
+    result.autolinksSync.autolinks !== 'pr-up-to-date'
   ) {
     const status = result.autolinksSync.autolinks;
     if (status.startsWith('would-')) {
@@ -2572,7 +2582,8 @@ function getChangesList(result, dryRun) {
   if (
     result.copilotInstructionsSync?.success &&
     result.copilotInstructionsSync.copilotInstructions &&
-    result.copilotInstructionsSync.copilotInstructions !== 'unchanged'
+    result.copilotInstructionsSync.copilotInstructions !== 'unchanged' &&
+    result.copilotInstructionsSync.copilotInstructions !== 'pr-up-to-date'
   ) {
     const status = result.copilotInstructionsSync.copilotInstructions;
     if (status === 'pr-exists') {
@@ -2588,7 +2599,8 @@ function getChangesList(result, dryRun) {
   if (
     result.packageJsonSync?.success &&
     result.packageJsonSync.packageJson &&
-    result.packageJsonSync.packageJson !== 'unchanged'
+    result.packageJsonSync.packageJson !== 'unchanged' &&
+    result.packageJsonSync.packageJson !== 'pr-up-to-date'
   ) {
     const status = result.packageJsonSync.packageJson;
     if (status === 'pr-exists') {
@@ -2609,6 +2621,10 @@ function getChangesList(result, dryRun) {
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, or package.json)
  */
 function hasRepositoryChanges(result) {
+  // Helper to check if a sync status represents actual changes
+  // 'unchanged' and 'pr-up-to-date' both mean no changes are needed
+  const hasSyncChanges = status => status && status !== 'unchanged' && status !== 'pr-up-to-date';
+
   return (
     (result.changes && result.changes.length > 0) ||
     result.topicsChange ||
@@ -2620,36 +2636,20 @@ function hasRepositoryChanges(result) {
     result.dependabotSecurityUpdatesChange ||
     (result.dependabotSync &&
       result.dependabotSync.success &&
-      result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged') ||
-    (result.gitignoreSync &&
-      result.gitignoreSync.success &&
-      result.gitignoreSync.gitignore &&
-      result.gitignoreSync.gitignore !== 'unchanged') ||
-    (result.rulesetSync &&
-      result.rulesetSync.success &&
-      result.rulesetSync.ruleset &&
-      result.rulesetSync.ruleset !== 'unchanged') ||
+      hasSyncChanges(result.dependabotSync.dependabotYml)) ||
+    (result.gitignoreSync && result.gitignoreSync.success && hasSyncChanges(result.gitignoreSync.gitignore)) ||
+    (result.rulesetSync && result.rulesetSync.success && hasSyncChanges(result.rulesetSync.ruleset)) ||
     (result.pullRequestTemplateSync &&
       result.pullRequestTemplateSync.success &&
-      result.pullRequestTemplateSync.pullRequestTemplate &&
-      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged') ||
+      hasSyncChanges(result.pullRequestTemplateSync.pullRequestTemplate)) ||
     (result.workflowFilesSync &&
       result.workflowFilesSync.success &&
-      result.workflowFilesSync.workflowFiles &&
-      result.workflowFilesSync.workflowFiles !== 'unchanged') ||
-    (result.autolinksSync &&
-      result.autolinksSync.success &&
-      result.autolinksSync.autolinks &&
-      result.autolinksSync.autolinks !== 'unchanged') ||
+      hasSyncChanges(result.workflowFilesSync.workflowFiles)) ||
+    (result.autolinksSync && result.autolinksSync.success && hasSyncChanges(result.autolinksSync.autolinks)) ||
     (result.copilotInstructionsSync &&
       result.copilotInstructionsSync.success &&
-      result.copilotInstructionsSync.copilotInstructions &&
-      result.copilotInstructionsSync.copilotInstructions !== 'unchanged') ||
-    (result.packageJsonSync &&
-      result.packageJsonSync.success &&
-      result.packageJsonSync.packageJson &&
-      result.packageJsonSync.packageJson !== 'unchanged')
+      hasSyncChanges(result.copilotInstructionsSync.copilotInstructions)) ||
+    (result.packageJsonSync && result.packageJsonSync.success && hasSyncChanges(result.packageJsonSync.packageJson))
   );
 }
 
