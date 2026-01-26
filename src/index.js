@@ -2634,9 +2634,7 @@ function hasRepositoryChanges(result) {
     result.secretScanningPushProtectionChange ||
     result.dependabotAlertsChange ||
     result.dependabotSecurityUpdatesChange ||
-    (result.dependabotSync &&
-      result.dependabotSync.success &&
-      hasSyncChanges(result.dependabotSync.dependabotYml)) ||
+    (result.dependabotSync && result.dependabotSync.success && hasSyncChanges(result.dependabotSync.dependabotYml)) ||
     (result.gitignoreSync && result.gitignoreSync.success && hasSyncChanges(result.gitignoreSync.gitignore)) ||
     (result.rulesetSync && result.rulesetSync.success && hasSyncChanges(result.rulesetSync.ruleset)) ||
     (result.pullRequestTemplateSync &&
