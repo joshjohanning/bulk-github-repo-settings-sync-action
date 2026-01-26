@@ -12,6 +12,7 @@ const mockCore = {
   setFailed: jest.fn(),
   info: jest.fn(),
   warning: jest.fn(),
+  debug: jest.fn(),
   setSecret: jest.fn(),
   summary: {
     addHeading: jest.fn().mockReturnThis(),
@@ -271,6 +272,7 @@ setupDefaultMocks();
 const {
   default: run,
   parseRepositories,
+  filterRepositoriesByCustomProperty,
   updateRepositorySettings,
   syncDependabotYml,
   syncGitignore,
@@ -453,6 +455,194 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should throw error when no repositories specified', async () => {
       await expect(parseRepositories('', '', '', mockOctokit)).rejects.toThrow('No repositories specified');
+    });
+
+    test('should filter repositories by custom property', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      
+      // Mock listing all repositories
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', name: 'repo1' },
+          { full_name: 'my-org/repo2', name: 'repo2' },
+          { full_name: 'my-org/repo3', name: 'repo3' }
+        ]
+      });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: []
+      });
+
+      // Mock custom property API calls
+      mockOctokit.request
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'production' }
+          ]
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'staging' }
+          ]
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'production' }
+          ]
+        });
+
+      const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production');
+      
+      expect(result).toEqual([
+        { repo: 'my-org/repo1' },
+        { repo: 'my-org/repo3' }
+      ]);
+      expect(mockOctokit.request).toHaveBeenCalledTimes(3);
+      expect(mockOctokit.request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/properties/values', {
+        owner: 'my-org',
+        repo: 'repo1'
+      });
+    });
+
+    test('should filter repositories by multiple custom property values', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      
+      // Mock listing all repositories
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', name: 'repo1' },
+          { full_name: 'my-org/repo2', name: 'repo2' },
+          { full_name: 'my-org/repo3', name: 'repo3' }
+        ]
+      });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: []
+      });
+
+      // Mock custom property API calls
+      mockOctokit.request
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'production' }
+          ]
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'staging' }
+          ]
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'development' }
+          ]
+        });
+
+      const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production,staging');
+      
+      expect(result).toEqual([
+        { repo: 'my-org/repo1' },
+        { repo: 'my-org/repo2' }
+      ]);
+    });
+  });
+
+  describe('filterRepositoriesByCustomProperty', () => {
+    test('should throw error when owner is not specified', async () => {
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, '', 'environment', ['production'])
+      ).rejects.toThrow('Owner (organization) must be specified when filtering by custom property');
+    });
+
+    test('should throw error when property name is not specified', async () => {
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'my-org', '', ['production'])
+      ).rejects.toThrow('Custom property name must be specified');
+    });
+
+    test('should throw error when property values are not specified', async () => {
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', [])
+      ).rejects.toThrow('At least one custom property value must be specified');
+    });
+
+    test('should throw error when owner is not an organization', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not found'));
+
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'user-account', 'environment', ['production'])
+      ).rejects.toThrow('Custom properties are only available for organizations');
+    });
+
+    test('should filter repositories by custom property successfully', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      
+      // Mock listing all repositories
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', name: 'repo1' },
+          { full_name: 'my-org/repo2', name: 'repo2' }
+        ]
+      });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: []
+      });
+
+      // Mock custom property API calls
+      mockOctokit.request
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'production' }
+          ]
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { property_name: 'environment', value: 'staging' }
+          ]
+        });
+
+      const result = await filterRepositoriesByCustomProperty(
+        mockOctokit,
+        'my-org',
+        'environment',
+        ['production']
+      );
+      
+      expect(result).toEqual([{ repo: 'my-org/repo1' }]);
+      expect(mockCore.info).toHaveBeenCalledWith(
+        expect.stringContaining('Fetching repositories with custom property "environment"')
+      );
+      expect(mockCore.info).toHaveBeenCalledWith(
+        expect.stringContaining('Found 1 repositories matching custom property filter')
+      );
+    });
+
+    test('should handle repositories without custom properties', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      
+      // Mock listing all repositories
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', name: 'repo1' }
+        ]
+      });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: []
+      });
+
+      // Mock custom property API call returning error (e.g., not enabled)
+      mockOctokit.request.mockRejectedValueOnce(new Error('Not enabled'));
+
+      const result = await filterRepositoriesByCustomProperty(
+        mockOctokit,
+        'my-org',
+        'environment',
+        ['production']
+      );
+      
+      expect(result).toEqual([]);
     });
   });
 

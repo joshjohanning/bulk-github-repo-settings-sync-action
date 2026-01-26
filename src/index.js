@@ -145,18 +145,134 @@ function getBooleanInput(name) {
 }
 
 /**
+ * Get custom property values for a repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @returns {Promise<Array>} Array of custom property objects
+ */
+async function getRepositoryCustomProperties(octokit, owner, repo) {
+  try {
+    const response = await octokit.request('GET /repos/{owner}/{repo}/properties/values', {
+      owner,
+      repo
+    });
+    return response.data || [];
+  } catch (error) {
+    // If the API endpoint is not available or there's an error, return empty array
+    // This could happen if custom properties are not enabled for the org
+    core.debug(`Could not fetch custom properties for ${owner}/${repo}: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * Filter repositories by custom property value
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Owner (organization) name
+ * @param {string} propertyName - Name of the custom property to filter by
+ * @param {Array<string>} propertyValues - Array of property values to match
+ * @returns {Promise<Array>} Array of repository objects matching the custom property
+ */
+export async function filterRepositoriesByCustomProperty(octokit, owner, propertyName, propertyValues) {
+  if (!owner) {
+    throw new Error('Owner (organization) must be specified when filtering by custom property');
+  }
+
+  if (!propertyName) {
+    throw new Error('Custom property name must be specified');
+  }
+
+  if (!propertyValues || propertyValues.length === 0) {
+    throw new Error('At least one custom property value must be specified');
+  }
+
+  try {
+    core.info(`Fetching repositories with custom property "${propertyName}" matching values: ${propertyValues.join(', ')}...`);
+    
+    // First, get all repositories for the organization
+    const allRepos = [];
+    let page = 1;
+    let hasMore = true;
+
+    // Try to fetch as organization first
+    let isOrg = false;
+    try {
+      await octokit.rest.orgs.get({ org: owner });
+      isOrg = true;
+    } catch {
+      throw new Error('Custom properties are only available for organizations, not for user accounts');
+    }
+
+    while (hasMore) {
+      const { data } = await octokit.rest.repos.listForOrg({
+        org: owner,
+        type: 'all',
+        per_page: 100,
+        page
+      });
+
+      if (data.length === 0) {
+        hasMore = false;
+      } else {
+        allRepos.push(...data);
+        page++;
+      }
+    }
+
+    core.info(`Found ${allRepos.length} total repositories, filtering by custom property...`);
+
+    // Now filter repositories by checking their custom properties
+    const matchedRepos = [];
+    for (const repo of allRepos) {
+      const properties = await getRepositoryCustomProperties(octokit, owner, repo.name);
+      
+      // Check if the repository has the specified custom property with any of the matching values
+      const hasMatchingProperty = properties.some(prop => {
+        if (prop.property_name === propertyName) {
+          // Convert property value to string for comparison
+          const propValue = String(prop.value);
+          return propertyValues.includes(propValue);
+        }
+        return false;
+      });
+
+      if (hasMatchingProperty) {
+        matchedRepos.push({ repo: repo.full_name });
+      }
+    }
+
+    core.info(`Found ${matchedRepos.length} repositories matching custom property filter`);
+    return matchedRepos;
+  } catch (error) {
+    throw new Error(`Failed to filter repositories by custom property: ${error.message}`);
+  }
+}
+
+/**
  * Parse repository list from various input sources
  * @param {string} repositories - Comma-separated list or "all"
  * @param {string} repositoriesFile - Path to YAML file
- * @param {string} owner - Owner name (for "all" option)
+ * @param {string} owner - Owner name (for "all" option or custom property filtering)
  * @param {Octokit} octokit - Octokit instance
+ * @param {string} customPropertyName - Name of custom property to filter by (optional)
+ * @param {string} customPropertyValue - Comma-separated list of custom property values to match (optional)
  * @returns {Promise<Array>} Array of repository objects with settings
  */
-export async function parseRepositories(repositories, repositoriesFile, owner, octokit) {
+export async function parseRepositories(repositories, repositoriesFile, owner, octokit, customPropertyName, customPropertyValue) {
   let repoList = [];
 
+  // Filter by custom property if specified
+  if (customPropertyName && customPropertyValue) {
+    const propertyValues = customPropertyValue
+      .split(',')
+      .map(v => v.trim())
+      .filter(v => v.length > 0);
+
+    repoList = await filterRepositoriesByCustomProperty(octokit, owner, customPropertyName, propertyValues);
+  }
   // Parse from YAML file if provided
-  if (repositoriesFile) {
+  else if (repositoriesFile) {
     try {
       const fileContent = fs.readFileSync(repositoriesFile, 'utf8');
       const data = yaml.load(fileContent);
@@ -243,7 +359,9 @@ export async function parseRepositories(repositories, repositoriesFile, owner, o
   }
 
   if (repoList.length === 0) {
-    throw new Error('No repositories specified. Use repositories, repositories-file, or repositories="all" with owner');
+    throw new Error(
+      'No repositories specified. Use repositories, repositories-file, repositories="all" with owner, or custom-property-name with custom-property-value'
+    );
   }
 
   return repoList;
@@ -2664,6 +2782,8 @@ export async function run() {
     const repositories = getInput('repositories');
     const repositoriesFile = getInput('repositories-file');
     const owner = getInput('owner');
+    const customPropertyName = getInput('custom-property-name');
+    const customPropertyValue = getInput('custom-property-value');
 
     // Get settings inputs
     const settings = {
@@ -2786,7 +2906,7 @@ export async function run() {
     });
 
     // Parse repository list
-    const repoList = await parseRepositories(repositories, repositoriesFile, owner, octokit);
+    const repoList = await parseRepositories(repositories, repositoriesFile, owner, octokit, customPropertyName, customPropertyValue);
 
     core.info(`Processing ${repoList.length} repositories...`);
     core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);

@@ -22,6 +22,12 @@ inputs:
   owner:
     description: 'Owner (user or organization) name - required when using "all" for repositories'
     required: false
+  custom-property-name:
+    description: 'Name of the custom property to filter repositories by (organization custom property)'
+    required: false
+  custom-property-value:
+    description: 'Comma-separated list of custom property values to match. Repositories with any of these values will be included.'
+    required: false
   allow-squash-merge:
     description: 'Allow squash merging pull requests'
     required: false
