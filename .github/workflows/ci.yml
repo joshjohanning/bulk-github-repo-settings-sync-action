@@ -17,9 +17,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Check npm version compatibility
-        uses: joshjohanning/npm-version-check-action@v1
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -50,3 +47,6 @@ jobs:
             # Fallback to python yaml check
             python -c "import yaml; yaml.safe_load(open('action.yml'))"
           fi
+
+      - name: Check npm version compatibility
+        uses: joshjohanning/npm-version-check-action@v1
