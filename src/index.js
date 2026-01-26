@@ -188,18 +188,18 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
   }
 
   try {
-    core.info(`Fetching repositories with custom property "${propertyName}" matching values: ${propertyValues.join(', ')}...`);
-    
+    core.info(
+      `Fetching repositories with custom property "${propertyName}" matching values: ${propertyValues.join(', ')}...`
+    );
+
     // First, get all repositories for the organization
     const allRepos = [];
     let page = 1;
     let hasMore = true;
 
     // Try to fetch as organization first
-    let isOrg = false;
     try {
       await octokit.rest.orgs.get({ org: owner });
-      isOrg = true;
     } catch {
       throw new Error('Custom properties are only available for organizations, not for user accounts');
     }
@@ -226,7 +226,7 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
     const matchedRepos = [];
     for (const repo of allRepos) {
       const properties = await getRepositoryCustomProperties(octokit, owner, repo.name);
-      
+
       // Check if the repository has the specified custom property with any of the matching values
       const hasMatchingProperty = properties.some(prop => {
         if (prop.property_name === propertyName) {
@@ -259,7 +259,14 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
  * @param {string} customPropertyValue - Comma-separated list of custom property values to match (optional)
  * @returns {Promise<Array>} Array of repository objects with settings
  */
-export async function parseRepositories(repositories, repositoriesFile, owner, octokit, customPropertyName, customPropertyValue) {
+export async function parseRepositories(
+  repositories,
+  repositoriesFile,
+  owner,
+  octokit,
+  customPropertyName,
+  customPropertyValue
+) {
   let repoList = [];
 
   // Filter by custom property if specified
@@ -2906,7 +2913,14 @@ export async function run() {
     });
 
     // Parse repository list
-    const repoList = await parseRepositories(repositories, repositoriesFile, owner, octokit, customPropertyName, customPropertyValue);
+    const repoList = await parseRepositories(
+      repositories,
+      repositoriesFile,
+      owner,
+      octokit,
+      customPropertyName,
+      customPropertyValue
+    );
 
     core.info(`Processing ${repoList.length} repositories...`);
     core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);

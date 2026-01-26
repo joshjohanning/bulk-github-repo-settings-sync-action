@@ -34,6 +34,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
 - 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 🎯 **Filter repositories by custom property values** for dynamic targeting
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -94,6 +95,47 @@ Use in workflow:
     code-scanning: true
     topics: 'javascript,github-actions'
 ```
+
+### Filtering Repositories by Custom Property
+
+Instead of specifying individual repositories, you can filter repositories by custom property values. This is useful when you have organization-level custom properties to categorize repositories (e.g., by environment, team, or application type).
+
+```yml
+- name: Update Production Repositories
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    owner: 'my-org'
+    custom-property-name: 'environment'
+    custom-property-value: 'production'
+    allow-squash-merge: true
+    delete-branch-on-merge: true
+    immutable-releases: true
+    code-scanning: true
+    secret-scanning: true
+    secret-scanning-push-protection: true
+```
+
+You can also match multiple custom property values:
+
+```yml
+- name: Update Staging and Production Repositories
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    owner: 'my-org'
+    custom-property-name: 'environment'
+    custom-property-value: 'production,staging'
+    rulesets-file: './config/rulesets/prod-ruleset.json'
+    dependabot-yml: './config/dependabot/npm-actions.yml'
+```
+
+**Notes:**
+
+- Custom properties must be configured at the organization level
+- The action will fetch all repositories in the organization and filter by the specified custom property
+- Only repositories with matching custom property values will be updated
+- Custom properties are only available for organizations, not for personal accounts
 
 ### Syncing Dependabot Configuration
 
