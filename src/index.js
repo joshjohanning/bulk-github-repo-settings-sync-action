@@ -201,6 +201,7 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
     try {
       await octokit.rest.orgs.get({ org: owner });
     } catch {
+      // Organization check failed - not an org or no access
       throw new Error('Custom properties are only available for organizations, not for user accounts');
     }
 
