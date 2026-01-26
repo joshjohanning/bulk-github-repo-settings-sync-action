@@ -527,6 +527,18 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result).toEqual([{ repo: 'my-org/repo1' }, { repo: 'my-org/repo2' }]);
     });
+
+    test('should throw error when custom-property-name provided without custom-property-value', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', '')).rejects.toThrow(
+        'custom-property-value must be specified when custom-property-name is provided'
+      );
+    });
+
+    test('should throw error when custom-property-value provided without custom-property-name', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, '', 'production')).rejects.toThrow(
+        'custom-property-name must be specified when custom-property-value is provided'
+      );
+    });
   });
 
   describe('filterRepositoriesByCustomProperty', () => {

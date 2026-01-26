@@ -223,23 +223,32 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
     core.info(`Found ${allRepos.length} total repositories, filtering by custom property...`);
 
     // Now filter repositories by checking their custom properties
+    // Use concurrent requests with batching to improve performance
     const matchedRepos = [];
-    for (const repo of allRepos) {
-      const properties = await getRepositoryCustomProperties(octokit, owner, repo.name);
+    const batchSize = 10; // Process 10 repos at a time to avoid rate limiting
 
-      // Check if the repository has the specified custom property with any of the matching values
-      const hasMatchingProperty = properties.some(prop => {
-        if (prop.property_name === propertyName) {
-          // Convert property value to string for comparison
-          const propValue = String(prop.value);
-          return propertyValues.includes(propValue);
-        }
-        return false;
-      });
+    for (let i = 0; i < allRepos.length; i += batchSize) {
+      const batch = allRepos.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async repo => {
+          const properties = await getRepositoryCustomProperties(octokit, owner, repo.name);
 
-      if (hasMatchingProperty) {
-        matchedRepos.push({ repo: repo.full_name });
-      }
+          // Check if the repository has the specified custom property with any of the matching values
+          const hasMatchingProperty = properties.some(prop => {
+            if (prop.property_name === propertyName) {
+              // Convert property value to string for comparison
+              const propValue = String(prop.value);
+              return propertyValues.includes(propValue);
+            }
+            return false;
+          });
+
+          return hasMatchingProperty ? { repo: repo.full_name } : null;
+        })
+      );
+
+      // Add matched repos to the result
+      matchedRepos.push(...batchResults.filter(r => r !== null));
     }
 
     core.info(`Found ${matchedRepos.length} repositories matching custom property filter`);
@@ -268,6 +277,14 @@ export async function parseRepositories(
   customPropertyValue
 ) {
   let repoList = [];
+
+  // Validate custom property inputs
+  if (customPropertyName && !customPropertyValue) {
+    throw new Error('custom-property-value must be specified when custom-property-name is provided');
+  }
+  if (!customPropertyName && customPropertyValue) {
+    throw new Error('custom-property-name must be specified when custom-property-value is provided');
+  }
 
   // Filter by custom property if specified
   if (customPropertyName && customPropertyValue) {
