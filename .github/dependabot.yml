@@ -9,6 +9,9 @@ updates:
     directory: '/'
     schedule:
       interval: 'weekly'
+      day: 'monday'
+      time: '04:30'
+      timezone: 'America/Chicago'
     commit-message:
       prefix: 'ci(deps)'
     groups:
@@ -20,6 +23,9 @@ updates:
     directory: '/'
     schedule:
       interval: 'weekly'
+      day: 'monday'
+      time: '05:00'
+      timezone: 'America/Chicago'
     versioning-strategy: 'increase'
     commit-message:
       prefix: 'chore'
