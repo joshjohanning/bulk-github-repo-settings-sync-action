@@ -132,10 +132,10 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 
 **Selector types:**
 
-| Selector          | Description                                   | Example                              |
-| ----------------- | --------------------------------------------- | ------------------------------------ |
-| `custom-property` | Filter by organization custom property values | `environment: [production, staging]` |
-| `repos`           | Explicit list of repositories                 | `[my-org/repo1, my-org/repo2]`       |
+| Selector          | Description                                   | Example                                                                 |
+| ----------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
+| `custom-property` | Filter by organization custom property values | `custom-property: { name: environment, values: [production, staging] }` |
+| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                                   |
 
 > [!NOTE]
 > 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
