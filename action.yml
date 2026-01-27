@@ -6,6 +6,7 @@ branding:
   color: 'blue'
 
 inputs:
+  # === Authentication ===
   github-token:
     description: 'GitHub token for API access (requires repo scope)'
     required: true
@@ -13,11 +14,13 @@ inputs:
     description: 'GitHub API URL (e.g., https://api.github.com for GitHub.com or https://ghes.domain.com/api/v3 for GHES). Instance URL is auto-derived.'
     required: false
     default: '${{ github.api_url }}'
+
+  # === Repository Selection ===
   repositories:
     description: 'Comma-separated list of repositories (owner/repo format) or "all" for all repos in the organization/user'
     required: false
   repositories-file:
-    description: 'Path to YAML file containing repository list'
+    description: 'Path to YAML file containing repository list (repos.yml for Option 1, settings-config.yml for Option 2)'
     required: false
   owner:
     description: 'Owner (user or organization) name - required when using "all" for repositories or when using custom property filtering (must be an organization for custom properties)'
@@ -28,6 +31,8 @@ inputs:
   custom-property-value:
     description: 'Comma-separated list of custom property values to match. Repositories with any of these values will be included.'
     required: false
+
+  # === Merge Settings ===
   allow-squash-merge:
     description: 'Allow squash merging pull requests'
     required: false
@@ -46,6 +51,8 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
+
+  # === Security Settings ===
   immutable-releases:
     description: 'Enable immutable releases to prevent release deletion and modification'
     required: false
@@ -68,9 +75,13 @@ inputs:
   dependabot-security-updates:
     description: 'Enable or disable Dependabot security updates for repositories'
     required: false
+
+  # === Repository Metadata ===
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
     required: false
+
+  # === File Syncing ===
   dependabot-yml:
     description: 'Path to a dependabot.yml file to sync to .github/dependabot.yml in target repositories'
     required: false
@@ -131,6 +142,8 @@ inputs:
     description: 'Title for pull requests when updating package.json'
     required: false
     default: 'chore: update package.json'
+
+  # === Execution Options ===
   dry-run:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
