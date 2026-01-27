@@ -166,7 +166,9 @@ async function getOrgRepositoriesWithProperties(octokit, owner) {
 
     allRepos.push(...response.data);
 
-    if (response.data.length < perPage) {
+    // Stop when we get fewer results than requested OR an empty page
+    // (handles exact multiples of perPage)
+    if (response.data.length === 0 || response.data.length < perPage) {
       hasMore = false;
     } else {
       page++;
@@ -206,8 +208,13 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
     // Verify this is an organization (custom properties are org-only)
     try {
       await octokit.rest.orgs.get({ org: owner });
-    } catch {
-      throw new Error('Custom properties are only available for organizations, not for user accounts');
+    } catch (orgError) {
+      // Treat only 404 as "not an organization"; rethrow other errors so callers
+      // can see permission or server issues instead of a misleading message.
+      if (orgError && typeof orgError === 'object' && 'status' in orgError && orgError.status === 404) {
+        throw new Error('Custom properties are only available for organizations, not for user accounts');
+      }
+      throw orgError;
     }
 
     // Use the efficient org-level API that returns ALL repos with their properties
@@ -285,7 +292,7 @@ export async function parseConfigWithRules(config, octokit) {
       const propertyValues = (propConfig.values || (propConfig.value ? [propConfig.value] : [])).map(v => String(v));
 
       if (!propertyName || propertyValues.length === 0) {
-        throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "values" properties`);
+        throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "value" or "values" properties`);
       }
 
       core.info(`Rule ${i + 1}: Filtering by custom property "${propertyName}" = [${propertyValues.join(', ')}]`);
@@ -326,6 +333,15 @@ export async function parseConfigWithRules(config, octokit) {
     }
     // Handle repos selector (explicit list)
     else if (rule.selector.repos && Array.isArray(rule.selector.repos)) {
+      // Validate that all entries are non-empty strings
+      for (let j = 0; j < rule.selector.repos.length; j++) {
+        const repo = rule.selector.repos[j];
+        if (typeof repo !== 'string' || repo.trim() === '') {
+          throw new Error(
+            `Rule ${i + 1}: repos selector entry ${j + 1} must be a non-empty string, got: ${typeof repo}`
+          );
+        }
+      }
       matchedRepos = rule.selector.repos.map(repo => {
         // If repo doesn't include owner, prepend it
         return repo.includes('/') ? repo : `${owner}/${repo}`;

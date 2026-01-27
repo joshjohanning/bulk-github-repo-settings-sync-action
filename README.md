@@ -723,7 +723,7 @@ Output shows what would change:
 | `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
-\* Either `repositories` or `repositories-file` must be provided
+\* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
 
 ## Action Outputs
 

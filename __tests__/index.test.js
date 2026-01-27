@@ -567,12 +567,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
-    test('should throw error when owner is not an organization', async () => {
-      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not found'));
+    test('should throw error when owner is not an organization (404)', async () => {
+      const notFoundError = new Error('Not found');
+      notFoundError.status = 404;
+      mockOctokit.rest.orgs.get.mockRejectedValue(notFoundError);
 
       await expect(
         filterRepositoriesByCustomProperty(mockOctokit, 'user-account', 'environment', ['production'])
       ).rejects.toThrow('Custom properties are only available for organizations');
+    });
+
+    test('should rethrow non-404 errors from org check', async () => {
+      const permissionError = new Error('Forbidden');
+      permissionError.status = 403;
+      mockOctokit.rest.orgs.get.mockRejectedValue(permissionError);
+
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production'])
+      ).rejects.toThrow('Forbidden');
     });
 
     test('should filter repositories by custom property successfully', async () => {
@@ -723,6 +735,40 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { repo: 'my-org/repo1', 'delete-branch-on-merge': true },
         { repo: 'my-org/repo2', 'delete-branch-on-merge': true }
       ]);
+    });
+
+    test('should throw error for invalid repos selector entries', async () => {
+      const configWithNumber = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', 123]
+            },
+            settings: { 'delete-branch-on-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithNumber, mockOctokit)).rejects.toThrow(
+        'Rule 1: repos selector entry 2 must be a non-empty string, got: number'
+      );
+
+      const configWithEmpty = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', '  ']
+            },
+            settings: { 'delete-branch-on-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithEmpty, mockOctokit)).rejects.toThrow(
+        'Rule 1: repos selector entry 2 must be a non-empty string, got: string'
+      );
     });
 
     test('should merge settings from multiple rules', async () => {
