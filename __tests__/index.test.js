@@ -485,8 +485,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      // Empty second page
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production');
 
@@ -525,8 +523,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      // Empty second page
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production,staging');
 
@@ -600,8 +596,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      // Empty second page
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const result = await filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production']);
 
@@ -629,8 +623,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      // Empty second page
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const result = await filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production']);
 
@@ -680,7 +672,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const config = {
         owner: 'my-org',
@@ -749,7 +740,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const config = {
         owner: 'my-org',
@@ -811,7 +801,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      mockOctokit.request.mockResolvedValueOnce({ data: [] });
 
       const config = {
         owner: 'my-org',

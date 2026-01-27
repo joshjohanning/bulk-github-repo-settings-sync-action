@@ -120,6 +120,7 @@ Use in workflow:
 
 - Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
 - All org repos: `repositories: 'all'` with `owner: 'my-org'`
+- Custom property filtering: `custom-property-name: 'environment'` and `custom-property-value: 'production'` with `owner: 'my-org'` (organizations only)
 
 ---
 

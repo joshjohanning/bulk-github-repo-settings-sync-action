@@ -20,7 +20,7 @@ inputs:
     description: 'Path to YAML file containing repository list'
     required: false
   owner:
-    description: 'Owner (user or organization) name - required when using "all" for repositories'
+    description: 'Owner (user or organization) name - required when using "all" for repositories or when using custom property filtering (must be an organization for custom properties)'
     required: false
   custom-property-name:
     description: 'Name of the custom property to filter repositories by (organization custom property)'

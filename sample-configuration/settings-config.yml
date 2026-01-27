@@ -72,13 +72,14 @@ rules:
       allow-squash-merge: false
       code-scanning: false
 
----
+# ---
 # Alternative simpler format - just repos with overrides (backwards compatible)
 # Use this if you don't need custom property filtering
-
-repos:
-  - repo: my-org/repo1
-    allow-squash-merge: true
-  - repo: my-org/repo2
-    topics: 'javascript,automation'
-  - my-org/repo3 # Simple string format, uses default settings
+# See sample-configuration/repos.yml for this format
+#
+# repos:
+#   - repo: my-org/repo1
+#     allow-squash-merge: true
+#   - repo: my-org/repo2
+#     topics: 'javascript,automation'
+#   - my-org/repo3 # Simple string format, uses default settings

@@ -153,20 +153,22 @@ function getBooleanInput(name) {
  */
 async function getOrgRepositoriesWithProperties(octokit, owner) {
   const allRepos = [];
+  const perPage = 100;
   let page = 1;
   let hasMore = true;
 
   while (hasMore) {
     const response = await octokit.request('GET /orgs/{org}/properties/values', {
       org: owner,
-      per_page: 100,
+      per_page: perPage,
       page
     });
 
-    if (response.data.length === 0) {
+    allRepos.push(...response.data);
+
+    if (response.data.length < perPage) {
       hasMore = false;
     } else {
-      allRepos.push(...response.data);
       page++;
     }
   }
@@ -279,7 +281,8 @@ export async function parseConfigWithRules(config, octokit) {
     if (rule.selector['custom-property']) {
       const propConfig = rule.selector['custom-property'];
       const propertyName = propConfig.name;
-      const propertyValues = propConfig.values || (propConfig.value ? [propConfig.value] : []);
+      // Normalize values to strings (YAML can parse numbers/booleans)
+      const propertyValues = (propConfig.values || (propConfig.value ? [propConfig.value] : [])).map(v => String(v));
 
       if (!propertyName || propertyValues.length === 0) {
         throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "values" properties`);
@@ -290,8 +293,13 @@ export async function parseConfigWithRules(config, octokit) {
       // Verify this is an organization
       try {
         await octokit.rest.orgs.get({ org: owner });
-      } catch {
-        throw new Error('Custom properties are only available for organizations, not for user accounts');
+      } catch (error) {
+        // Distinguish "not an org" (404) from permission/transient errors
+        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+          throw new Error('Custom properties are only available for organizations, not for user accounts');
+        }
+        // Surface the original error for non-404 failures (e.g. 403/5xx)
+        throw error;
       }
 
       // Fetch org repos with properties (cached)
@@ -364,8 +372,14 @@ export async function parseConfigWithRules(config, octokit) {
     }
   }
 
-  // Convert map to array
+  // Convert map to array and validate each merged config
   const result = Array.from(repoSettingsMap.values());
+
+  // Validate merged settings for each repo (catches typos/unknown keys)
+  for (const repoConfig of result) {
+    validateRepoConfig(repoConfig, repoConfig.repo);
+  }
+
   core.info(`Total: ${result.length} unique repositories to process`);
 
   return result;
