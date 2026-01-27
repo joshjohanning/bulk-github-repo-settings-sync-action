@@ -6840,6 +6840,217 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
   });
 
+  describe('pr-up-to-date status handling in summary', () => {
+    test('should show pending merge message for dependabot when PR is up-to-date', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'dependabot-yml': './dependabot.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock repo settings
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      // Mock dependabot.yml source content
+      const sourceContent = 'version: 2\nupdates: []';
+      setMockFileContent(sourceContent);
+
+      // For pr-up-to-date: default branch has DIFFERENT content, PR branch has SAME content
+      const oldDefaultBranchContent = 'version: 2\nupdates: [old]';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'dependabot-yml-sync') {
+          // PR branch has the latest content (matches source)
+          return {
+            data: {
+              content: Buffer.from(sourceContent).toString('base64'),
+              sha: 'pr-branch-sha'
+            }
+          };
+        }
+        // Default branch (main) has old/different content
+        return {
+          data: {
+            content: Buffer.from(oldDefaultBranchContent).toString('base64'),
+            sha: 'default-branch-sha'
+          }
+        };
+      });
+
+      // Mock existing open PR for this branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo1/pull/42'
+          }
+        ]
+      });
+
+      await run();
+
+      // Verify the summary table shows the pending merge message
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('dependabot.yml PR #42 up-to-date (pending merge)');
+    });
+
+    test('should show pending merge message for workflow files when PR is up-to-date', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'workflow-files': './workflow.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock repo settings
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      // Mock workflow file source content
+      const sourceContent = 'name: test\non: push';
+      setMockFileContent(sourceContent);
+
+      // For pr-up-to-date: default branch has DIFFERENT content, PR branch has SAME content
+      const oldDefaultBranchContent = 'name: old\non: push';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'workflow-files-sync') {
+          // PR branch has the latest content (matches source)
+          return {
+            data: {
+              content: Buffer.from(sourceContent).toString('base64'),
+              sha: 'pr-branch-sha'
+            }
+          };
+        }
+        // Default branch (main) has old/different content
+        return {
+          data: {
+            content: Buffer.from(oldDefaultBranchContent).toString('base64'),
+            sha: 'default-branch-sha'
+          }
+        };
+      });
+
+      // Mock existing open PR for this branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 99,
+            html_url: 'https://github.com/owner/repo1/pull/99'
+          }
+        ]
+      });
+
+      await run();
+
+      // Verify the summary table shows the pending merge message
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('workflow files PR #99 up-to-date (pending merge)');
+    });
+
+    test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'dependabot-yml': './dependabot.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock repo settings - all match so no settings changes
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      // Mock dependabot.yml source content
+      const sourceContent = 'version: 2\nupdates: []';
+      setMockFileContent(sourceContent);
+
+      // For pr-up-to-date: default branch has DIFFERENT content, PR branch has SAME content
+      const oldDefaultBranchContent = 'version: 2\nupdates: [old]';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'dependabot-yml-sync') {
+          // PR branch has the latest content (matches source)
+          return {
+            data: {
+              content: Buffer.from(sourceContent).toString('base64'),
+              sha: 'pr-branch-sha'
+            }
+          };
+        }
+        // Default branch (main) has old/different content
+        return {
+          data: {
+            content: Buffer.from(oldDefaultBranchContent).toString('base64'),
+            sha: 'default-branch-sha'
+          }
+        };
+      });
+
+      // Mock existing open PR with same content (pr-up-to-date scenario)
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo1/pull/42'
+          }
+        ]
+      });
+
+      await run();
+
+      // The summary should NOT show "No changes needed" - it should show the pending PR
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      // Should show the pending merge message, NOT "No changes needed"
+      expect(repoRow[2]).not.toBe('No changes needed');
+      expect(repoRow[2]).toContain('pending merge');
+    });
+  });
+
   describe('getKnownRepoConfigKeys cache and error handling', () => {
     test('should cache known repo config keys across calls', async () => {
       // Reset cache to start fresh

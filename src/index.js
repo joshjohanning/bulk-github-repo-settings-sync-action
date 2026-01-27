@@ -2634,7 +2634,9 @@ function getChangesList(result, dryRun) {
     result.dependabotSync.dependabotYml !== 'unchanged'
   ) {
     const status = result.dependabotSync.dependabotYml;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`dependabot.yml PR #${result.dependabotSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`dependabot.yml PR exists (#${result.dependabotSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync dependabot.yml`);
@@ -2650,7 +2652,9 @@ function getChangesList(result, dryRun) {
     result.gitignoreSync.gitignore !== 'unchanged'
   ) {
     const status = result.gitignoreSync.gitignore;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`.gitignore PR #${result.gitignoreSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`.gitignore PR exists (#${result.gitignoreSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync .gitignore`);
@@ -2662,7 +2666,10 @@ function getChangesList(result, dryRun) {
   // Ruleset changes
   if (result.rulesetSync?.success && result.rulesetSync.ruleset && result.rulesetSync.ruleset !== 'unchanged') {
     const status = result.rulesetSync.ruleset;
-    if (status.startsWith('would-')) {
+    if (status === 'pr-up-to-date') {
+      // Rulesets don't use PRs, so this shouldn't happen, but handle it gracefully
+      changes.push(`ruleset up-to-date`);
+    } else if (status.startsWith('would-')) {
       changes.push(`Would sync ruleset`);
     } else {
       changes.push(`${wouldPrefix}ruleset`);
@@ -2676,7 +2683,9 @@ function getChangesList(result, dryRun) {
     result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged'
   ) {
     const status = result.pullRequestTemplateSync.pullRequestTemplate;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`PR template PR #${result.pullRequestTemplateSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`PR template PR exists (#${result.pullRequestTemplateSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync PR template`);
@@ -2692,7 +2701,9 @@ function getChangesList(result, dryRun) {
     result.workflowFilesSync.workflowFiles !== 'unchanged'
   ) {
     const status = result.workflowFilesSync.workflowFiles;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`workflow files PR #${result.workflowFilesSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`workflow files PR exists (#${result.workflowFilesSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync workflow files`);
@@ -2708,7 +2719,10 @@ function getChangesList(result, dryRun) {
     result.autolinksSync.autolinks !== 'unchanged'
   ) {
     const status = result.autolinksSync.autolinks;
-    if (status.startsWith('would-')) {
+    if (status === 'pr-up-to-date') {
+      // Autolinks don't use PRs, so this shouldn't happen, but handle it gracefully
+      changes.push(`autolinks up-to-date`);
+    } else if (status.startsWith('would-')) {
       changes.push(`Would sync autolinks`);
     } else {
       changes.push(`${wouldPrefix}autolinks`);
@@ -2722,7 +2736,9 @@ function getChangesList(result, dryRun) {
     result.copilotInstructionsSync.copilotInstructions !== 'unchanged'
   ) {
     const status = result.copilotInstructionsSync.copilotInstructions;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`copilot-instructions.md PR #${result.copilotInstructionsSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`copilot-instructions.md PR exists (#${result.copilotInstructionsSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync copilot-instructions.md`);
@@ -2738,7 +2754,9 @@ function getChangesList(result, dryRun) {
     result.packageJsonSync.packageJson !== 'unchanged'
   ) {
     const status = result.packageJsonSync.packageJson;
-    if (status === 'pr-exists') {
+    if (status === 'pr-up-to-date') {
+      changes.push(`package.json PR #${result.packageJsonSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
       changes.push(`package.json PR exists (#${result.packageJsonSync.prNumber})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync package.json`);
@@ -2756,6 +2774,10 @@ function getChangesList(result, dryRun) {
  * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, or package.json)
  */
 function hasRepositoryChanges(result) {
+  // Helper to check if a sync status represents something to report
+  // 'unchanged' means nothing to show, but 'pr-up-to-date' means there's a pending PR to display
+  const hasSyncChanges = status => status && status !== 'unchanged';
+
   return (
     (result.changes && result.changes.length > 0) ||
     result.topicsChange ||
@@ -2765,38 +2787,20 @@ function hasRepositoryChanges(result) {
     result.secretScanningPushProtectionChange ||
     result.dependabotAlertsChange ||
     result.dependabotSecurityUpdatesChange ||
-    (result.dependabotSync &&
-      result.dependabotSync.success &&
-      result.dependabotSync.dependabotYml &&
-      result.dependabotSync.dependabotYml !== 'unchanged') ||
-    (result.gitignoreSync &&
-      result.gitignoreSync.success &&
-      result.gitignoreSync.gitignore &&
-      result.gitignoreSync.gitignore !== 'unchanged') ||
-    (result.rulesetSync &&
-      result.rulesetSync.success &&
-      result.rulesetSync.ruleset &&
-      result.rulesetSync.ruleset !== 'unchanged') ||
+    (result.dependabotSync && result.dependabotSync.success && hasSyncChanges(result.dependabotSync.dependabotYml)) ||
+    (result.gitignoreSync && result.gitignoreSync.success && hasSyncChanges(result.gitignoreSync.gitignore)) ||
+    (result.rulesetSync && result.rulesetSync.success && hasSyncChanges(result.rulesetSync.ruleset)) ||
     (result.pullRequestTemplateSync &&
       result.pullRequestTemplateSync.success &&
-      result.pullRequestTemplateSync.pullRequestTemplate &&
-      result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged') ||
+      hasSyncChanges(result.pullRequestTemplateSync.pullRequestTemplate)) ||
     (result.workflowFilesSync &&
       result.workflowFilesSync.success &&
-      result.workflowFilesSync.workflowFiles &&
-      result.workflowFilesSync.workflowFiles !== 'unchanged') ||
-    (result.autolinksSync &&
-      result.autolinksSync.success &&
-      result.autolinksSync.autolinks &&
-      result.autolinksSync.autolinks !== 'unchanged') ||
+      hasSyncChanges(result.workflowFilesSync.workflowFiles)) ||
+    (result.autolinksSync && result.autolinksSync.success && hasSyncChanges(result.autolinksSync.autolinks)) ||
     (result.copilotInstructionsSync &&
       result.copilotInstructionsSync.success &&
-      result.copilotInstructionsSync.copilotInstructions &&
-      result.copilotInstructionsSync.copilotInstructions !== 'unchanged') ||
-    (result.packageJsonSync &&
-      result.packageJsonSync.success &&
-      result.packageJsonSync.packageJson &&
-      result.packageJsonSync.packageJson !== 'unchanged')
+      hasSyncChanges(result.copilotInstructionsSync.copilotInstructions)) ||
+    (result.packageJsonSync && result.packageJsonSync.success && hasSyncChanges(result.packageJsonSync.packageJson))
   );
 }
 
