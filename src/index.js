@@ -262,7 +262,9 @@ export async function parseConfigWithRules(config, octokit) {
   }
 
   // Cache for org repos with properties (to avoid refetching for each rule)
+  // Cache for org verification and repo properties fetch
   let cachedReposWithProperties = null;
+  let orgVerified = false;
 
   // Map to track repositories and their merged settings
   // Key: repo full name, Value: merged settings object
@@ -297,16 +299,19 @@ export async function parseConfigWithRules(config, octokit) {
 
       core.info(`Rule ${i + 1}: Filtering by custom property "${propertyName}" = [${propertyValues.join(', ')}]`);
 
-      // Verify this is an organization
-      try {
-        await octokit.rest.orgs.get({ org: owner });
-      } catch (error) {
-        // Distinguish "not an org" (404) from permission/transient errors
-        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-          throw new Error('Custom properties are only available for organizations, not for user accounts');
+      // Verify this is an organization (only once)
+      if (!orgVerified) {
+        try {
+          await octokit.rest.orgs.get({ org: owner });
+          orgVerified = true;
+        } catch (error) {
+          // Distinguish "not an org" (404) from permission/transient errors
+          if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+            throw new Error('Custom properties are only available for organizations, not for user accounts');
+          }
+          // Surface the original error for non-404 failures (e.g. 403/5xx)
+          throw error;
         }
-        // Surface the original error for non-404 failures (e.g. 403/5xx)
-        throw error;
       }
 
       // Fetch org repos with properties (cached)
@@ -343,8 +348,9 @@ export async function parseConfigWithRules(config, octokit) {
         }
       }
       matchedRepos = rule.selector.repos.map(repo => {
+        const trimmedRepo = repo.trim();
         // If repo doesn't include owner, prepend it
-        return repo.includes('/') ? repo : `${owner}/${repo}`;
+        return trimmedRepo.includes('/') ? trimmedRepo : `${owner}/${trimmedRepo}`;
       });
       core.info(`Rule ${i + 1}: Targeting ${matchedRepos.length} explicit repositories`);
     }
