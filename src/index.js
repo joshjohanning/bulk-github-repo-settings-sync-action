@@ -145,29 +145,38 @@ function getBooleanInput(name) {
 }
 
 /**
- * Get custom property values for a repository
+ * Get all repositories with their custom property values for an organization
+ * Uses the efficient org-level API: GET /orgs/{org}/properties/values
  * @param {Octokit} octokit - Octokit instance
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @returns {Promise<Array>} Array of custom property objects
+ * @param {string} owner - Organization name
+ * @returns {Promise<Array>} Array of repository objects with their properties
  */
-async function getRepositoryCustomProperties(octokit, owner, repo) {
-  try {
-    const response = await octokit.request('GET /repos/{owner}/{repo}/properties/values', {
-      owner,
-      repo
+async function getOrgRepositoriesWithProperties(octokit, owner) {
+  const allRepos = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await octokit.request('GET /orgs/{org}/properties/values', {
+      org: owner,
+      per_page: 100,
+      page
     });
-    return response.data || [];
-  } catch (error) {
-    // If the API endpoint is not available or there's an error, return empty array
-    // This could happen if custom properties are not enabled for the org
-    core.debug(`Could not fetch custom properties for ${owner}/${repo}: ${error.message}`);
-    return [];
+
+    if (response.data.length === 0) {
+      hasMore = false;
+    } else {
+      allRepos.push(...response.data);
+      page++;
+    }
   }
+
+  return allRepos;
 }
 
 /**
  * Filter repositories by custom property value
+ * Uses the efficient org-level API that returns all repos with properties in one call
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - Owner (organization) name
  * @param {string} propertyName - Name of the custom property to filter by
@@ -192,71 +201,174 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
       `Fetching repositories with custom property "${propertyName}" matching values: ${propertyValues.join(', ')}...`
     );
 
-    // First, get all repositories for the organization
-    const allRepos = [];
-    let page = 1;
-    let hasMore = true;
-
-    // Try to fetch as organization first
+    // Verify this is an organization (custom properties are org-only)
     try {
       await octokit.rest.orgs.get({ org: owner });
     } catch {
-      // Organization check failed - not an org or no access
       throw new Error('Custom properties are only available for organizations, not for user accounts');
     }
 
-    while (hasMore) {
-      const { data } = await octokit.rest.repos.listForOrg({
-        org: owner,
-        type: 'all',
-        per_page: 100,
-        page
-      });
+    // Use the efficient org-level API that returns ALL repos with their properties
+    // This is a single paginated call instead of N+1 calls (one per repo)
+    const reposWithProperties = await getOrgRepositoriesWithProperties(octokit, owner);
 
-      if (data.length === 0) {
-        hasMore = false;
-      } else {
-        allRepos.push(...data);
-        page++;
-      }
-    }
+    core.info(`Found ${reposWithProperties.length} total repositories, filtering by custom property...`);
 
-    core.info(`Found ${allRepos.length} total repositories, filtering by custom property...`);
-
-    // Now filter repositories by checking their custom properties
-    // Use concurrent requests with batching to improve performance
-    const matchedRepos = [];
-    const batchSize = 10; // Process 10 repos at a time to avoid rate limiting
-
-    for (let i = 0; i < allRepos.length; i += batchSize) {
-      const batch = allRepos.slice(i, i + batchSize);
-      const batchResults = await Promise.all(
-        batch.map(async repo => {
-          const properties = await getRepositoryCustomProperties(octokit, owner, repo.name);
-
-          // Check if the repository has the specified custom property with any of the matching values
-          const hasMatchingProperty = properties.some(prop => {
-            if (prop.property_name === propertyName) {
-              // Convert property value to string for comparison
-              const propValue = String(prop.value);
-              return propertyValues.includes(propValue);
-            }
-            return false;
-          });
-
-          return hasMatchingProperty ? { repo: repo.full_name } : null;
-        })
-      );
-
-      // Add matched repos to the result
-      matchedRepos.push(...batchResults.filter(r => r !== null));
-    }
+    // Filter repositories by checking their custom properties
+    const matchedRepos = reposWithProperties
+      .filter(repo => {
+        // Check if the repository has the specified custom property with any of the matching values
+        return repo.properties?.some(prop => {
+          if (prop.property_name === propertyName) {
+            // Convert property value to string for comparison
+            const propValue = String(prop.value);
+            return propertyValues.includes(propValue);
+          }
+          return false;
+        });
+      })
+      .map(repo => ({ repo: repo.repository_full_name }));
 
     core.info(`Found ${matchedRepos.length} repositories matching custom property filter`);
     return matchedRepos;
   } catch (error) {
     throw new Error(`Failed to filter repositories by custom property: ${error.message}`);
   }
+}
+
+/**
+ * Parse a rules-based configuration file and return repositories with merged settings
+ * @param {Object} config - Parsed YAML config object with rules array
+ * @param {Octokit} octokit - Octokit instance
+ * @returns {Promise<Array>} Array of repository objects with merged settings from matching rules
+ */
+export async function parseConfigWithRules(config, octokit) {
+  if (!config.rules || !Array.isArray(config.rules)) {
+    throw new Error('Configuration must contain a "rules" array');
+  }
+
+  const owner = config.owner;
+  if (!owner) {
+    throw new Error('Configuration must specify an "owner" for rules-based configuration');
+  }
+
+  // Cache for org repos with properties (to avoid refetching for each rule)
+  let cachedReposWithProperties = null;
+
+  // Map to track repositories and their merged settings
+  // Key: repo full name, Value: merged settings object
+  const repoSettingsMap = new Map();
+
+  core.info(`Processing ${config.rules.length} rule(s)...`);
+
+  for (let i = 0; i < config.rules.length; i++) {
+    const rule = config.rules[i];
+
+    if (!rule.selector) {
+      throw new Error(`Rule ${i + 1} must have a "selector" property`);
+    }
+
+    if (!rule.settings) {
+      core.warning(`Rule ${i + 1} has no settings, skipping`);
+      continue;
+    }
+
+    let matchedRepos = [];
+
+    // Handle custom-property selector
+    if (rule.selector['custom-property']) {
+      const propConfig = rule.selector['custom-property'];
+      const propertyName = propConfig.name;
+      const propertyValues = propConfig.values || (propConfig.value ? [propConfig.value] : []);
+
+      if (!propertyName || propertyValues.length === 0) {
+        throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "values" properties`);
+      }
+
+      core.info(`Rule ${i + 1}: Filtering by custom property "${propertyName}" = [${propertyValues.join(', ')}]`);
+
+      // Verify this is an organization
+      try {
+        await octokit.rest.orgs.get({ org: owner });
+      } catch {
+        throw new Error('Custom properties are only available for organizations, not for user accounts');
+      }
+
+      // Fetch org repos with properties (cached)
+      if (!cachedReposWithProperties) {
+        core.info(`Fetching all repositories with custom properties for ${owner}...`);
+        cachedReposWithProperties = await getOrgRepositoriesWithProperties(octokit, owner);
+        core.info(`Found ${cachedReposWithProperties.length} total repositories`);
+      }
+
+      // Filter by property
+      matchedRepos = cachedReposWithProperties
+        .filter(repo => {
+          return repo.properties?.some(prop => {
+            if (prop.property_name === propertyName) {
+              const propValue = String(prop.value);
+              return propertyValues.includes(propValue);
+            }
+            return false;
+          });
+        })
+        .map(repo => repo.repository_full_name);
+
+      core.info(`  → Matched ${matchedRepos.length} repositories`);
+    }
+    // Handle repos selector (explicit list)
+    else if (rule.selector.repos && Array.isArray(rule.selector.repos)) {
+      matchedRepos = rule.selector.repos.map(repo => {
+        // If repo doesn't include owner, prepend it
+        return repo.includes('/') ? repo : `${owner}/${repo}`;
+      });
+      core.info(`Rule ${i + 1}: Targeting ${matchedRepos.length} explicit repositories`);
+    }
+    // Handle "all" selector
+    else if (rule.selector.all === true) {
+      core.info(`Rule ${i + 1}: Targeting all repositories for ${owner}`);
+
+      // Fetch all repos for org/user
+      let isOrg = false;
+      try {
+        await octokit.rest.orgs.get({ org: owner });
+        isOrg = true;
+      } catch {
+        isOrg = false;
+      }
+
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const { data } = isOrg
+          ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: 100, page })
+          : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: 100, page });
+
+        if (data.length === 0) {
+          hasMore = false;
+        } else {
+          matchedRepos.push(...data.map(r => r.full_name));
+          page++;
+        }
+      }
+      core.info(`  → Matched ${matchedRepos.length} repositories`);
+    } else {
+      throw new Error(`Rule ${i + 1}: selector must have "custom-property", "repos", or "all" property`);
+    }
+
+    // Merge settings for each matched repo
+    for (const repoName of matchedRepos) {
+      const existingSettings = repoSettingsMap.get(repoName) || { repo: repoName };
+      // Merge settings (later rules override earlier ones)
+      repoSettingsMap.set(repoName, { ...existingSettings, ...rule.settings });
+    }
+  }
+
+  // Convert map to array
+  const result = Array.from(repoSettingsMap.values());
+  core.info(`Total: ${result.length} unique repositories to process`);
+
+  return result;
 }
 
 /**
@@ -306,8 +418,13 @@ export async function parseRepositories(
       const fileContent = fs.readFileSync(repositoriesFile, 'utf8');
       const data = yaml.load(fileContent);
 
-      // Only support repos array format
-      if (Array.isArray(data.repos)) {
+      // Check if this is a rules-based configuration
+      if (Array.isArray(data.rules)) {
+        core.info('Detected rules-based configuration file');
+        repoList = await parseConfigWithRules(data, octokit);
+      }
+      // Support repos array format (backwards compatible)
+      else if (Array.isArray(data.repos)) {
         repoList = data.repos.map(item => {
           if (typeof item === 'string') {
             // Simple string format: just repo name
@@ -321,7 +438,7 @@ export async function parseRepositories(
           }
         });
       } else {
-        throw new Error('YAML file must contain a "repos" array');
+        throw new Error('YAML file must contain a "rules" array or "repos" array');
       }
     } catch (error) {
       throw new Error(`Failed to parse repositories file: ${error.message}`);

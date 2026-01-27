@@ -1,0 +1,84 @@
+# Advanced configuration file for bulk-github-repo-settings-sync-action
+# This format supports multiple rules with different selectors and settings
+
+# Organization to operate on (required for custom-property selectors)
+owner: my-org
+
+# Rules are processed in order. Each rule specifies:
+# - A selector (repos list, custom-property filter, or "all")
+# - Settings to apply to matching repositories
+#
+# If a repository matches multiple rules, settings are merged (later rules override earlier ones)
+rules:
+  # Rule 1: Production repositories get strict security settings
+  - selector:
+      custom-property:
+        name: environment
+        values:
+          - production
+    settings:
+      allow-squash-merge: true
+      allow-merge-commit: false
+      allow-rebase-merge: false
+      delete-branch-on-merge: true
+      code-scanning: true
+      secret-scanning: true
+      secret-scanning-push-protection: true
+      immutable-releases: true
+      dependabot-yml: './config/dependabot/production.yml'
+      rulesets-file: './config/rulesets/strict-ruleset.json'
+
+  # Rule 2: Staging repositories get similar but less strict settings
+  - selector:
+      custom-property:
+        name: environment
+        values:
+          - staging
+    settings:
+      allow-squash-merge: true
+      delete-branch-on-merge: true
+      code-scanning: true
+      secret-scanning: true
+      dependabot-yml: './config/dependabot/staging.yml'
+
+  # Rule 3: Repositories owned by team "platform" get specific workflow files
+  - selector:
+      custom-property:
+        name: team
+        values:
+          - platform
+          - infrastructure
+    settings:
+      workflow-files: './workflows/platform-ci.yml,./workflows/release.yml'
+      copilot-instructions-md: './config/copilot/platform-instructions.md'
+
+  # Rule 4: Specific repositories with explicit overrides
+  - selector:
+      repos:
+        - my-org/critical-service
+        - my-org/payment-api
+    settings:
+      immutable-releases: true
+      dependabot-alerts: true
+      dependabot-security-updates: true
+      autolinks-file: './config/autolinks/jira.json'
+
+  # Rule 5: A single repo with unique settings
+  - selector:
+      repos:
+        - my-org/legacy-app
+    settings:
+      allow-merge-commit: true
+      allow-squash-merge: false
+      code-scanning: false
+
+---
+# Alternative simpler format - just repos with overrides (backwards compatible)
+# Use this if you don't need custom property filtering
+
+repos:
+  - repo: my-org/repo1
+    allow-squash-merge: true
+  - repo: my-org/repo2
+    topics: 'javascript,automation'
+  - my-org/repo3 # Simple string format, uses default settings

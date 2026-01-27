@@ -67,7 +67,27 @@ Update repository settings in bulk across multiple GitHub repositories.
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
 
-### Using YAML Configuration with Overrides
+---
+
+## Repository Selection Methods
+
+This action supports two approaches for selecting which repositories to manage. Choose based on your organization's needs:
+
+| Approach                                                                                      | Best For                                                                                         | Configuration File                        |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| [**Option 1: Repository List**](#option-1-repository-list-reposyml)                           | Small to medium orgs, explicit control over which repos are managed                              | `repos.yml` with `repos:` array           |
+| [**Option 2: Rules-Based Selectors**](#option-2-rules-based-configuration-settings-configyml) | Large orgs, dynamic targeting by custom properties, different settings for different repo groups | `settings-config.yml` with `rules:` array |
+
+---
+
+### Option 1: Repository List (`repos.yml`)
+
+List repositories explicitly in a YAML file. Supports per-repository setting overrides.
+
+**Best for:** Explicit control over exactly which repositories are managed, with optional per-repo overrides.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/repos.yml](sample-configuration/repos.yml)
 
 Create a `repos.yml` file:
 
@@ -84,7 +104,7 @@ repos:
 Use in workflow:
 
 ```yml
-- name: Update Repository Settings with Overrides
+- name: Update Repository Settings
   uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
@@ -96,46 +116,112 @@ Use in workflow:
     topics: 'javascript,github-actions'
 ```
 
-### Filtering Repositories by Custom Property
+**Also supports:**
 
-Instead of specifying individual repositories, you can filter repositories by custom property values. This is useful when you have organization-level custom properties to categorize repositories (e.g., by environment, team, or application type).
+- Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
+- All org repos: `repositories: 'all'` with `owner: 'my-org'`
+
+---
+
+### Option 2: Rules-Based Configuration (`settings-config.yml`)
+
+Define rules that target repositories using **selectors**. Each rule can use different selectors and apply different settings. This is the most powerful and scalable approach.
+
+**Best for:** Large organizations, dynamic targeting by custom properties, applying different settings to different repository groups in a single workflow.
+
+**Selector types:**
+
+| Selector          | Description                                   | Example                              |
+| ----------------- | --------------------------------------------- | ------------------------------------ |
+| `custom-property` | Filter by organization custom property values | `environment: [production, staging]` |
+| `repos`           | Explicit list of repositories                 | `[my-org/repo1, my-org/repo2]`       |
+
+> [!NOTE]
+> 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/settings-config.yml](sample-configuration/settings-config.yml)
+
+Create a `settings-config.yml` file:
+
+```yaml
+owner: my-org
+
+rules:
+  # Rule 1: All production repositories get security settings
+  - selector:
+      custom-property:
+        name: environment
+        values: [production]
+    settings:
+      code-scanning: true
+      secret-scanning: true
+      secret-scanning-push-protection: true
+      immutable-releases: true
+      dependabot-yml: './config/dependabot/npm-actions.yml'
+
+  # Rule 2: Staging repos get monitoring but not immutable releases
+  - selector:
+      custom-property:
+        name: environment
+        values: [staging]
+    settings:
+      code-scanning: true
+      secret-scanning: true
+
+  # Rule 3: Specific repos get additional overrides
+  - selector:
+      repos:
+        - my-org/special-repo
+        - my-org/another-repo
+    settings:
+      topics: 'special,monitored'
+      dependabot-alerts: true
+```
+
+Use in workflow:
 
 ```yml
-- name: Update Production Repositories
+- name: Apply Rules-Based Settings
   uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
-    owner: 'my-org'
-    custom-property-name: 'environment'
-    custom-property-value: 'production'
-    allow-squash-merge: true
-    delete-branch-on-merge: true
-    immutable-releases: true
-    code-scanning: true
-    secret-scanning: true
-    secret-scanning-push-protection: true
+    repositories-file: 'settings-config.yml'
 ```
 
-You can also match multiple custom property values:
+**Settings Merging:**
 
-```yml
-- name: Update Staging and Production Repositories
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
-  with:
-    github-token: ${{ steps.app-token.outputs.token }}
-    owner: 'my-org'
-    custom-property-name: 'environment'
-    custom-property-value: 'production,staging'
-    rulesets-file: './config/rulesets/prod-ruleset.json'
-    dependabot-yml: './config/dependabot/npm-actions.yml'
+When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting:
+
+```yaml
+# If repo1 matches both rules:
+rules:
+  - selector:
+      custom-property: { name: tier, values: [standard] }
+    settings:
+      code-scanning: true
+      topics: 'standard'
+
+  - selector:
+      repos: [my-org/repo1]
+    settings:
+      topics: 'special,override' # This overrides 'standard'
+      dependabot-alerts: true # This is added
+
+
+# Result for repo1:
+# code-scanning: true
+# topics: 'special,override'
+# dependabot-alerts: true
 ```
 
-**Notes:**
+> **Note:** Custom properties are only available for GitHub organizations (not personal accounts) and must be configured at the organization level.
 
-- Custom properties must be configured at the organization level
-- The action will fetch all repositories in the organization and filter by the specified custom property
-- Only repositories with matching custom property values will be updated
-- Custom properties are only available for organizations, not for personal accounts
+---
+
+## Syncing Files and Configurations
+
+The following sections describe how to sync various files and configurations across repositories. These work with both repository selection methods above.
 
 ### Syncing Dependabot Configuration
 
