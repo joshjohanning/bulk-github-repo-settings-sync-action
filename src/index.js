@@ -298,6 +298,13 @@ export async function parseConfigWithRules(config, octokit) {
       const propConfig = rule.selector['custom-property'];
       const propertyName = propConfig.name;
 
+      // Validate name is a non-empty string
+      if (typeof propertyName !== 'string' || propertyName.trim() === '') {
+        throw new Error(
+          `Rule ${i + 1}: custom-property selector "name" must be a non-empty string (got ${typeof propertyName})`
+        );
+      }
+
       // Handle both array and scalar values, normalize to strings
       const rawValues = propConfig.values ?? (propConfig.value !== undefined ? propConfig.value : undefined);
       let propertyValues;
@@ -318,8 +325,8 @@ export async function parseConfigWithRules(config, octokit) {
       // Normalize all values to strings (YAML can parse numbers/booleans)
       propertyValues = propertyValues.map(v => String(v));
 
-      if (!propertyName || propertyValues.length === 0) {
-        throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "value" or "values" properties`);
+      if (propertyValues.length === 0) {
+        throw new Error(`Rule ${i + 1}: custom-property selector must have "value" or "values" property`);
       }
 
       core.info(`Rule ${i + 1}: Filtering by custom property "${propertyName}" = [${propertyValues.join(', ')}]`);
@@ -420,7 +427,10 @@ export async function parseConfigWithRules(config, octokit) {
     for (const repoName of matchedRepos) {
       const existingSettings = repoSettingsMap.get(repoName) || { repo: repoName };
       // Merge settings (later rules override earlier ones)
-      repoSettingsMap.set(repoName, { ...existingSettings, ...rule.settings });
+      // Destructure to exclude 'repo' from rule.settings to prevent accidental overwrites
+      // eslint-disable-next-line no-unused-vars
+      const { repo: _ignoredRepo, ...safeSettings } = rule.settings;
+      repoSettingsMap.set(repoName, { ...existingSettings, ...safeSettings });
     }
   }
 

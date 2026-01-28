@@ -780,6 +780,72 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test('should throw error when custom-property name is not a string', async () => {
+      const configWithNumber = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 123,
+                values: ['production']
+              }
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithNumber, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property selector "name" must be a non-empty string'
+      );
+
+      const configWithEmpty = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: '  ',
+                values: ['production']
+              }
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithEmpty, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property selector "name" must be a non-empty string'
+      );
+    });
+
+    test('should not allow rule.settings to overwrite repo field', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/correct-repo']
+            },
+            settings: {
+              repo: 'my-org/wrong-repo', // Accidental repo field should be ignored
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/correct-repo', // Should preserve the correct repo name
+          'allow-squash-merge': true
+        }
+      ]);
+    });
+
     test('should process explicit repos selector', async () => {
       const config = {
         owner: 'my-org',
