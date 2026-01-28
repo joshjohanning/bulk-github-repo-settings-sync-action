@@ -34,6 +34,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
 - 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
+- 🎯 **Filter repositories by custom property values** for dynamic targeting
 - 🔍 **Dry-run mode** with change preview and intelligent change detection
 - 📋 **Per-repository overrides** via YAML configuration
 - 📊 **Comprehensive logging** showing before/after values for all changes
@@ -66,7 +67,27 @@ Update repository settings in bulk across multiple GitHub repositories.
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
 
-### Using YAML Configuration with Overrides
+---
+
+## Repository Selection Methods
+
+This action supports two approaches for selecting which repositories to manage. Choose based on your organization's needs:
+
+| Approach                                                                                      | Best For                                                                                         | Configuration File                        |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| [**Option 1: Repository List**](#option-1-repository-list-reposyml)                           | Small to medium orgs, explicit control over which repos are managed                              | `repos.yml` with `repos:` array           |
+| [**Option 2: Rules-Based Selectors**](#option-2-rules-based-configuration-settings-configyml) | Large orgs, dynamic targeting by custom properties, different settings for different repo groups | `settings-config.yml` with `rules:` array |
+
+---
+
+### Option 1: Repository List (`repos.yml`)
+
+List repositories explicitly in a YAML file. Supports per-repository setting overrides.
+
+**Best for:** Explicit control over exactly which repositories are managed, with optional per-repo overrides.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/repos.yml](sample-configuration/repos.yml)
 
 Create a `repos.yml` file:
 
@@ -83,7 +104,7 @@ repos:
 Use in workflow:
 
 ```yml
-- name: Update Repository Settings with Overrides
+- name: Update Repository Settings
   uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
   with:
     github-token: ${{ steps.app-token.outputs.token }}
@@ -94,6 +115,114 @@ Use in workflow:
     code-scanning: true
     topics: 'javascript,github-actions'
 ```
+
+**Also supports:**
+
+- Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
+- All org repos: `repositories: 'all'` with `owner: 'my-org'`
+- Custom property filtering: `custom-property-name: 'environment'` and `custom-property-value: 'production'` with `owner: 'my-org'` (organizations only)
+
+---
+
+### Option 2: Rules-Based Configuration (`settings-config.yml`)
+
+Define rules that target repositories using **selectors**. Each rule can use different selectors and apply different settings. This is the most powerful and scalable approach.
+
+**Best for:** Large organizations, dynamic targeting by custom properties, applying different settings to different repository groups in a single workflow.
+
+**Selector types:**
+
+| Selector          | Description                                   | Example                                                                 |
+| ----------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
+| `custom-property` | Filter by organization custom property values | `custom-property: { name: environment, values: [production, staging] }` |
+| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                                   |
+
+> [!NOTE]
+> 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
+
+> [!TIP]
+> 📄 **See full example:** [sample-configuration/settings-config.yml](sample-configuration/settings-config.yml)
+
+Create a `settings-config.yml` file:
+
+```yaml
+owner: my-org
+
+rules:
+  # Rule 1: All production repositories get security settings
+  - selector:
+      custom-property:
+        name: environment
+        values: [production]
+    settings:
+      code-scanning: true
+      secret-scanning: true
+      secret-scanning-push-protection: true
+      immutable-releases: true
+      dependabot-yml: './config/dependabot/npm-actions.yml'
+
+  # Rule 2: Staging repos get monitoring but not immutable releases
+  - selector:
+      custom-property:
+        name: environment
+        values: [staging]
+    settings:
+      code-scanning: true
+      secret-scanning: true
+
+  # Rule 3: Specific repos get additional overrides
+  - selector:
+      repos:
+        - my-org/special-repo
+        - my-org/another-repo
+    settings:
+      topics: 'special,monitored'
+      dependabot-alerts: true
+```
+
+Use in workflow:
+
+```yml
+- name: Apply Rules-Based Settings
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'settings-config.yml'
+```
+
+**Settings Merging:**
+
+When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting:
+
+```yaml
+# If repo1 matches both rules:
+rules:
+  - selector:
+      custom-property: { name: tier, values: [standard] }
+    settings:
+      code-scanning: true
+      topics: 'standard'
+
+  - selector:
+      repos: [my-org/repo1]
+    settings:
+      topics: 'special,override' # This overrides 'standard'
+      dependabot-alerts: true # This is added
+
+
+# Result for repo1:
+# code-scanning: true
+# topics: 'special,override'
+# dependabot-alerts: true
+```
+
+> **Note:** Custom properties are only available for GitHub organizations (not personal accounts) and must be configured at the organization level.
+
+---
+
+## Syncing Files and Configurations
+
+The following sections describe how to sync various files and configurations across repositories. These work with both repository selection methods above.
 
 ### Syncing Dependabot Configuration
 
@@ -559,7 +688,9 @@ Output shows what would change:
 | `github-api-url`                  | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`                 |
 | `repositories`                    | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                       |
 | `repositories-file`               | Path to YAML file containing repository list                                                                                               | No\*     | -                                       |
-| `owner`                           | Owner (user or organization) name - required when using `repositories: "all"`                                                              | No       | -                                       |
+| `owner`                           | Owner (user or organization) name - required when using `repositories: "all"` or custom property filtering                                 | No       | -                                       |
+| `custom-property-name`            | Name of the custom property to filter repositories by (organizations only)                                                                 | No       | -                                       |
+| `custom-property-value`           | Comma-separated list of custom property values to match (used with `custom-property-name`)                                                 | No       | -                                       |
 | `allow-squash-merge`              | Allow squash merging pull requests                                                                                                         | No       | -                                       |
 | `allow-merge-commit`              | Allow merge commits for pull requests                                                                                                      | No       | -                                       |
 | `allow-rebase-merge`              | Allow rebase merging pull requests                                                                                                         | No       | -                                       |
@@ -592,7 +723,7 @@ Output shows what would change:
 | `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
 
-\* Either `repositories` or `repositories-file` must be provided
+\* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
 
 ## Action Outputs
 

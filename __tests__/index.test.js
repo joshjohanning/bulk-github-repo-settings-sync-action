@@ -12,6 +12,7 @@ const mockCore = {
   setFailed: jest.fn(),
   info: jest.fn(),
   warning: jest.fn(),
+  debug: jest.fn(),
   setSecret: jest.fn(),
   summary: {
     addHeading: jest.fn().mockReturnThis(),
@@ -271,6 +272,8 @@ setupDefaultMocks();
 const {
   default: run,
   parseRepositories,
+  filterRepositoriesByCustomProperty,
+  parseConfigWithRules,
   updateRepositorySettings,
   syncDependabotYml,
   syncGitignore,
@@ -406,14 +409,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('Unknown configuration key'));
     });
 
-    test('should reject YAML file without repos array', async () => {
+    test('should reject YAML file without repos or rules array', async () => {
       setMockFileContent('repositories:\n  - owner/repo1');
       setMockYamlContent({
         repositories: ['owner/repo1']
       });
 
       await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow(
-        'YAML file must contain a "repos" array'
+        'YAML file must contain a "rules" array or "repos" array'
       );
     });
 
@@ -453,6 +456,600 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should throw error when no repositories specified', async () => {
       await expect(parseRepositories('', '', '', mockOctokit)).rejects.toThrow('No repositories specified');
+    });
+
+    test('should filter repositories by custom property', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API (efficient single call)
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          },
+          {
+            repository_id: 2,
+            repository_name: 'repo2',
+            repository_full_name: 'my-org/repo2',
+            properties: [{ property_name: 'environment', value: 'staging' }]
+          },
+          {
+            repository_id: 3,
+            repository_name: 'repo3',
+            repository_full_name: 'my-org/repo3',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production');
+
+      expect(result).toEqual([{ repo: 'my-org/repo1' }, { repo: 'my-org/repo3' }]);
+      expect(mockOctokit.request).toHaveBeenCalledWith('GET /orgs/{org}/properties/values', {
+        org: 'my-org',
+        per_page: 100,
+        page: 1
+      });
+    });
+
+    test('should filter repositories by multiple custom property values', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          },
+          {
+            repository_id: 2,
+            repository_name: 'repo2',
+            repository_full_name: 'my-org/repo2',
+            properties: [{ property_name: 'environment', value: 'staging' }]
+          },
+          {
+            repository_id: 3,
+            repository_name: 'repo3',
+            repository_full_name: 'my-org/repo3',
+            properties: [{ property_name: 'environment', value: 'development' }]
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', '', 'my-org', mockOctokit, 'environment', 'production,staging');
+
+      expect(result).toEqual([{ repo: 'my-org/repo1' }, { repo: 'my-org/repo2' }]);
+    });
+
+    test('should throw error when custom-property-name provided without custom-property-value', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', '')).rejects.toThrow(
+        'custom-property-value must be specified when custom-property-name is provided'
+      );
+    });
+
+    test('should throw error when custom-property-value provided without custom-property-name', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, '', 'production')).rejects.toThrow(
+        'custom-property-name must be specified when custom-property-value is provided'
+      );
+    });
+
+    test('should throw error when custom-property-value contains only empty values', async () => {
+      await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', ' , , ')).rejects.toThrow(
+        'custom-property-value must contain at least one non-empty value after trimming'
+      );
+    });
+  });
+
+  describe('filterRepositoriesByCustomProperty', () => {
+    test('should throw error when owner is not specified', async () => {
+      await expect(filterRepositoriesByCustomProperty(mockOctokit, '', 'environment', ['production'])).rejects.toThrow(
+        'Owner (organization) must be specified when filtering by custom property'
+      );
+    });
+
+    test('should throw error when property name is not specified', async () => {
+      await expect(filterRepositoriesByCustomProperty(mockOctokit, 'my-org', '', ['production'])).rejects.toThrow(
+        'Custom property name must be specified'
+      );
+    });
+
+    test('should throw error when property values are not specified', async () => {
+      await expect(filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', [])).rejects.toThrow(
+        'At least one custom property value must be specified'
+      );
+    });
+
+    test('should throw error when owner is not an organization (404)', async () => {
+      const notFoundError = new Error('Not found');
+      notFoundError.status = 404;
+      mockOctokit.rest.orgs.get.mockRejectedValue(notFoundError);
+
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'user-account', 'environment', ['production'])
+      ).rejects.toThrow('Custom properties are only available for organizations');
+    });
+
+    test('should rethrow non-404 errors from org check', async () => {
+      const permissionError = new Error('Forbidden');
+      permissionError.status = 403;
+      mockOctokit.rest.orgs.get.mockRejectedValue(permissionError);
+
+      await expect(
+        filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production'])
+      ).rejects.toThrow('Forbidden');
+    });
+
+    test('should filter repositories by custom property successfully', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          },
+          {
+            repository_id: 2,
+            repository_name: 'repo2',
+            repository_full_name: 'my-org/repo2',
+            properties: [{ property_name: 'environment', value: 'staging' }]
+          }
+        ]
+      });
+
+      const result = await filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production']);
+
+      expect(result).toEqual([{ repo: 'my-org/repo1' }]);
+      expect(mockCore.info).toHaveBeenCalledWith(
+        expect.stringContaining('Fetching repositories with custom property "environment"')
+      );
+      expect(mockCore.info).toHaveBeenCalledWith(
+        expect.stringContaining('Found 1 repositories matching custom property filter')
+      );
+    });
+
+    test('should handle repositories without custom properties', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API with repos that have no matching properties
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [] // No properties
+          }
+        ]
+      });
+
+      const result = await filterRepositoriesByCustomProperty(mockOctokit, 'my-org', 'environment', ['production']);
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('parseConfigWithRules', () => {
+    test('should throw error when rules array is missing', async () => {
+      const config = { owner: 'my-org' };
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        'Configuration must contain a "rules" array'
+      );
+    });
+
+    test('should throw error when owner is missing', async () => {
+      const config = { rules: [] };
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow('Configuration must specify an "owner"');
+    });
+
+    test('should throw error when rule has no selector', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [{ settings: { 'allow-squash-merge': true } }]
+      };
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow('Rule 1 must have a "selector" property');
+    });
+
+    test('should process custom-property selector', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          },
+          {
+            repository_id: 2,
+            repository_name: 'repo2',
+            repository_full_name: 'my-org/repo2',
+            properties: [{ property_name: 'environment', value: 'staging' }]
+          }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: ['production']
+              }
+            },
+            settings: {
+              'allow-squash-merge': true,
+              'code-scanning': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'allow-squash-merge': true,
+          'code-scanning': true
+        }
+      ]);
+    });
+
+    test('should handle scalar value in custom-property selector (values: production)', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: 'production' // Scalar instead of array
+              }
+            },
+            settings: {
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'allow-squash-merge': true
+        }
+      ]);
+    });
+
+    test('should throw error for invalid values type in custom-property selector', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: { invalid: 'object' }
+              }
+            },
+            settings: {
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property "values" must be a scalar or an array of scalars'
+      );
+    });
+
+    test('should throw error when custom-property name is not a string', async () => {
+      const configWithNumber = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 123,
+                values: ['production']
+              }
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithNumber, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property selector "name" must be a non-empty string'
+      );
+
+      const configWithEmpty = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: '  ',
+                values: ['production']
+              }
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithEmpty, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property selector "name" must be a non-empty string'
+      );
+    });
+
+    test('should not allow rule.settings to overwrite repo field', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/correct-repo']
+            },
+            settings: {
+              repo: 'my-org/wrong-repo', // Accidental repo field should be ignored
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/correct-repo', // Should preserve the correct repo name
+          'allow-squash-merge': true
+        }
+      ]);
+    });
+
+    test('should process explicit repos selector', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', 'repo2'] // Test both full name and short name
+            },
+            settings: {
+              'delete-branch-on-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        { repo: 'my-org/repo1', 'delete-branch-on-merge': true },
+        { repo: 'my-org/repo2', 'delete-branch-on-merge': true }
+      ]);
+    });
+
+    test('should throw error for invalid repos selector entries', async () => {
+      const configWithNumber = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', 123]
+            },
+            settings: { 'delete-branch-on-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithNumber, mockOctokit)).rejects.toThrow(
+        'Rule 1: repos selector entry 2 must be a non-empty string, got: number'
+      );
+
+      const configWithEmpty = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', '  ']
+            },
+            settings: { 'delete-branch-on-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithEmpty, mockOctokit)).rejects.toThrow(
+        'Rule 1: repos selector entry 2 must be a non-empty string, got: string'
+      );
+    });
+
+    test('should merge settings from multiple rules', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: ['production']
+              }
+            },
+            settings: {
+              'allow-squash-merge': true,
+              'code-scanning': true
+            }
+          },
+          {
+            selector: {
+              repos: ['my-org/repo1']
+            },
+            settings: {
+              'code-scanning': false, // Override from first rule
+              'immutable-releases': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'allow-squash-merge': true,
+          'code-scanning': false, // Later rule overrides
+          'immutable-releases': true
+        }
+      ]);
+    });
+
+    test('should handle multiple repos from different rules', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'env', value: 'prod' }]
+          },
+          {
+            repository_id: 2,
+            repository_name: 'repo2',
+            repository_full_name: 'my-org/repo2',
+            properties: [{ property_name: 'env', value: 'staging' }]
+          }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': { name: 'env', values: ['prod'] }
+            },
+            settings: { 'code-scanning': true }
+          },
+          {
+            selector: {
+              repos: ['my-org/repo3']
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toHaveLength(2);
+      expect(result).toContainEqual({ repo: 'my-org/repo1', 'code-scanning': true });
+      expect(result).toContainEqual({ repo: 'my-org/repo3', 'allow-squash-merge': true });
+    });
+
+    test('should skip rules without settings with warning', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] }
+            // No settings
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([]);
+      expect(mockCore.warning).toHaveBeenCalledWith('Rule 1 has no settings, skipping');
+    });
+
+    test('should throw error when settings is not an object', async () => {
+      const configWithString = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: 'not an object'
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithString, mockOctokit)).rejects.toThrow(
+        'Rule 1: settings must be an object, got string'
+      );
+
+      const configWithArray = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: ['not', 'an', 'object']
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
+        'Rule 1: settings must be an object, got array'
+      );
     });
   });
 

@@ -1,4 +1,8 @@
 repos:
+  # keep the defaults from the action
+  - repo: joshjohanning/repo-1
+  - repo: joshjohanning/repo-2
+  # override settings for this repo
   - repo: joshjohanning/my-action
     allow-squash-merge: false
     allow-merge-commit: true
@@ -11,5 +15,3 @@ repos:
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     autolinks-file: './config/autolinks/jira-autolinks.json'
-  - repo: joshjohanning/other-repo
-    # This repo will use the defaults from the action inputs
