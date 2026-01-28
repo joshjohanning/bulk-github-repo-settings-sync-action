@@ -290,8 +290,26 @@ export async function parseConfigWithRules(config, octokit) {
     if (rule.selector['custom-property']) {
       const propConfig = rule.selector['custom-property'];
       const propertyName = propConfig.name;
-      // Normalize values to strings (YAML can parse numbers/booleans)
-      const propertyValues = (propConfig.values || (propConfig.value ? [propConfig.value] : [])).map(v => String(v));
+
+      // Handle both array and scalar values, normalize to strings
+      const rawValues = propConfig.values ?? (propConfig.value !== undefined ? propConfig.value : undefined);
+      let propertyValues;
+
+      if (rawValues === undefined || rawValues === null) {
+        propertyValues = [];
+      } else if (Array.isArray(rawValues)) {
+        propertyValues = rawValues;
+      } else if (['string', 'number', 'boolean'].includes(typeof rawValues)) {
+        // Allow scalar shorthand: values: production
+        propertyValues = [rawValues];
+      } else {
+        throw new Error(
+          `Rule ${i + 1}: custom-property "values" must be a scalar or an array of scalars (got ${typeof rawValues})`
+        );
+      }
+
+      // Normalize all values to strings (YAML can parse numbers/booleans)
+      propertyValues = propertyValues.map(v => String(v));
 
       if (!propertyName || propertyValues.length === 0) {
         throw new Error(`Rule ${i + 1}: custom-property selector must have "name" and "value" or "values" properties`);
@@ -3064,8 +3082,10 @@ export async function run() {
     }
 
     // Check if any settings are specified
+    // Skip this check if repositoriesFile is provided (rules-based configs define settings in file)
     const hasSecuritySettings = Object.values(securitySettings).some(value => value !== null);
     const hasSettings =
+      repositoriesFile ||
       Object.values(settings).some(value => value !== null) ||
       enableCodeScanning !== null ||
       immutableReleases !== null ||

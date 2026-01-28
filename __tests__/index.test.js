@@ -714,6 +714,72 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should handle scalar value in custom-property selector (values: production)', async () => {
+      // Mock organization check
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+
+      // Mock org-level properties API
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_id: 1,
+            repository_name: 'repo1',
+            repository_full_name: 'my-org/repo1',
+            properties: [{ property_name: 'environment', value: 'production' }]
+          }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: 'production' // Scalar instead of array
+              }
+            },
+            settings: {
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'allow-squash-merge': true
+        }
+      ]);
+    });
+
+    test('should throw error for invalid values type in custom-property selector', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'environment',
+                values: { invalid: 'object' }
+              }
+            },
+            settings: {
+              'allow-squash-merge': true
+            }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        'Rule 1: custom-property "values" must be a scalar or an array of scalars'
+      );
+    });
+
     test('should process explicit repos selector', async () => {
       const config = {
         owner: 'my-org',
