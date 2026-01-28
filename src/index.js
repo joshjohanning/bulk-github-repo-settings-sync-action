@@ -404,14 +404,16 @@ export async function parseConfigWithRules(config, octokit) {
         }
       }
 
+      const perPage = 100;
       let page = 1;
       let hasMore = true;
       while (hasMore) {
         const { data } = isOrg
-          ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: 100, page })
-          : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: 100, page });
+          ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: perPage, page })
+          : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
 
-        if (data.length === 0) {
+        if (data.length === 0 || data.length < perPage) {
+          matchedRepos.push(...data.map(r => r.full_name));
           hasMore = false;
         } else {
           matchedRepos.push(...data.map(r => r.full_name));
