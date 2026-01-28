@@ -284,6 +284,13 @@ export async function parseConfigWithRules(config, octokit) {
       continue;
     }
 
+    // Validate settings is a plain object
+    if (typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
+      throw new Error(
+        `Rule ${i + 1}: settings must be an object, got ${Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
+      );
+    }
+
     let matchedRepos = [];
 
     // Handle custom-property selector
@@ -381,8 +388,13 @@ export async function parseConfigWithRules(config, octokit) {
       try {
         await octokit.rest.orgs.get({ org: owner });
         isOrg = true;
-      } catch {
-        isOrg = false;
+      } catch (error) {
+        // Only treat 404 as "not an org"; rethrow other errors to avoid masking real problems
+        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+          isOrg = false;
+        } else {
+          throw error;
+        }
       }
 
       let page = 1;

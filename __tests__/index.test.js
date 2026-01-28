@@ -955,6 +955,36 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([]);
       expect(mockCore.warning).toHaveBeenCalledWith('Rule 1 has no settings, skipping');
     });
+
+    test('should throw error when settings is not an object', async () => {
+      const configWithString = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: 'not an object'
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithString, mockOctokit)).rejects.toThrow(
+        'Rule 1: settings must be an object, got string'
+      );
+
+      const configWithArray = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: ['not', 'an', 'object']
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
+        'Rule 1: settings must be an object, got array'
+      );
+    });
   });
 
   describe('updateRepositorySettings', () => {
