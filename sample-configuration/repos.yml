@@ -15,3 +15,4 @@ repos:
     dependabot-yml: './config/dependabot/npm-actions.yml'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     autolinks-file: './config/autolinks/jira-autolinks.json'
+    codeowners: './config/CODEOWNERS'
