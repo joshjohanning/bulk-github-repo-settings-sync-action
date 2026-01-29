@@ -51,6 +51,7 @@ rules:
     settings:
       workflow-files: './workflows/platform-ci.yml,./workflows/release.yml'
       copilot-instructions-md: './config/copilot/platform-instructions.md'
+      codeowners: './config/CODEOWNERS'
 
   # Rule 4: Specific repositories with explicit overrides
   - selector:

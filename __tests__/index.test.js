@@ -149,6 +149,12 @@ inputs:
     description: 'Copilot instructions md'
   copilot-instructions-pr-title:
     description: 'Copilot instructions PR title'
+  codeowners:
+    description: 'Codeowners file'
+  codeowners-target-path:
+    description: 'Codeowners target path'
+  codeowners-pr-title:
+    description: 'Codeowners PR title'
   package-json-file:
     description: 'Package json file'
   package-json-sync-scripts:
@@ -196,6 +202,9 @@ const mockActionYmlParsed = {
     'autolinks-file': { description: 'Autolinks file' },
     'copilot-instructions-md': { description: 'Copilot instructions md' },
     'copilot-instructions-pr-title': { description: 'Copilot instructions PR title' },
+    codeowners: { description: 'Codeowners file' },
+    'codeowners-target-path': { description: 'Codeowners target path' },
+    'codeowners-pr-title': { description: 'Codeowners PR title' },
     'package-json-file': { description: 'Package json file' },
     'package-json-sync-scripts': { description: 'Sync scripts' },
     'package-json-sync-engines': { description: 'Sync engines' },
@@ -282,6 +291,7 @@ const {
   syncWorkflowFiles,
   syncAutolinks,
   syncCopilotInstructions,
+  syncCodeowners,
   syncPackageJson,
   resetKnownRepoConfigKeysCache
 } = await import('../src/index.js');
@@ -2280,7 +2290,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -3126,6 +3136,49 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('copilot-instructions');
+    });
+
+    test('should handle summary table with codeowners sync changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          codeowners: 'CODEOWNERS'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('# CODEOWNERS\n* @owner/team');
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 46, html_url: 'https://github.com/owner/repo1/pull/46' }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain('CODEOWNERS');
     });
 
     test('should handle summary table with package.json sync changes', async () => {
@@ -6741,6 +6794,324 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync copilot-instructions.md');
+    });
+  });
+
+  describe('syncCodeowners', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+    });
+
+    test('should create CODEOWNERS when it does not exist', async () => {
+      const testContent = '# CODEOWNERS\n* @owner/team';
+
+      setMockFileContent(testContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 }) // Branch check
+        .mockResolvedValueOnce({
+          // Default branch ref
+          data: { object: { sha: 'abc123' } }
+        });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 42,
+          html_url: 'https://github.com/owner/repo/pull/42'
+        }
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: add CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeowners).toBe('created');
+      expect(result.prNumber).toBe(42);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          path: '.github/CODEOWNERS',
+          branch: 'codeowners-sync'
+        })
+      );
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+    });
+
+    test('should update CODEOWNERS when content differs', async () => {
+      const newContent = '# CODEOWNERS\n* @owner/new-team';
+      const oldContent = '# CODEOWNERS\n* @owner/old-team';
+
+      setMockFileContent(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with different content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-456',
+          content: Buffer.from(oldContent).toString('base64')
+        }
+      });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 43,
+          html_url: 'https://github.com/owner/repo/pull/43'
+        }
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeowners).toBe('updated');
+      expect(result.prNumber).toBe(43);
+    });
+
+    test('should not create PR when content is unchanged', async () => {
+      const content = '# CODEOWNERS\n* @owner/team';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      // File exists with same content
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeowners).toBe('unchanged');
+      expect(result.message).toContain('already up to date');
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should support different target paths', async () => {
+      const testContent = '# CODEOWNERS\n* @owner/team';
+
+      setMockFileContent(testContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      mockOctokit.rest.git.getRef.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({
+        data: { object: { sha: 'abc123' } }
+      });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: {
+          number: 44,
+          html_url: 'https://github.com/owner/repo/pull/44'
+        }
+      });
+
+      // Test root CODEOWNERS path
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        'CODEOWNERS',
+        'chore: add CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: 'CODEOWNERS'
+        })
+      );
+    });
+
+    test('should reject invalid target path', async () => {
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/invalid/CODEOWNERS',
+        'chore: add CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid CODEOWNERS target path');
+      expect(result.error).toContain('.github/CODEOWNERS');
+      expect(result.error).toContain('CODEOWNERS');
+      expect(result.error).toContain('docs/CODEOWNERS');
+    });
+
+    test('should handle dry-run mode', async () => {
+      const newContent = '# CODEOWNERS\n* @owner/team';
+
+      setMockFileContent(newContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main'
+        }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({
+        status: 404
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: []
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: add CODEOWNERS',
+        true // dry-run
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeowners).toBe('would-create');
+      expect(result.dryRun).toBe(true);
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncCodeowners(
+        mockOctokit,
+        'invalid-repo-format',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should handle missing CODEOWNERS file', async () => {
+      mockFs.readFileSync.mockImplementation(() => {
+        throw new Error('ENOENT: no such file or directory');
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './nonexistent-codeowners',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read file at');
+      expect(result.error).toContain('CODEOWNERS');
+    });
+
+    test('should handle API errors', async () => {
+      setMockFileContent('# CODEOWNERS\n* @owner/team');
+
+      mockOctokit.rest.repos.get.mockRejectedValue(new Error('API rate limit exceeded'));
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync CODEOWNERS');
     });
   });
 

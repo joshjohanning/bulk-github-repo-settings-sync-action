@@ -32,6 +32,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
+- 👥 **Sync CODEOWNERS files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
 - 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🎯 **Filter repositories by custom property values** for dynamic targeting
@@ -528,6 +529,52 @@ repos:
 - If an open PR already exists, updates the PR branch if the source content has changed
 
 For more information on Copilot instructions, see the [GitHub Copilot documentation](https://docs.github.com/en/copilot/customizing-copilot/adding-custom-instructions-for-github-copilot).
+
+### Syncing CODEOWNERS
+
+Sync a `CODEOWNERS` file to target repositories via pull requests. CODEOWNERS files define who is responsible for reviewing changes to specific parts of a repository.
+
+```yml
+- name: Sync CODEOWNERS
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    codeowners: './config/CODEOWNERS'
+    codeowners-target-path: '.github/CODEOWNERS' # default location
+    codeowners-pr-title: 'chore: update CODEOWNERS'
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    codeowners: './config/codeowners/frontend-codeowners'
+  - repo: owner/repo2
+    codeowners: './config/codeowners/backend-codeowners'
+    codeowners-target-path: 'CODEOWNERS' # use root location instead
+  - repo: owner/repo3
+    codeowners: './.github/CODEOWNERS' # use the same config that this repo is using
+```
+
+**Supported target paths:**
+
+| Path                 | Description                    |
+| -------------------- | ------------------------------ |
+| `.github/CODEOWNERS` | Default location (recommended) |
+| `CODEOWNERS`         | Repository root                |
+| `docs/CODEOWNERS`    | Inside the docs directory      |
+
+**Behavior:**
+
+- If the CODEOWNERS file doesn't exist, it creates it and opens a PR
+- If it exists but differs, it updates it via PR
+- If content is identical, no PR is created
+- PRs are created using the GitHub API so commits are verified
+- If an open PR already exists, updates the PR branch if the source content has changed
+
+For more information on CODEOWNERS, see the [GitHub documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 
 ### Syncing .gitignore Configuration
 

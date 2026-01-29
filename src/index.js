@@ -2755,6 +2755,45 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
 }
 
 /**
+ * Sync CODEOWNERS file to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} codeownersPath - Path to local CODEOWNERS file
+ * @param {string} targetPath - Target path in the repository (.github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS)
+ * @param {string} prTitle - Title for the pull request
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, prTitle, dryRun) {
+  // Validate target path
+  const validPaths = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
+  if (!validPaths.includes(targetPath)) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Invalid CODEOWNERS target path: ${targetPath}. Must be one of: ${validPaths.join(', ')}`,
+      dryRun
+    };
+  }
+
+  return syncFileViaPullRequest(
+    octokit,
+    repo,
+    {
+      sourceFilePath: codeownersPath,
+      targetPath,
+      branchName: 'codeowners-sync',
+      prTitle,
+      prBodyCreate: `This PR adds \`${targetPath}\` to define code ownership.\n\n**Changes:**\n- Added CODEOWNERS file`,
+      prBodyUpdate: `This PR updates \`${targetPath}\` to the latest version.\n\n**Changes:**\n- Updated CODEOWNERS file`,
+      resultKey: 'codeowners',
+      fileDescription: 'CODEOWNERS'
+    },
+    dryRun
+  );
+}
+
+/**
  * Get a list of specific changes made to a repository
  * @param {Object} result - Repository update result object
  * @param {boolean} dryRun - Whether this is a dry-run
@@ -2960,13 +2999,31 @@ function getChangesList(result, dryRun) {
     }
   }
 
+  // CODEOWNERS changes
+  if (
+    result.codeownersSync?.success &&
+    result.codeownersSync.codeowners &&
+    result.codeownersSync.codeowners !== 'unchanged'
+  ) {
+    const status = result.codeownersSync.codeowners;
+    if (status === 'pr-up-to-date') {
+      changes.push(`CODEOWNERS PR #${result.codeownersSync.prNumber} up-to-date (pending merge)`);
+    } else if (status === 'pr-exists') {
+      changes.push(`CODEOWNERS PR exists (#${result.codeownersSync.prNumber})`);
+    } else if (status.startsWith('would-')) {
+      changes.push(`Would sync CODEOWNERS`);
+    } else {
+      changes.push(`${wouldPrefix}CODEOWNERS (PR #${result.codeownersSync.prNumber})`);
+    }
+  }
+
   return changes;
 }
 
 /**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, or package.json)
+ * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, package.json, or codeowners)
  */
 function hasRepositoryChanges(result) {
   // Helper to check if a sync status represents something to report
@@ -2995,7 +3052,8 @@ function hasRepositoryChanges(result) {
     (result.copilotInstructionsSync &&
       result.copilotInstructionsSync.success &&
       hasSyncChanges(result.copilotInstructionsSync.copilotInstructions)) ||
-    (result.packageJsonSync && result.packageJsonSync.success && hasSyncChanges(result.packageJsonSync.packageJson))
+    (result.packageJsonSync && result.packageJsonSync.success && hasSyncChanges(result.packageJsonSync.packageJson)) ||
+    (result.codeownersSync && result.codeownersSync.success && hasSyncChanges(result.codeownersSync.codeowners))
   );
 }
 
@@ -3089,6 +3147,11 @@ export async function run() {
     const copilotInstructionsPrTitle =
       getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
 
+    // Get CODEOWNERS settings
+    const codeowners = getInput('codeowners');
+    const codeownersTargetPath = getInput('codeowners-target-path') || '.github/CODEOWNERS';
+    const codeownersPrTitle = getInput('codeowners-pr-title') || 'chore: update CODEOWNERS';
+
     // Get package.json sync settings
     const packageJsonFile = getInput('package-json-file');
     const syncScripts = getBooleanInput('package-json-sync-scripts');
@@ -3122,10 +3185,11 @@ export async function run() {
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
       copilotInstructionsMd ||
+      codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -3176,6 +3240,9 @@ export async function run() {
     }
     if (copilotInstructionsMd) {
       core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
+    }
+    if (codeowners) {
+      core.info(`CODEOWNERS will be synced from: ${codeowners} to ${codeownersTargetPath}`);
     }
     if (securitySettings.secretScanning !== null) {
       core.info(`Secret scanning will be ${securitySettings.secretScanning ? 'enabled' : 'disabled'}`);
@@ -3305,6 +3372,16 @@ export async function run() {
       let repoCopilotInstructionsMd = copilotInstructionsMd;
       if (repoConfig['copilot-instructions-md'] !== undefined) {
         repoCopilotInstructionsMd = repoConfig['copilot-instructions-md'];
+      }
+
+      // Handle repo-specific codeowners
+      let repoCodeowners = codeowners;
+      if (repoConfig['codeowners'] !== undefined) {
+        repoCodeowners = repoConfig['codeowners'];
+      }
+      let repoCodeownersTargetPath = codeownersTargetPath;
+      if (repoConfig['codeowners-target-path'] !== undefined) {
+        repoCodeownersTargetPath = repoConfig['codeowners-target-path'];
       }
 
       // Handle repo-specific security settings
@@ -3472,6 +3549,31 @@ export async function run() {
           }
         } else {
           core.warning(`  ⚠️  ${copilotResult.error}`);
+        }
+      }
+
+      // Sync CODEOWNERS if specified
+      if (repoCodeowners) {
+        core.info(`  👥 Checking CODEOWNERS...`);
+        const codeownersResult = await syncCodeowners(
+          octokit,
+          repo,
+          repoCodeowners,
+          repoCodeownersTargetPath,
+          codeownersPrTitle,
+          dryRun
+        );
+
+        // Add codeowners result to the main result
+        result.codeownersSync = codeownersResult;
+
+        if (codeownersResult.success) {
+          core.info(`  👥 ${codeownersResult.message}`);
+          if (codeownersResult.prUrl) {
+            core.info(`  🔗 PR URL: ${codeownersResult.prUrl}`);
+          }
+        } else {
+          core.warning(`  ⚠️  ${codeownersResult.error}`);
         }
       }
 

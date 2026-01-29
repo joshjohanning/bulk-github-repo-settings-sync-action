@@ -127,6 +127,17 @@ inputs:
     description: 'Title for pull requests when updating copilot-instructions.md'
     required: false
     default: 'chore: update copilot-instructions.md'
+  codeowners:
+    description: 'Path to a CODEOWNERS file to sync to target repositories'
+    required: false
+  codeowners-target-path:
+    description: 'Target path for the CODEOWNERS file in repositories (.github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS)'
+    required: false
+    default: '.github/CODEOWNERS'
+  codeowners-pr-title:
+    description: 'Title for pull requests when updating CODEOWNERS'
+    required: false
+    default: 'chore: update CODEOWNERS'
   package-json-file:
     description: 'Path to a package.json file to use as source for syncing npm scripts and/or engines'
     required: false
