@@ -154,11 +154,11 @@ Create a `settings-config.yml` file:
 owner: my-org
 
 rules:
-  # Rule 1: Infrastructure repos get strict security settings
+  # Rule 1: Platform repos get strict security settings
   - selector:
       custom-property:
         name: team
-        values: [infrastructure]
+        values: [platform]
     settings:
       code-scanning: true
       secret-scanning: true
