@@ -60,10 +60,14 @@ Update repository settings in bulk across multiple GitHub repositories.
     dependabot-alerts: true
     dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
+    gitignore: './config/.gitignore'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     pull-request-template: './config/templates/pull_request_template.md'
+    workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
     autolinks-file: './config/autolinks/jira-autolinks.json'
     copilot-instructions-md: './config/copilot/copilot-instructions.md'
+    codeowners: './config/CODEOWNERS'
+    package-json-file: './config/package.json'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
