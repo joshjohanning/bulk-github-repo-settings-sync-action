@@ -125,7 +125,7 @@ Use in workflow:
 
 - Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
 - All org repos: `repositories: 'all'` with `owner: 'my-org'`
-- Custom property filtering: `custom-property-name: 'environment'` and `custom-property-value: 'production'` with `owner: 'my-org'` (organizations only)
+- Custom property filtering: `custom-property-name` and `custom-property-value` (comma-separated for multiple values) with `owner` (organizations only)
 
 ---
 
@@ -137,10 +137,10 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 
 **Selector types:**
 
-| Selector          | Description                                   | Example                                                                 |
-| ----------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `custom-property` | Filter by organization custom property values | `custom-property: { name: environment, values: [production, staging] }` |
-| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                                   |
+| Selector          | Description                                   | Example                                                         |
+| ----------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| `custom-property` | Filter by organization custom property values | `custom-property: { name: team, values: [platform, frontend] }` |
+| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                           |
 
 > [!NOTE]
 > 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
@@ -154,11 +154,11 @@ Create a `settings-config.yml` file:
 owner: my-org
 
 rules:
-  # Rule 1: All production repositories get security settings
+  # Rule 1: Infrastructure repos get strict security settings
   - selector:
       custom-property:
-        name: environment
-        values: [production]
+        name: team
+        values: [infrastructure]
     settings:
       code-scanning: true
       secret-scanning: true
@@ -166,11 +166,11 @@ rules:
       immutable-releases: true
       dependabot-yml: './config/dependabot/npm-actions.yml'
 
-  # Rule 2: Staging repos get monitoring but not immutable releases
+  # Rule 2: Frontend and backend repos get monitoring but not immutable releases
   - selector:
       custom-property:
-        name: environment
-        values: [staging]
+        name: team
+        values: [frontend, backend]
     settings:
       code-scanning: true
       secret-scanning: true
