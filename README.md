@@ -32,7 +32,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
-- **Sync CODEOWNERS files** across repositories via pull requests
+- 👥 **Sync CODEOWNERS files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
 - 📋 Support multiple repository input methods (comma-separated, YAML file, or all org repos)
 - 🎯 **Filter repositories by custom property values** for dynamic targeting
