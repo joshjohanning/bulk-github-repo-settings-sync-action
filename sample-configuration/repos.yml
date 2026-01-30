@@ -29,8 +29,10 @@ repos:
     codeowners-vars:
       default_team: '@joshjohanning/frontend-team'
       code_reviewers: '@joshjohanning/senior-devs'
+      docs_team: '@joshjohanning/docs-team'
   - repo: joshjohanning/backend-api
     codeowners: './config/CODEOWNERS.template'
     codeowners-vars:
       default_team: '@joshjohanning/backend-team'
       code_reviewers: '@joshjohanning/platform-leads'
+      docs_team: '@joshjohanning/docs-team'

@@ -590,15 +590,15 @@ repos:
   - repo: owner/frontend-app
     codeowners: './config/CODEOWNERS.template'
     codeowners-vars:
-      default_team: '@org/frontend-team'
-      code_reviewers: '@org/senior-devs'
-      docs_team: '@org/docs-team'
+      default_team: '@owner/frontend-team'
+      code_reviewers: '@owner/senior-devs'
+      docs_team: '@owner/docs-team'
   - repo: owner/backend-api
     codeowners: './config/CODEOWNERS.template'
     codeowners-vars:
-      default_team: '@org/backend-team'
-      code_reviewers: '@org/platform-leads'
-      docs_team: '@org/docs-team'
+      default_team: '@owner/backend-team'
+      code_reviewers: '@owner/platform-leads'
+      docs_team: '@owner/docs-team'
 ```
 
 Or with rules-based configuration in `settings-config.yml` (recommended for larger organizations - new repos automatically get the right CODEOWNERS based on their custom property):
@@ -612,8 +612,8 @@ rules:
     settings:
       codeowners: './config/CODEOWNERS.template'
       codeowners-vars:
-        default_team: '@org/platform-team'
-        code_reviewers: '@org/platform-leads'
+        default_team: '@owner/platform-team'
+        code_reviewers: '@owner/platform-leads'
 ```
 
 **Supported target paths:**

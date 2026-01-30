@@ -9,6 +9,6 @@
 * {{code_reviewers}}
 
 # Specific paths can have different owners
-# /docs/ @org/docs-team
-# /src/api/ @org/api-team
-# *.md @org/docs-team
+/docs/ {{docs_team}}
+# /src/api/ @owner/api-team
+# *.md @owner/docs-team
