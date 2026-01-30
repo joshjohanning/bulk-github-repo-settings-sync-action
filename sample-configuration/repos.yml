@@ -16,3 +16,14 @@ repos:
     rulesets-file: './config/rulesets/prod-ruleset.json'
     autolinks-file: './config/autolinks/jira-autolinks.json'
     codeowners: './config/CODEOWNERS'
+  # example with CODEOWNERS template variables
+  - repo: joshjohanning/frontend-app
+    codeowners: './config/CODEOWNERS.template'
+    codeowners-vars:
+      default_team: '@joshjohanning/frontend-team'
+      code_reviewers: '@joshjohanning/senior-devs'
+  - repo: joshjohanning/backend-api
+    codeowners: './config/CODEOWNERS.template'
+    codeowners-vars:
+      default_team: '@joshjohanning/backend-team'
+      code_reviewers: '@joshjohanning/platform-leads'

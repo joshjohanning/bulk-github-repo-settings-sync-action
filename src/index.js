@@ -45,7 +45,8 @@ import * as yaml from 'js-yaml';
  */
 function getKnownRepoConfigKeys() {
   // 'repo' is always valid as it's the repository identifier in YAML config
-  const keys = new Set(['repo']);
+  // 'codeowners-vars' is YAML-only config for template variables (no action input)
+  const keys = new Set(['repo', 'codeowners-vars']);
 
   try {
     // Get the directory where this script is located
@@ -113,6 +114,29 @@ function validateRepoConfig(repoConfig, repoName) {
       );
     }
   }
+}
+
+/**
+ * Replace template variables in content with provided values.
+ * Template variables use the format {{variable_name}}.
+ * @param {string} content - Content with template variables
+ * @param {Object} vars - Object with variable names and values
+ * @returns {string} Content with variables replaced
+ */
+export function replaceTemplateVariables(content, vars) {
+  if (!vars || typeof vars !== 'object' || Object.keys(vars).length === 0) {
+    return content;
+  }
+
+  let result = content;
+  for (const [varName, varValue] of Object.entries(vars)) {
+    // Replace all occurrences of {{varName}} with varValue
+    // Use a regex to match the exact variable name with optional whitespace
+    const regex = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, 'g');
+    result = result.replace(regex, varValue);
+  }
+
+  return result;
 }
 
 /**
@@ -1187,8 +1211,17 @@ export async function updateRepositorySettings(
  *   - 'would-update-pr': Dry-run - would update existing PR branch
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
-  const { files, branchName, prTitle, prBodyCreate, prBodyUpdate, resultKey, fileDescription, contentProcessor } =
-    options;
+  const {
+    files,
+    branchName,
+    prTitle,
+    prBodyCreate,
+    prBodyUpdate,
+    resultKey,
+    fileDescription,
+    contentProcessor,
+    contentTransformer
+  } = options;
 
   const [owner, repoName] = repo.split('/');
 
@@ -1216,6 +1249,12 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
           dryRun
         };
       }
+
+      // Apply content transformer if provided (e.g., template variable replacement)
+      if (contentTransformer) {
+        sourceContent = contentTransformer(sourceContent);
+      }
+
       fileInfos.push({
         sourceFilePath: file.sourceFilePath,
         targetPath: file.targetPath,
@@ -2762,9 +2801,10 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
  * @param {string} targetPath - Target path in the repository (.github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS)
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {Object} [templateVars] - Optional template variables for {{variable}} replacement
  * @returns {Promise<Object>} Result object
  */
-export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, prTitle, dryRun) {
+export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, prTitle, dryRun, templateVars = null) {
   // Validate target path
   const validPaths = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
   if (!validPaths.includes(targetPath)) {
@@ -2775,6 +2815,12 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
       dryRun
     };
   }
+
+  // Create content transformer if template variables are provided
+  const contentTransformer =
+    templateVars && Object.keys(templateVars).length > 0
+      ? content => replaceTemplateVariables(content, templateVars)
+      : null;
 
   return syncFileViaPullRequest(
     octokit,
@@ -2787,7 +2833,8 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
       prBodyCreate: `This PR adds \`${targetPath}\` to define code ownership.\n\n**Changes:**\n- Added CODEOWNERS file`,
       prBodyUpdate: `This PR updates \`${targetPath}\` to the latest version.\n\n**Changes:**\n- Updated CODEOWNERS file`,
       resultKey: 'codeowners',
-      fileDescription: 'CODEOWNERS'
+      fileDescription: 'CODEOWNERS',
+      contentTransformer
     },
     dryRun
   );
@@ -3383,6 +3430,11 @@ export async function run() {
       if (repoConfig['codeowners-target-path'] !== undefined) {
         repoCodeownersTargetPath = repoConfig['codeowners-target-path'];
       }
+      // Handle repo-specific codeowners-vars (template variables)
+      let repoCodeownersVars = null;
+      if (repoConfig['codeowners-vars'] !== undefined) {
+        repoCodeownersVars = repoConfig['codeowners-vars'];
+      }
 
       // Handle repo-specific security settings
       const repoSecuritySettings = {
@@ -3555,13 +3607,18 @@ export async function run() {
       // Sync CODEOWNERS if specified
       if (repoCodeowners) {
         core.info(`  👥 Checking CODEOWNERS...`);
+        if (repoCodeownersVars) {
+          const varNames = Object.keys(repoCodeownersVars).join(', ');
+          core.info(`  📝 Using template variables: ${varNames}`);
+        }
         const codeownersResult = await syncCodeowners(
           octokit,
           repo,
           repoCodeowners,
           repoCodeownersTargetPath,
           codeownersPrTitle,
-          dryRun
+          dryRun,
+          repoCodeownersVars
         );
 
         // Add codeowners result to the main result

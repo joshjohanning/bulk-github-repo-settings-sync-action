@@ -51,7 +51,10 @@ rules:
     settings:
       workflow-files: './workflows/platform-ci.yml,./workflows/release.yml'
       copilot-instructions-md: './config/copilot/platform-instructions.md'
-      codeowners: './config/CODEOWNERS'
+      codeowners: './config/CODEOWNERS.template'
+      codeowners-vars:
+        default_team: '@my-org/platform-team'
+        code_reviewers: '@my-org/platform-leads'
 
   # Rule 4: Specific repositories with explicit overrides
   - selector:
@@ -63,6 +66,10 @@ rules:
       dependabot-alerts: true
       dependabot-security-updates: true
       autolinks-file: './config/autolinks/jira.json'
+      codeowners: './config/CODEOWNERS.template'
+      codeowners-vars:
+        default_team: '@my-org/security-team'
+        code_reviewers: '@my-org/senior-engineers @my-org/security-leads'
 
   # Rule 5: A single repo with unique settings
   - selector:

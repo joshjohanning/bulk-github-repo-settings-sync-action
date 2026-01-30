@@ -293,7 +293,8 @@ const {
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
-  resetKnownRepoConfigKeysCache
+  resetKnownRepoConfigKeysCache,
+  replaceTemplateVariables
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -417,6 +418,34 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([{ repo: 'owner/repo1', 'allow-squash-merge': false, gitignore: 'path/to/file' }]);
       // Should not have any warnings about unknown keys
       expect(mockCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('Unknown configuration key'));
+    });
+
+    test('should not warn about codeowners-vars configuration key', async () => {
+      setMockFileContent(
+        'repos:\n  - repo: owner/repo1\n    codeowners: ./template\n    codeowners-vars:\n      team: "@org/team"'
+      );
+      setMockYamlContent({
+        repos: [
+          {
+            repo: 'owner/repo1',
+            codeowners: './template',
+            'codeowners-vars': { team: '@org/team' }
+          }
+        ]
+      });
+
+      mockCore.warning.mockClear();
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          codeowners: './template',
+          'codeowners-vars': { team: '@org/team' }
+        }
+      ]);
+      // codeowners-vars is a YAML-only config, should not warn
+      expect(mockCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('Unknown configuration key'));
+      expect(mockCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('codeowners-vars'));
     });
 
     test('should reject YAML file without repos or rules array', async () => {
@@ -7112,6 +7141,216 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync CODEOWNERS');
+    });
+
+    test('should apply template variables when provided', async () => {
+      const templateContent = '* {{default_team}}\n/src/ {{code_reviewers}}';
+
+      setMockFileContent(templateContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File does not exist
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+
+      // No existing PRs
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      // Branch doesn't exist
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 42, html_url: 'https://github.com/owner/repo/pull/42' }
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS.template',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false,
+        { default_team: '@org/team-a', code_reviewers: '@org/leads' }
+      );
+
+      expect(result.success).toBe(true);
+
+      // Verify the content was transformed
+      const createFileCall = mockOctokit.rest.repos.createOrUpdateFileContents.mock.calls[0][0];
+      const committedContent = Buffer.from(createFileCall.content, 'base64').toString('utf8');
+      expect(committedContent).toContain('@org/team-a');
+      expect(committedContent).toContain('@org/leads');
+      expect(committedContent).not.toContain('{{default_team}}');
+      expect(committedContent).not.toContain('{{code_reviewers}}');
+    });
+
+    test('should handle template variables with whitespace', async () => {
+      const templateContent = '* {{ default_team }}\n/src/ {{  code_reviewers  }}';
+
+      setMockFileContent(templateContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 42, html_url: 'https://github.com/owner/repo/pull/42' }
+      });
+
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS.template',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false,
+        { default_team: '@org/team-a', code_reviewers: '@org/leads' }
+      );
+
+      expect(result.success).toBe(true);
+
+      const createFileCall = mockOctokit.rest.repos.createOrUpdateFileContents.mock.calls[0][0];
+      const committedContent = Buffer.from(createFileCall.content, 'base64').toString('utf8');
+      expect(committedContent).toContain('@org/team-a');
+      expect(committedContent).toContain('@org/leads');
+    });
+
+    test('should not transform content when no template variables provided', async () => {
+      const staticContent = '* @org/team-a\n/src/ @org/leads';
+
+      setMockFileContent(staticContent);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 42, html_url: 'https://github.com/owner/repo/pull/42' }
+      });
+
+      // Call without template variables
+      const result = await syncCodeowners(
+        mockOctokit,
+        'owner/repo',
+        './CODEOWNERS',
+        '.github/CODEOWNERS',
+        'chore: update CODEOWNERS',
+        false
+      );
+
+      expect(result.success).toBe(true);
+
+      const createFileCall = mockOctokit.rest.repos.createOrUpdateFileContents.mock.calls[0][0];
+      const committedContent = Buffer.from(createFileCall.content, 'base64').toString('utf8');
+      expect(committedContent).toContain('@org/team-a');
+      expect(committedContent).toContain('@org/leads');
+    });
+  });
+
+  describe('replaceTemplateVariables', () => {
+    test('should replace single variable', () => {
+      const content = '* {{team}}';
+      const result = replaceTemplateVariables(content, { team: '@org/my-team' });
+      expect(result).toBe('* @org/my-team');
+    });
+
+    test('should replace multiple variables', () => {
+      const content = '* {{default_team}}\n/src/ {{code_team}}\n/docs/ {{docs_team}}';
+      const result = replaceTemplateVariables(content, {
+        default_team: '@org/team-a',
+        code_team: '@org/devs',
+        docs_team: '@org/writers'
+      });
+      expect(result).toBe('* @org/team-a\n/src/ @org/devs\n/docs/ @org/writers');
+    });
+
+    test('should replace same variable multiple times', () => {
+      const content = '* {{team}}\n/src/ {{team}}\n/api/ {{team}}';
+      const result = replaceTemplateVariables(content, { team: '@org/my-team' });
+      expect(result).toBe('* @org/my-team\n/src/ @org/my-team\n/api/ @org/my-team');
+    });
+
+    test('should handle whitespace in variable brackets', () => {
+      const content = '* {{ team }}\n/src/ {{  team  }}';
+      const result = replaceTemplateVariables(content, { team: '@org/my-team' });
+      expect(result).toBe('* @org/my-team\n/src/ @org/my-team');
+    });
+
+    test('should return original content when vars is null', () => {
+      const content = '* {{team}}';
+      const result = replaceTemplateVariables(content, null);
+      expect(result).toBe('* {{team}}');
+    });
+
+    test('should return original content when vars is undefined', () => {
+      const content = '* {{team}}';
+      const result = replaceTemplateVariables(content, undefined);
+      expect(result).toBe('* {{team}}');
+    });
+
+    test('should return original content when vars is empty object', () => {
+      const content = '* {{team}}';
+      const result = replaceTemplateVariables(content, {});
+      expect(result).toBe('* {{team}}');
+    });
+
+    test('should not replace undefined variables', () => {
+      const content = '* {{team}}\n/src/ {{other}}';
+      const result = replaceTemplateVariables(content, { team: '@org/my-team' });
+      expect(result).toBe('* @org/my-team\n/src/ {{other}}');
+    });
+
+    test('should handle complex CODEOWNERS content', () => {
+      const content = `# CODEOWNERS file
+# Default owners for everything
+* {{default_team}}
+
+# Frontend code
+/src/components/ {{frontend_team}}
+/src/styles/ {{frontend_team}}
+
+# Backend code
+/src/api/ {{backend_team}}
+/src/services/ {{backend_team}}
+
+# Documentation
+/docs/ {{docs_team}}
+*.md {{docs_team}}`;
+
+      const result = replaceTemplateVariables(content, {
+        default_team: '@org/all-devs',
+        frontend_team: '@org/frontend @org/ux-team',
+        backend_team: '@org/backend',
+        docs_team: '@org/tech-writers'
+      });
+
+      expect(result).toContain('* @org/all-devs');
+      expect(result).toContain('/src/components/ @org/frontend @org/ux-team');
+      expect(result).toContain('/src/api/ @org/backend');
+      expect(result).toContain('/docs/ @org/tech-writers');
+      expect(result).not.toContain('{{');
     });
   });
 
