@@ -60,10 +60,14 @@ Update repository settings in bulk across multiple GitHub repositories.
     dependabot-alerts: true
     dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
+    gitignore: './config/.gitignore'
     rulesets-file: './config/rulesets/prod-ruleset.json'
     pull-request-template: './config/templates/pull_request_template.md'
+    workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
     autolinks-file: './config/autolinks/jira-autolinks.json'
     copilot-instructions-md: './config/copilot/copilot-instructions.md'
+    codeowners: './config/CODEOWNERS'
+    package-json-file: './config/package.json'
     topics: 'javascript,github-actions,automation'
     dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR
 ```
@@ -121,7 +125,7 @@ Use in workflow:
 
 - Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
 - All org repos: `repositories: 'all'` with `owner: 'my-org'`
-- Custom property filtering: `custom-property-name: 'environment'` and `custom-property-value: 'production'` with `owner: 'my-org'` (organizations only)
+- Custom property filtering: `custom-property-name` and `custom-property-value` (comma-separated for multiple values) with `owner` (organizations only)
 
 ---
 
@@ -133,10 +137,10 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 
 **Selector types:**
 
-| Selector          | Description                                   | Example                                                                 |
-| ----------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `custom-property` | Filter by organization custom property values | `custom-property: { name: environment, values: [production, staging] }` |
-| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                                   |
+| Selector          | Description                                   | Example                                                         |
+| ----------------- | --------------------------------------------- | --------------------------------------------------------------- |
+| `custom-property` | Filter by organization custom property values | `custom-property: { name: team, values: [platform, frontend] }` |
+| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                           |
 
 > [!NOTE]
 > 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
@@ -150,11 +154,11 @@ Create a `settings-config.yml` file:
 owner: my-org
 
 rules:
-  # Rule 1: All production repositories get security settings
+  # Rule 1: Platform repos get strict security settings
   - selector:
       custom-property:
-        name: environment
-        values: [production]
+        name: team
+        values: [platform]
     settings:
       code-scanning: true
       secret-scanning: true
@@ -162,11 +166,11 @@ rules:
       immutable-releases: true
       dependabot-yml: './config/dependabot/npm-actions.yml'
 
-  # Rule 2: Staging repos get monitoring but not immutable releases
+  # Rule 2: Frontend and backend repos get monitoring but not immutable releases
   - selector:
       custom-property:
-        name: environment
-        values: [staging]
+        name: team
+        values: [frontend, backend]
     settings:
       code-scanning: true
       secret-scanning: true
@@ -818,6 +822,9 @@ Output shows what would change:
 | `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                       |
 | `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
 | `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
+| `codeowners`                      | Path to a CODEOWNERS file to sync to target repositories                                                                                   | No       | -                                       |
+| `codeowners-target-path`          | Target path for the CODEOWNERS file (`.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`)                                             | No       | `.github/CODEOWNERS`                    |
+| `codeowners-pr-title`             | Title for pull requests when updating CODEOWNERS                                                                                           | No       | `chore: update CODEOWNERS`              |
 | `package-json-file`               | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                       |
 | `package-json-sync-scripts`       | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `true`                                  |
 | `package-json-sync-engines`       | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                  |

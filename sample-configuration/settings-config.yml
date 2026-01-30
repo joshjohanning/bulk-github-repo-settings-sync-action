@@ -10,12 +10,12 @@ owner: my-org
 #
 # If a repository matches multiple rules, settings are merged (later rules override earlier ones)
 rules:
-  # Rule 1: Production repositories get strict security settings
+  # Rule 1: Platform repos get strict security settings
   - selector:
       custom-property:
-        name: environment
+        name: team
         values:
-          - production
+          - platform
     settings:
       allow-squash-merge: true
       allow-merge-commit: false
@@ -25,38 +25,30 @@ rules:
       secret-scanning: true
       secret-scanning-push-protection: true
       immutable-releases: true
-      dependabot-yml: './config/dependabot/production.yml'
+      dependabot-yml: './config/dependabot/npm-actions.yml'
       rulesets-file: './config/rulesets/strict-ruleset.json'
-
-  # Rule 2: Staging repositories get similar but less strict settings
-  - selector:
-      custom-property:
-        name: environment
-        values:
-          - staging
-    settings:
-      allow-squash-merge: true
-      delete-branch-on-merge: true
-      code-scanning: true
-      secret-scanning: true
-      dependabot-yml: './config/dependabot/staging.yml'
-
-  # Rule 3: Repositories owned by team "platform" get specific workflow files
-  - selector:
-      custom-property:
-        name: team
-        values:
-          - platform
-          - infrastructure
-    settings:
-      workflow-files: './workflows/platform-ci.yml,./workflows/release.yml'
+      workflow-files: './config/workflows/platform-ci.yml,./config/workflows/release.yml'
       copilot-instructions-md: './config/copilot/platform-instructions.md'
       codeowners: './config/CODEOWNERS.template'
       codeowners-vars:
         default_team: '@my-org/platform-team'
         code_reviewers: '@my-org/platform-leads'
 
-  # Rule 4: Specific repositories with explicit overrides
+  # Rule 2: Frontend and backend repos get monitoring but less strict settings
+  - selector:
+      custom-property:
+        name: team
+        values:
+          - frontend
+          - backend
+    settings:
+      allow-squash-merge: true
+      delete-branch-on-merge: true
+      code-scanning: true
+      secret-scanning: true
+      dependabot-yml: './config/dependabot/npm-actions.yml'
+
+  # Rule 3: Specific repositories with explicit overrides
   - selector:
       repos:
         - my-org/critical-service
@@ -71,7 +63,7 @@ rules:
         default_team: '@my-org/security-team'
         code_reviewers: '@my-org/senior-engineers @my-org/security-leads'
 
-  # Rule 5: A single repo with unique settings
+  # Rule 4: A single repo with unique settings
   - selector:
       repos:
         - my-org/legacy-app
