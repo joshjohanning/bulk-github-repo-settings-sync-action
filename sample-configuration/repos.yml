@@ -13,6 +13,13 @@ repos:
     code-scanning: false
     topics: 'javascript,github-actions,automation,different'
     dependabot-yml: './config/dependabot/npm-actions.yml'
+    gitignore: './config/.gitignore'
     rulesets-file: './config/rulesets/prod-ruleset.json'
+    pull-request-template: './config/templates/pull_request_template.md'
+    workflow-files:
+      - './config/workflows/ci.yml'
+      - './config/workflows/release.yml'
     autolinks-file: './config/autolinks/jira-autolinks.json'
+    copilot-instructions-md: './config/copilot/copilot-instructions.md'
     codeowners: './config/CODEOWNERS'
+    package-json-file: './config/package.json'
