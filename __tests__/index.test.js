@@ -7298,6 +7298,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toBe('* @org/my-team\n/src/ @org/my-team');
     });
 
+    test('should handle variable names with regex special characters', () => {
+      // Variable names with special regex chars should be escaped properly
+      const content = '* {{team.name}}\n/src/ {{team[1]}}';
+      const result = replaceTemplateVariables(content, {
+        'team.name': '@org/dotted-team',
+        'team[1]': '@org/bracketed-team'
+      });
+      expect(result).toBe('* @org/dotted-team\n/src/ @org/bracketed-team');
+    });
+
     test('should return original content when vars is null', () => {
       const content = '* {{team}}';
       const result = replaceTemplateVariables(content, null);

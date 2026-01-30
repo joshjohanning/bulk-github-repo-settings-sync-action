@@ -117,6 +117,15 @@ function validateRepoConfig(repoConfig, repoName) {
 }
 
 /**
+ * Escape special regex characters in a string.
+ * @param {string} str - String to escape
+ * @returns {string} Escaped string safe for use in RegExp
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Replace template variables in content with provided values.
  * Template variables use the format {{variable_name}}.
  * @param {string} content - Content with template variables
@@ -132,7 +141,9 @@ export function replaceTemplateVariables(content, vars) {
   for (const [varName, varValue] of Object.entries(vars)) {
     // Replace all occurrences of {{varName}} with varValue
     // Use a regex to match the exact variable name with optional whitespace
-    const regex = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, 'g');
+    // Escape varName to handle any special regex characters safely
+    const escapedVarName = escapeRegExp(varName);
+    const regex = new RegExp(`\\{\\{\\s*${escapedVarName}\\s*\\}\\}`, 'g');
     result = result.replace(regex, varValue);
   }
 
