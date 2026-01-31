@@ -29,7 +29,10 @@ rules:
       rulesets-file: './config/rulesets/strict-ruleset.json'
       workflow-files: './config/workflows/platform-ci.yml,./config/workflows/release.yml'
       copilot-instructions-md: './config/copilot/platform-instructions.md'
-      codeowners: './config/CODEOWNERS'
+      codeowners: './config/CODEOWNERS.template'
+      codeowners-vars:
+        default_team: '@my-org/platform-team'
+        code_reviewers: '@my-org/platform-leads'
 
   # Rule 2: Frontend and backend repos get monitoring but less strict settings
   - selector:
@@ -55,6 +58,10 @@ rules:
       dependabot-alerts: true
       dependabot-security-updates: true
       autolinks-file: './config/autolinks/jira.json'
+      codeowners: './config/CODEOWNERS.template'
+      codeowners-vars:
+        default_team: '@my-org/security-team'
+        code_reviewers: '@my-org/senior-engineers @my-org/security-leads'
 
   # Rule 4: A single repo with unique settings
   - selector:

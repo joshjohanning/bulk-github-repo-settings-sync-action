@@ -1,0 +1,14 @@
+# CODEOWNERS template file
+# Use {{variable_name}} syntax for template variables
+# Variables are replaced with values from codeowners-vars in repos.yml or settings-config.yml
+
+# Default code owners for everything in the repo
+* {{default_team}}
+
+# Code reviewers get notified on all pull requests
+* {{code_reviewers}}
+
+# Specific paths can have different owners
+/docs/ {{docs_team}}
+# /src/api/ @owner/api-team
+# *.md @owner/docs-team

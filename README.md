@@ -562,6 +562,60 @@ repos:
     codeowners: './.github/CODEOWNERS' # use the same config that this repo is using
 ```
 
+**Using Template Variables:**
+
+For dynamic CODEOWNERS content (e.g., different teams per repository), use template variables with `{{variable_name}}` syntax. This is useful when:
+
+- Different teams own different repositories but you want a consistent CODEOWNERS structure
+- You want to manage a single template file instead of maintaining separate CODEOWNERS files per team
+- You're using rules-based configuration and want teams assigned automatically based on custom properties
+
+Create a template file (`./config/CODEOWNERS.template`):
+
+```text
+# Default reviewers
+* {{default_team}}
+
+# Additional reviewers
+* {{code_reviewers}}
+
+# Specific paths
+/docs/ {{docs_team}}
+```
+
+Then in `repos.yml`, specify the variables per repository:
+
+```yaml
+repos:
+  - repo: owner/frontend-app
+    codeowners: './config/CODEOWNERS.template'
+    codeowners-vars:
+      default_team: '@owner/frontend-team'
+      code_reviewers: '@owner/senior-devs'
+      docs_team: '@owner/docs-team'
+  - repo: owner/backend-api
+    codeowners: './config/CODEOWNERS.template'
+    codeowners-vars:
+      default_team: '@owner/backend-team'
+      code_reviewers: '@owner/platform-leads'
+      docs_team: '@owner/docs-team'
+```
+
+Or with rules-based configuration in `settings-config.yml` (recommended for larger organizations - new repos automatically get the right CODEOWNERS based on their custom property):
+
+```yaml
+rules:
+  - selector:
+      custom-property:
+        name: team
+        values: [platform]
+    settings:
+      codeowners: './config/CODEOWNERS.template'
+      codeowners-vars:
+        default_team: '@owner/platform-team'
+        code_reviewers: '@owner/platform-leads'
+```
+
 **Supported target paths:**
 
 | Path                 | Description                    |
