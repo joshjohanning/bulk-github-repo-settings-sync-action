@@ -7308,6 +7308,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toBe('* @org/dotted-team\n/src/ @org/bracketed-team');
     });
 
+    test('should handle variable values with special replacement patterns', () => {
+      // Values with $&, $1, $$ etc. should be treated as literal strings
+      const content = '* {{team}}';
+      const result = replaceTemplateVariables(content, { team: '$& Team $1 $$' });
+      expect(result).toBe('* $& Team $1 $$');
+    });
+
     test('should return original content when vars is null', () => {
       const content = '* {{team}}';
       const result = replaceTemplateVariables(content, null);

@@ -144,7 +144,8 @@ export function replaceTemplateVariables(content, vars) {
     // Escape varName to handle any special regex characters safely
     const escapedVarName = escapeRegExp(varName);
     const regex = new RegExp(`\\{\\{\\s*${escapedVarName}\\s*\\}\\}`, 'g');
-    result = result.replace(regex, varValue);
+    // Use a function for replacement to avoid special replacement patterns ($&, $1, etc.)
+    result = result.replace(regex, () => String(varValue));
   }
 
   return result;
@@ -2829,7 +2830,10 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
 
   // Create content transformer if template variables are provided
   const contentTransformer =
-    templateVars && Object.keys(templateVars).length > 0
+    templateVars &&
+    typeof templateVars === 'object' &&
+    !Array.isArray(templateVars) &&
+    Object.keys(templateVars).length > 0
       ? content => replaceTemplateVariables(content, templateVars)
       : null;
 
@@ -3444,7 +3448,17 @@ export async function run() {
       // Handle repo-specific codeowners-vars (template variables)
       let repoCodeownersVars = null;
       if (repoConfig['codeowners-vars'] !== undefined) {
-        repoCodeownersVars = repoConfig['codeowners-vars'];
+        if (
+          repoConfig['codeowners-vars'] !== null &&
+          typeof repoConfig['codeowners-vars'] === 'object' &&
+          !Array.isArray(repoConfig['codeowners-vars'])
+        ) {
+          repoCodeownersVars = repoConfig['codeowners-vars'];
+        } else {
+          core.warning(
+            `Invalid 'codeowners-vars' configuration for repo '${repoConfig.repo || repo}'; expected an object. This configuration will be ignored.`
+          );
+        }
       }
 
       // Handle repo-specific security settings
