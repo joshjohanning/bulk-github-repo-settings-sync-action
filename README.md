@@ -835,11 +835,13 @@ Output shows what would change:
 
 ## Action Outputs
 
-| Output                 | Description                                      |
-| ---------------------- | ------------------------------------------------ |
-| `updated-repositories` | Number of repositories successfully updated      |
-| `failed-repositories`  | Number of repositories that failed to update     |
-| `results`              | JSON array of update results for each repository |
+| Output                   | Description                                                             |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `updated-repositories`   | Number of repositories successfully processed (changed + unchanged)     |
+| `changed-repositories`   | Number of repositories that had changes (or would have in dry-run mode) |
+| `unchanged-repositories` | Number of repositories that required no changes                         |
+| `failed-repositories`    | Number of repositories that failed to update                            |
+| `results`                | JSON array of update results for each repository                        |
 
 ## Authentication
 
