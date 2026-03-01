@@ -7957,7 +7957,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('dependabot.yml PR #42 up-to-date (pending merge)');
+      expect(repoRow[2]).toContain(
+        'dependabot.yml [PR #42](https://github.com/owner/repo1/pull/42) up-to-date (pending merge)'
+      );
     });
 
     test('should show pending merge message for workflow files when PR is up-to-date', async () => {
@@ -8026,7 +8028,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('workflow files PR #99 up-to-date (pending merge)');
+      expect(repoRow[2]).toContain(
+        'workflow files [PR #99](https://github.com/owner/repo1/pull/99) up-to-date (pending merge)'
+      );
     });
 
     test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
