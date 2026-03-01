@@ -35,6 +35,7 @@ updates:
         patterns:
           - '@actions/*'
           - '@octokit/*'
-      eslint:
+      eslint-plugins:
         patterns:
-          - 'eslint*'
+          - 'eslint-plugin-*'
+          - 'eslint-config-*'
