@@ -162,7 +162,11 @@ inputs:
 
 outputs:
   updated-repositories:
-    description: 'Number of repositories successfully updated'
+    description: 'Number of repositories successfully processed (changed + unchanged)'
+  changed-repositories:
+    description: 'Number of repositories that had changes (or would have changes in dry-run mode)'
+  unchanged-repositories:
+    description: 'Number of repositories that required no changes'
   failed-repositories:
     description: 'Number of repositories that failed to update'
   results:

@@ -7957,7 +7957,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('dependabot.yml PR #42 up-to-date (pending merge)');
+      expect(repoRow[2]).toContain(
+        'dependabot.yml [PR #42](https://github.com/owner/repo1/pull/42) up-to-date (pending merge)'
+      );
     });
 
     test('should show pending merge message for workflow files when PR is up-to-date', async () => {
@@ -8026,7 +8028,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('workflow files PR #99 up-to-date (pending merge)');
+      expect(repoRow[2]).toContain(
+        'workflow files [PR #99](https://github.com/owner/repo1/pull/99) up-to-date (pending merge)'
+      );
     });
 
     test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
@@ -8098,6 +8102,192 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // Should show the pending merge message, NOT "No changes needed"
       expect(repoRow[2]).not.toBe('No changes needed');
       expect(repoRow[2]).toContain('pending merge');
+    });
+  });
+
+  describe('changed/unchanged counts and summary status', () => {
+    test('should output changed and unchanged counts when some repos have changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // repo1: has a change (squash merge differs)
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      // repo2: no change (squash merge already true)
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+    });
+
+    test('should show Changed status in summary table for repos with changes', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // repo1: has a change
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      // repo2: no change
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repo1Row = tableCall.find(row => row[0] === 'owner/repo1');
+      const repo2Row = tableCall.find(row => row[0] === 'owner/repo2');
+
+      expect(repo1Row[1]).toBe('\u2705 Changed');
+      expect(repo2Row[1]).toBe('\u2796 No changes');
+    });
+
+    test('should output correct counts in dry-run mode', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true',
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // repo1: would change
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      // repo2: no change needed
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+
+      // Verify summary table status strings in dry-run
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repo1Row = tableCall.find(row => row[0] === 'owner/repo1');
+      const repo2Row = tableCall.find(row => row[0] === 'owner/repo2');
+
+      expect(repo1Row[1]).toBe('\u2705 Changed');
+      expect(repo2Row[1]).toBe('\u2796 No changes');
+    });
+
+    test('should show all repos as unchanged when no changes needed', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow[1]).toBe('\u2796 No changes');
+      expect(repoRow[2]).toBe('No changes needed');
     });
   });
 

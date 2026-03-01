@@ -2865,6 +2865,14 @@ function getChangesList(result, dryRun) {
   const changes = [];
   const wouldPrefix = dryRun ? 'Would update ' : '';
 
+  /**
+   * Format a PR reference as a markdown link if URL is available
+   * @param {number} prNumber - PR number
+   * @param {string} prUrl - PR URL
+   * @returns {string} Formatted PR reference (linked or plain)
+   */
+  const formatPrRef = (prNumber, prUrl) => (prUrl ? `[PR #${prNumber}](${prUrl})` : `PR #${prNumber}`);
+
   // Repository settings changes
   if (result.changes && result.changes.length > 0) {
     const settingNames = result.changes.map(c => c.setting.replace(/_/g, '-'));
@@ -2931,13 +2939,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.dependabotSync.dependabotYml;
     if (status === 'pr-up-to-date') {
-      changes.push(`dependabot.yml PR #${result.dependabotSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `dependabot.yml ${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`dependabot.yml PR exists (#${result.dependabotSync.prNumber})`);
+      changes.push(
+        `dependabot.yml PR exists (${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync dependabot.yml`);
     } else {
-      changes.push(`${wouldPrefix}dependabot.yml (PR #${result.dependabotSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}dependabot.yml (${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)})`
+      );
     }
   }
 
@@ -2949,13 +2963,17 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.gitignoreSync.gitignore;
     if (status === 'pr-up-to-date') {
-      changes.push(`.gitignore PR #${result.gitignoreSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `.gitignore ${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`.gitignore PR exists (#${result.gitignoreSync.prNumber})`);
+      changes.push(`.gitignore PR exists (${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)})`);
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync .gitignore`);
     } else {
-      changes.push(`${wouldPrefix}.gitignore (PR #${result.gitignoreSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}.gitignore (${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)})`
+      );
     }
   }
 
@@ -2980,13 +2998,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.pullRequestTemplateSync.pullRequestTemplate;
     if (status === 'pr-up-to-date') {
-      changes.push(`PR template PR #${result.pullRequestTemplateSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `PR template ${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`PR template PR exists (#${result.pullRequestTemplateSync.prNumber})`);
+      changes.push(
+        `PR template PR exists (${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync PR template`);
     } else {
-      changes.push(`${wouldPrefix}PR template (PR #${result.pullRequestTemplateSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}PR template (${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)})`
+      );
     }
   }
 
@@ -2998,13 +3022,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.workflowFilesSync.workflowFiles;
     if (status === 'pr-up-to-date') {
-      changes.push(`workflow files PR #${result.workflowFilesSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `workflow files ${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`workflow files PR exists (#${result.workflowFilesSync.prNumber})`);
+      changes.push(
+        `workflow files PR exists (${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync workflow files`);
     } else {
-      changes.push(`${wouldPrefix}workflow files (PR #${result.workflowFilesSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}workflow files (${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)})`
+      );
     }
   }
 
@@ -3033,13 +3063,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.copilotInstructionsSync.copilotInstructions;
     if (status === 'pr-up-to-date') {
-      changes.push(`copilot-instructions.md PR #${result.copilotInstructionsSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `copilot-instructions.md ${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`copilot-instructions.md PR exists (#${result.copilotInstructionsSync.prNumber})`);
+      changes.push(
+        `copilot-instructions.md PR exists (${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync copilot-instructions.md`);
     } else {
-      changes.push(`${wouldPrefix}copilot-instructions.md (PR #${result.copilotInstructionsSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}copilot-instructions.md (${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)})`
+      );
     }
   }
 
@@ -3051,13 +3087,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.packageJsonSync.packageJson;
     if (status === 'pr-up-to-date') {
-      changes.push(`package.json PR #${result.packageJsonSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `package.json ${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`package.json PR exists (#${result.packageJsonSync.prNumber})`);
+      changes.push(
+        `package.json PR exists (${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync package.json`);
     } else {
-      changes.push(`${wouldPrefix}package.json (PR #${result.packageJsonSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}package.json (${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)})`
+      );
     }
   }
 
@@ -3069,13 +3111,19 @@ function getChangesList(result, dryRun) {
   ) {
     const status = result.codeownersSync.codeowners;
     if (status === 'pr-up-to-date') {
-      changes.push(`CODEOWNERS PR #${result.codeownersSync.prNumber} up-to-date (pending merge)`);
+      changes.push(
+        `CODEOWNERS ${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)} up-to-date (pending merge)`
+      );
     } else if (status === 'pr-exists') {
-      changes.push(`CODEOWNERS PR exists (#${result.codeownersSync.prNumber})`);
+      changes.push(
+        `CODEOWNERS PR exists (${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)})`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync CODEOWNERS`);
     } else {
-      changes.push(`${wouldPrefix}CODEOWNERS (PR #${result.codeownersSync.prNumber})`);
+      changes.push(
+        `${wouldPrefix}CODEOWNERS (${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)})`
+      );
     }
   }
 
@@ -3327,6 +3375,7 @@ export async function run() {
     const results = [];
     let successCount = 0;
     let failureCount = 0;
+    let changedCount = 0;
 
     for (const repoConfig of repoList) {
       const repo = repoConfig.repo;
@@ -3699,6 +3748,9 @@ export async function run() {
       if (result.success) {
         successCount++;
         const repoHasChanges = hasRepositoryChanges(result);
+        if (repoHasChanges) {
+          changedCount++;
+        }
         if (dryRun) {
           if (repoHasChanges) {
             core.info(`🔍 Would update ${repo}`);
@@ -3872,7 +3924,10 @@ export async function run() {
     }
 
     // Set outputs
+    const unchangedCount = successCount - changedCount;
     core.setOutput('updated-repositories', successCount.toString());
+    core.setOutput('changed-repositories', changedCount.toString());
+    core.setOutput('unchanged-repositories', unchangedCount.toString());
     core.setOutput('failed-repositories', failureCount.toString());
     core.setOutput('results', JSON.stringify(results));
 
@@ -3905,7 +3960,7 @@ export async function run() {
           details = 'No changes needed';
         }
 
-        return [r.repository, '✅ Success', details];
+        return [r.repository, hasChanges ? '✅ Changed' : '➖ No changes', details];
       })
     ];
 
@@ -3922,7 +3977,8 @@ export async function run() {
 
       summaryBuilder
         .addRaw(`\n**Total Repositories:** ${repoList.length}`)
-        .addRaw(`\n**Successful:** ${successCount}`)
+        .addRaw(`\n**Changed:** ${changedCount}`)
+        .addRaw(`\n**Unchanged:** ${unchangedCount}`)
         .addRaw(`\n**Failed:** ${failureCount}\n\n`)
         .addTable(summaryTable)
         .write();
@@ -3933,7 +3989,8 @@ export async function run() {
         : '📊 Bulk Repository Settings Update Results';
       core.info(heading);
       core.info(`Total Repositories: ${repoList.length}`);
-      core.info(`Successful: ${successCount}`);
+      core.info(`Changed: ${changedCount}`);
+      core.info(`Unchanged: ${unchangedCount}`);
       core.info(`Failed: ${failureCount}`);
       for (const result of results) {
         if (!result.success) {
@@ -3947,7 +4004,7 @@ export async function run() {
             : hasChanges
               ? 'Updated'
               : 'No changes needed';
-          core.info(`  ${result.repository}: ✅ ${details}`);
+          core.info(`  ${result.repository}: ${hasChanges ? '✅' : '➖'} ${details}`);
         }
       }
     }
