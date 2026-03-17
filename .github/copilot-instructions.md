@@ -59,8 +59,8 @@ const { functionToTest } = await import('../src/index.js');
 
 ### Node Runtime
 
-- Use `node24` (or the latest supported runtime) for `runs.using` in `action.yml`
-- Keep the `runs.using` value up to date when GitHub deprecates older Node runtimes
+- Use the same Node.js runtime version configured in this repo's `action.yml` (currently `node20`) for `runs.using`
+- When updating Node.js support, update `runs.using` in `action.yml`, the `engines.node` range in `package.json`, and CI/test matrices together to stay consistent
 
 ### Input Handling
 
@@ -106,7 +106,6 @@ const { functionToTest } = await import('../src/index.js');
 ### Dependency and Version Changes
 
 - When bumping versions or changing dependencies, run `npm install` first to sync the `package-lock.json`, then run `npm run all`
-- Always commit `package-lock.json` -- it must be checked in to the repository
 - Do not skip these steps -- a mismatched `package-lock.json` or failing checks will break CI
 
 ## Documentation Standards
