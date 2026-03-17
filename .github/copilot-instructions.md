@@ -57,6 +57,11 @@ const { functionToTest } = await import('../src/index.js');
 
 ## GitHub Actions Patterns
 
+### Node Runtime
+
+- Use the same Node.js runtime version configured in this repo's `action.yml` (currently `node20`) for `runs.using`
+- When updating Node.js support, update `runs.using` in `action.yml`, the `engines.node` range in `package.json`, and CI/test matrices together to stay consistent
+
 ### Input Handling
 
 - Use our custom `getInput()` function for reliable local/CI compatibility
@@ -96,14 +101,20 @@ const { functionToTest } = await import('../src/index.js');
 
 - Use `npm run package` to bundle with ncc
 - Don't commit the bundled `dist/` directory (during publishing this gets published to **tag-only**)
-- Run `npm run all` before committing (format, lint, test, package)
+- Run `npm run all` before committing (format, lint, test, package, and badge updating)
+
+### Dependency and Version Changes
+
+- When bumping versions or changing dependencies, run `npm install` first to sync the `package-lock.json`, then run `npm run all`
+- Do not skip these steps -- a mismatched `package-lock.json` or failing checks will break CI
 
 ## Documentation Standards
 
-### README Updates
+### README and action.yml Updates
 
-- Keep usage examples up to date with `action.yml`
-- Document all inputs and outputs
+- **Always update `README.md` and `action.yml` when adding, removing, or changing inputs, outputs, or behavior** -- do not forget this step
+- Keep usage examples in the README in sync with `action.yml`
+- Document all inputs and outputs in both `action.yml` (descriptions/defaults) and `README.md` (usage table/examples)
 - Include local development instructions
 - Update feature lists when adding functionality
 
