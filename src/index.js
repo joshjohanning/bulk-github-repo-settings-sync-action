@@ -2946,6 +2946,10 @@ function getChangesList(result, dryRun) {
       changes.push(
         `dependabot.yml PR exists (${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)})`
       );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)} for dependabot.yml`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync dependabot.yml`);
     } else {
@@ -2968,6 +2972,10 @@ function getChangesList(result, dryRun) {
       );
     } else if (status === 'pr-exists') {
       changes.push(`.gitignore PR exists (${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)})`);
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)} for .gitignore`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync .gitignore`);
     } else {
@@ -3005,6 +3013,10 @@ function getChangesList(result, dryRun) {
       changes.push(
         `PR template PR exists (${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)})`
       );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)} for PR template`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync PR template`);
     } else {
@@ -3028,6 +3040,10 @@ function getChangesList(result, dryRun) {
     } else if (status === 'pr-exists') {
       changes.push(
         `workflow files PR exists (${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)})`
+      );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)} for workflow files`
       );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync workflow files`);
@@ -3070,6 +3086,10 @@ function getChangesList(result, dryRun) {
       changes.push(
         `copilot-instructions.md PR exists (${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)})`
       );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)} for copilot-instructions.md`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync copilot-instructions.md`);
     } else {
@@ -3094,6 +3114,10 @@ function getChangesList(result, dryRun) {
       changes.push(
         `package.json PR exists (${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)})`
       );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)} for package.json`
+      );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync package.json`);
     } else {
@@ -3117,6 +3141,10 @@ function getChangesList(result, dryRun) {
     } else if (status === 'pr-exists') {
       changes.push(
         `CODEOWNERS PR exists (${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)})`
+      );
+    } else if (status === 'would-update-pr') {
+      changes.push(
+        `Would update existing ${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)} for CODEOWNERS`
       );
     } else if (status.startsWith('would-')) {
       changes.push(`Would sync CODEOWNERS`);
