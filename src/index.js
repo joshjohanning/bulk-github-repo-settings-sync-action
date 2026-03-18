@@ -2873,6 +2873,27 @@ function getChangesList(result, dryRun) {
    */
   const formatPrRef = (prNumber, prUrl) => (prUrl ? `[PR #${prNumber}](${prUrl})` : `PR #${prNumber}`);
 
+  /**
+   * Get the summary text for a file sync operation based on its status.
+   * @param {string} fileLabel - Human-readable file label (e.g., 'dependabot.yml', 'copilot-instructions.md')
+   * @param {string} status - Sync status string
+   * @param {number} prNumber - PR number (if applicable)
+   * @param {string} prUrl - PR URL (if applicable)
+   * @returns {string|null} Summary text, or null if status is not recognized
+   */
+  const getSyncSummaryText = (fileLabel, status, prNumber, prUrl) => {
+    if (status === 'pr-up-to-date') {
+      return `${fileLabel} ${formatPrRef(prNumber, prUrl)} up-to-date (pending merge)`;
+    } else if (status === 'pr-exists') {
+      return `${fileLabel} PR exists (${formatPrRef(prNumber, prUrl)})`;
+    } else if (status === 'would-update-pr') {
+      return `Would update existing ${formatPrRef(prNumber, prUrl)} for ${fileLabel}`;
+    } else if (status.startsWith('would-')) {
+      return `Would sync ${fileLabel}`;
+    }
+    return `${wouldPrefix}${fileLabel} (${formatPrRef(prNumber, prUrl)})`;
+  };
+
   // Repository settings changes
   if (result.changes && result.changes.length > 0) {
     const settingNames = result.changes.map(c => c.setting.replace(/_/g, '-'));
@@ -2937,26 +2958,14 @@ function getChangesList(result, dryRun) {
     result.dependabotSync.dependabotYml &&
     result.dependabotSync.dependabotYml !== 'unchanged'
   ) {
-    const status = result.dependabotSync.dependabotYml;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `dependabot.yml ${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `dependabot.yml PR exists (${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)} for dependabot.yml`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync dependabot.yml`);
-    } else {
-      changes.push(
-        `${wouldPrefix}dependabot.yml (${formatPrRef(result.dependabotSync.prNumber, result.dependabotSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'dependabot.yml',
+        result.dependabotSync.dependabotYml,
+        result.dependabotSync.prNumber,
+        result.dependabotSync.prUrl
+      )
+    );
   }
 
   // Gitignore changes
@@ -2965,24 +2974,14 @@ function getChangesList(result, dryRun) {
     result.gitignoreSync.gitignore &&
     result.gitignoreSync.gitignore !== 'unchanged'
   ) {
-    const status = result.gitignoreSync.gitignore;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `.gitignore ${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(`.gitignore PR exists (${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)})`);
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)} for .gitignore`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync .gitignore`);
-    } else {
-      changes.push(
-        `${wouldPrefix}.gitignore (${formatPrRef(result.gitignoreSync.prNumber, result.gitignoreSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        '.gitignore',
+        result.gitignoreSync.gitignore,
+        result.gitignoreSync.prNumber,
+        result.gitignoreSync.prUrl
+      )
+    );
   }
 
   // Ruleset changes
@@ -3004,26 +3003,14 @@ function getChangesList(result, dryRun) {
     result.pullRequestTemplateSync.pullRequestTemplate &&
     result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged'
   ) {
-    const status = result.pullRequestTemplateSync.pullRequestTemplate;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `PR template ${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `PR template PR exists (${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)} for PR template`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync PR template`);
-    } else {
-      changes.push(
-        `${wouldPrefix}PR template (${formatPrRef(result.pullRequestTemplateSync.prNumber, result.pullRequestTemplateSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'PR template',
+        result.pullRequestTemplateSync.pullRequestTemplate,
+        result.pullRequestTemplateSync.prNumber,
+        result.pullRequestTemplateSync.prUrl
+      )
+    );
   }
 
   // Workflow files changes
@@ -3032,26 +3019,14 @@ function getChangesList(result, dryRun) {
     result.workflowFilesSync.workflowFiles &&
     result.workflowFilesSync.workflowFiles !== 'unchanged'
   ) {
-    const status = result.workflowFilesSync.workflowFiles;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `workflow files ${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `workflow files PR exists (${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)} for workflow files`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync workflow files`);
-    } else {
-      changes.push(
-        `${wouldPrefix}workflow files (${formatPrRef(result.workflowFilesSync.prNumber, result.workflowFilesSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'workflow files',
+        result.workflowFilesSync.workflowFiles,
+        result.workflowFilesSync.prNumber,
+        result.workflowFilesSync.prUrl
+      )
+    );
   }
 
   // Autolinks changes
@@ -3077,26 +3052,14 @@ function getChangesList(result, dryRun) {
     result.copilotInstructionsSync.copilotInstructions &&
     result.copilotInstructionsSync.copilotInstructions !== 'unchanged'
   ) {
-    const status = result.copilotInstructionsSync.copilotInstructions;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `copilot-instructions.md ${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `copilot-instructions.md PR exists (${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)} for copilot-instructions.md`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync copilot-instructions.md`);
-    } else {
-      changes.push(
-        `${wouldPrefix}copilot-instructions.md (${formatPrRef(result.copilotInstructionsSync.prNumber, result.copilotInstructionsSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'copilot-instructions.md',
+        result.copilotInstructionsSync.copilotInstructions,
+        result.copilotInstructionsSync.prNumber,
+        result.copilotInstructionsSync.prUrl
+      )
+    );
   }
 
   // Package.json changes
@@ -3105,26 +3068,14 @@ function getChangesList(result, dryRun) {
     result.packageJsonSync.packageJson &&
     result.packageJsonSync.packageJson !== 'unchanged'
   ) {
-    const status = result.packageJsonSync.packageJson;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `package.json ${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `package.json PR exists (${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)} for package.json`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync package.json`);
-    } else {
-      changes.push(
-        `${wouldPrefix}package.json (${formatPrRef(result.packageJsonSync.prNumber, result.packageJsonSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'package.json',
+        result.packageJsonSync.packageJson,
+        result.packageJsonSync.prNumber,
+        result.packageJsonSync.prUrl
+      )
+    );
   }
 
   // CODEOWNERS changes
@@ -3133,26 +3084,14 @@ function getChangesList(result, dryRun) {
     result.codeownersSync.codeowners &&
     result.codeownersSync.codeowners !== 'unchanged'
   ) {
-    const status = result.codeownersSync.codeowners;
-    if (status === 'pr-up-to-date') {
-      changes.push(
-        `CODEOWNERS ${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)} up-to-date (pending merge)`
-      );
-    } else if (status === 'pr-exists') {
-      changes.push(
-        `CODEOWNERS PR exists (${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)})`
-      );
-    } else if (status === 'would-update-pr') {
-      changes.push(
-        `Would update existing ${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)} for CODEOWNERS`
-      );
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync CODEOWNERS`);
-    } else {
-      changes.push(
-        `${wouldPrefix}CODEOWNERS (${formatPrRef(result.codeownersSync.prNumber, result.codeownersSync.prUrl)})`
-      );
-    }
+    changes.push(
+      getSyncSummaryText(
+        'CODEOWNERS',
+        result.codeownersSync.codeowners,
+        result.codeownersSync.prNumber,
+        result.codeownersSync.prUrl
+      )
+    );
   }
 
   return changes;

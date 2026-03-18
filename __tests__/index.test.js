@@ -8105,6 +8105,74 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
   });
 
+  describe('would-update-pr status handling in summary', () => {
+    test('should show existing PR link for copilot-instructions in dry-run when PR exists and needs update', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'copilot-instructions-md': './copilot-instructions.md',
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      const sourceContent = '# Copilot Instructions\n\nUpdated content.';
+      setMockFileContent(sourceContent);
+
+      const oldDefaultContent = '# Copilot Instructions\n\nOld content.';
+      const oldPrBranchContent = '# Copilot Instructions\n\nStale PR content.';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'copilot-instructions-md-sync') {
+          return {
+            data: {
+              content: Buffer.from(oldPrBranchContent).toString('base64'),
+              sha: 'pr-branch-sha'
+            }
+          };
+        }
+        return {
+          data: {
+            content: Buffer.from(oldDefaultContent).toString('base64'),
+            sha: 'default-branch-sha'
+          }
+        };
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 51,
+            html_url: 'https://github.com/owner/repo1/pull/51'
+          }
+        ]
+      });
+
+      await run();
+
+      expect(mockCore.summary.addTable).toHaveBeenCalled();
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow).toBeDefined();
+      expect(repoRow[2]).toContain(
+        'Would update existing [PR #51](https://github.com/owner/repo1/pull/51) for copilot-instructions.md'
+      );
+    });
+  });
+
   describe('changed/unchanged counts and summary status', () => {
     test('should output changed and unchanged counts when some repos have changes', async () => {
       mockCore.getInput.mockImplementation(name => {
