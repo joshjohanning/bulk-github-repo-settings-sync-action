@@ -2879,7 +2879,7 @@ function getChangesList(result, dryRun) {
    * @param {string} status - Sync status string
    * @param {number} prNumber - PR number (if applicable)
    * @param {string} prUrl - PR URL (if applicable)
-   * @returns {string|null} Summary text, or null if status is not recognized
+   * @returns {string} Summary text for the sync status
    */
   const getSyncSummaryText = (fileLabel, status, prNumber, prUrl) => {
     if (status === 'pr-up-to-date') {
