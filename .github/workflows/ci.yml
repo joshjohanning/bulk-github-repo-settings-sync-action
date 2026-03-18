@@ -49,4 +49,4 @@ jobs:
           fi
 
       - name: Check npm version compatibility
-        uses: joshjohanning/npm-version-check-action@v1
+        uses: joshjohanning/npm-version-check-action@v2
