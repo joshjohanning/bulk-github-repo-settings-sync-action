@@ -59,7 +59,7 @@ const { functionToTest } = await import('../src/index.js');
 
 ### Node Runtime
 
-- Use the same Node.js runtime version configured in this repo's `action.yml` (currently `node20`) for `runs.using`
+- Use the same Node.js runtime version configured in this repo's `action.yml` (currently `node24`) for `runs.using`
 - When updating Node.js support, update `runs.using` in `action.yml`, the `engines.node` range in `package.json`, and CI/test matrices together to stay consistent
 
 ### Input Handling
