@@ -59,7 +59,8 @@ const { functionToTest } = await import('../src/index.js');
 
 ### Node Runtime
 
-- Use the same Node.js runtime version configured in this repo's `action.yml` (currently `node24`) for `runs.using`
+- Only use Node.js runtimes officially supported by GitHub Actions (see [GitHub Actions documentation](https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions#runs-for-javascript-actions) for current supported versions)
+- Use the same Node.js runtime version configured in this repo's `action.yml` for `runs.using`
 - When updating Node.js support, update `runs.using` in `action.yml`, the `engines.node` range in `package.json`, and CI/test matrices together to stay consistent
 
 ### Input Handling
