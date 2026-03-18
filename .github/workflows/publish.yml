@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: joshjohanning/publish-github-action@v2
+      - uses: joshjohanning/publish-github-action@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           npm_package_command: npm run package

@@ -12,6 +12,10 @@ Update repository settings in bulk across multiple GitHub repositories.
 > [!TIP]
 > **Looking for a working example?** See the [Working Example](#working-example) section for a complete workflow with GitHub App authentication and a real `repos.yml` configuration file.
 
+## What's new
+
+Please refer to the [release page](https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/releases) for the latest release notes.
+
 ## Features
 
 - 🔧 Update pull request merge strategies (squash, merge, rebase)
@@ -46,7 +50,7 @@ Update repository settings in bulk across multiple GitHub repositories.
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2,owner/repo3'
@@ -110,7 +114,7 @@ Use in workflow:
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -189,7 +193,7 @@ Use in workflow:
 
 ```yml
 - name: Apply Rules-Based Settings
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'settings-config.yml'
@@ -235,7 +239,7 @@ Sync a `dependabot.yml` file to `.github/dependabot.yml` in target repositories 
 
 ```yml
 - name: Sync Dependabot Config
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -269,7 +273,7 @@ Sync repository rulesets across multiple repositories:
 
 ```yml
 - name: Sync Repository Rulesets
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -345,7 +349,7 @@ By default, syncing rulesets will create or update the specified ruleset by name
 
 ```yml
 - name: Sync Repository Rulesets (delete unmanaged)
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -368,7 +372,7 @@ Sync a pull request template file to `.github/pull_request_template.md` in targe
 
 ```yml
 - name: Sync Pull Request Template
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -404,7 +408,7 @@ Sync one or more workflow files to `.github/workflows/` in target repositories v
 
 ```yml
 - name: Sync Workflow Files
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -444,7 +448,7 @@ Sync autolink references across multiple repositories to automatically link keyw
 
 ```yml
 - name: Sync Autolinks
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -504,7 +508,7 @@ Sync a `copilot-instructions.md` file to `.github/copilot-instructions.md` in ta
 
 ```yml
 - name: Sync Copilot Instructions
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -540,7 +544,7 @@ Sync a `CODEOWNERS` file to target repositories via pull requests. CODEOWNERS fi
 
 ```yml
 - name: Sync CODEOWNERS
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -640,7 +644,7 @@ Sync a `.gitignore` file to `.gitignore` in target repositories via pull request
 
 ```yml
 - name: Sync .gitignore Config
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -694,7 +698,7 @@ Sync npm `scripts` and/or `engines` from a source `package.json` to target repos
 
 ```yml
 - name: Sync package.json Properties
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
@@ -750,7 +754,7 @@ Only the fields you enable for syncing (`package-json-sync-scripts`, `package-js
 
 ```yml
 - name: Update All Org Repositories
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'all'
@@ -765,7 +769,7 @@ Preview changes without applying them:
 
 ```yml
 - name: Preview Changes
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories: 'owner/repo1,owner/repo2'
@@ -859,14 +863,14 @@ For better security and rate limits, use a GitHub App:
 ```yml
 - name: Generate GitHub App Token
   id: app-token
-  uses: actions/create-github-app-token@v2
+  uses: actions/create-github-app-token@v3
   with:
     app-id: ${{ secrets.APP_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
 
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     # ... other inputs
@@ -878,7 +882,7 @@ Alternatively, use a PAT with `repo` scope:
 
 ```yml
 - name: Update Repository Settings
-  uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
   with:
     github-token: ${{ secrets.PAT_TOKEN }}
     # ... other inputs
@@ -913,7 +917,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ vars.APP_ID }}
@@ -921,7 +925,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Update Repository Settings
-        uses: joshjohanning/bulk-github-repo-settings-sync-action@v1
+        uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           repositories-file: 'repos.yml'
