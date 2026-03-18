@@ -863,7 +863,7 @@ For better security and rate limits, use a GitHub App:
 ```yml
 - name: Generate GitHub App Token
   id: app-token
-  uses: actions/create-github-app-token@v2
+  uses: actions/create-github-app-token@v3
   with:
     app-id: ${{ secrets.APP_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -917,7 +917,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ vars.APP_ID }}
