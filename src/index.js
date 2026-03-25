@@ -2871,7 +2871,7 @@ function getChangesList(result, dryRun) {
    * @param {string} prUrl - PR URL
    * @returns {string} Formatted PR reference (linked or plain)
    */
-  const formatPrRef = (prNumber, prUrl) => (prUrl ? `[PR #${prNumber}](${prUrl})` : `PR #${prNumber}`);
+  const formatPrRef = (prNumber, prUrl) => (prUrl ? `<a href="${prUrl}">PR #${prNumber}</a>` : `PR #${prNumber}`);
 
   /**
    * Get the summary text for a file sync operation based on its status.

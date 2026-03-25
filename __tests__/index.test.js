@@ -7958,7 +7958,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain(
-        'dependabot.yml [PR #42](https://github.com/owner/repo1/pull/42) up-to-date (pending merge)'
+        'dependabot.yml <a href="https://github.com/owner/repo1/pull/42">PR #42</a> up-to-date (pending merge)'
       );
     });
 
@@ -8029,7 +8029,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain(
-        'workflow files [PR #99](https://github.com/owner/repo1/pull/99) up-to-date (pending merge)'
+        'workflow files <a href="https://github.com/owner/repo1/pull/99">PR #99</a> up-to-date (pending merge)'
       );
     });
 
@@ -8168,7 +8168,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain(
-        'Would update existing [PR #51](https://github.com/owner/repo1/pull/51) for copilot-instructions.md'
+        'Would update existing <a href="https://github.com/owner/repo1/pull/51">PR #51</a> for copilot-instructions.md'
       );
     });
   });
