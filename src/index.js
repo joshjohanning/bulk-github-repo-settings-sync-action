@@ -690,6 +690,16 @@ export async function updateRepositorySettings(
       throw error;
     }
 
+    if (currentRepo.archived) {
+      return {
+        repository: repo,
+        success: true,
+        archived: true,
+        changes: [],
+        dryRun
+      };
+    }
+
     // Check if we have insufficient permissions
     // The 'permissions' object should always be present. If it's missing, we don't have any access.
     if (!currentRepo.permissions) {
@@ -3538,6 +3548,12 @@ export async function run() {
         dryRun
       );
       results.push(result);
+
+      if (result.archived) {
+        successCount++;
+        core.info(`✅ Skipping archived repository ${repo}`);
+        continue;
+      }
 
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {

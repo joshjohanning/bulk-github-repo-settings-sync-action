@@ -149,6 +149,9 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 > [!NOTE]
 > 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
 
+> [!NOTE]
+> 🗄 Archived repositories are skipped.
+
 > [!TIP]
 > 📄 **See full example:** [sample-configuration/settings-config.yml](sample-configuration/settings-config.yml)
 

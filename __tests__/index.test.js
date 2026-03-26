@@ -2032,6 +2032,32 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.error).toBe('Invalid repository format. Expected "owner/repo"');
     });
 
+    test('should treat archived repositories as unchanged', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          archived: true,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+
+      const settings = { allow_squash_merge: true };
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.archived).toBe(true);
+      expect(result.changes).toEqual([]);
+      expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
+    });
+
     test('should handle API errors', async () => {
       mockOctokit.rest.repos.get.mockRejectedValue(new Error('API Error'));
 
@@ -2272,6 +2298,46 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
+    });
+
+    test('should skip archived repositories during action execution', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1,owner/repo2',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({
+          data: {
+            archived: true,
+            permissions: { admin: true, push: true, pull: true }
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            archived: false,
+            permissions: { admin: true, push: true, pull: true },
+            allow_squash_merge: false,
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            delete_branch_on_merge: false,
+            allow_auto_merge: false,
+            allow_update_branch: false
+          }
+        });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(1);
+      expect(mockCore.info).toHaveBeenCalledWith('✅ Skipping archived repository owner/repo1');
     });
 
     test('should handle partial failures', async () => {
