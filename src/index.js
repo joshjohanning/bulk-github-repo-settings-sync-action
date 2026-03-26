@@ -2866,12 +2866,44 @@ function getChangesList(result, dryRun) {
   const wouldPrefix = dryRun ? 'Would update ' : '';
 
   /**
-   * Format a PR reference as a markdown link if URL is available
+   * Escape a string for safe use in an HTML attribute.
+   * @param {string} value - Raw attribute value
+   * @returns {string} Escaped attribute value
+   */
+  const escapeHtmlAttribute = value =>
+    String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+  /**
+   * Format a PR reference as an HTML link if a valid URL is available.
+   * Falls back to plain text if the URL is missing or invalid.
    * @param {number} prNumber - PR number
    * @param {string} prUrl - PR URL
    * @returns {string} Formatted PR reference (linked or plain)
    */
-  const formatPrRef = (prNumber, prUrl) => (prUrl ? `<a href="${prUrl}">PR #${prNumber}</a>` : `PR #${prNumber}`);
+  const formatPrRef = (prNumber, prUrl) => {
+    if (!prUrl) {
+      return `PR #${prNumber}`;
+    }
+
+    try {
+      const parsedUrl = new URL(prUrl);
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        core.warning(`Ignoring PR URL with unsupported protocol in summary: ${prUrl}`);
+        return `PR #${prNumber}`;
+      }
+
+      const safeUrl = escapeHtmlAttribute(prUrl);
+      return `<a href="${safeUrl}">PR #${prNumber}</a>`;
+    } catch {
+      core.warning(`Ignoring invalid PR URL in summary: ${prUrl}`);
+      return `PR #${prNumber}`;
+    }
+  };
 
   /**
    * Get the summary text for a file sync operation based on its status.
