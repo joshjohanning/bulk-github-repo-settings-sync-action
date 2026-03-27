@@ -307,7 +307,19 @@ describe('Bulk GitHub Repository Settings Action', () => {
     // Re-setup default mocks after clearing (needed for action.yml reading)
     setupDefaultMocks();
 
-    // Reset Octokit mock
+    // Reset Octokit mock and set default repos.get response for test isolation
+    mockOctokit.rest.repos.get.mockResolvedValue({
+      data: {
+        archived: false,
+        permissions: { admin: true, push: true, pull: true },
+        allow_squash_merge: false,
+        allow_merge_commit: true,
+        allow_rebase_merge: true,
+        delete_branch_on_merge: false,
+        allow_auto_merge: false,
+        allow_update_branch: false
+      }
+    });
     mockOctokit.rest.repos.update.mockClear();
     mockOctokit.rest.repos.listForUser.mockClear();
     mockOctokit.rest.repos.listForOrg.mockClear();
