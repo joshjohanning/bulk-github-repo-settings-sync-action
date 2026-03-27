@@ -3551,7 +3551,7 @@ export async function run() {
 
       if (result.archived) {
         successCount++;
-        core.info(`✅ Skipping archived repository ${repo}`);
+        core.info(`⏭️ Skipping archived repository ${repo}`);
         continue;
       }
 
@@ -3956,6 +3956,10 @@ export async function run() {
       ...results.map(r => {
         if (!r.success) {
           return [r.repository, '❌ Failed', r.error];
+        }
+
+        if (r.archived) {
+          return [r.repository, '⏭️ Skipped', 'Repository is archived'];
         }
 
         // Determine what actually happened

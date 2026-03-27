@@ -2349,7 +2349,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(1);
-      expect(mockCore.info).toHaveBeenCalledWith('✅ Skipping archived repository owner/repo1');
+      expect(mockCore.info).toHaveBeenCalledWith('⏭️ Skipping archived repository owner/repo1');
     });
 
     test('should handle partial failures', async () => {
