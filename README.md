@@ -848,6 +848,7 @@ Output shows what would change:
 | `changed-repositories`   | Number of repositories that had changes (or would have in dry-run mode) |
 | `unchanged-repositories` | Number of repositories that required no changes                         |
 | `failed-repositories`    | Number of repositories that failed to update                            |
+| `warning-repositories`   | Number of repositories that emitted warnings                            |
 | `results`                | JSON array of update results for each repository                        |
 
 ## Authentication
