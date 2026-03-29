@@ -132,14 +132,23 @@ export function replaceTemplateVariables(content, vars) {
 }
 
 /**
- * Convert string input to boolean
+ * Get optional boolean input - returns null if not set.
+ * Unlike core.getBooleanInput (which throws on empty input), this returns null
+ * for unset inputs so callers can distinguish "not configured" from "false".
+ * Handles case-insensitive true/false per YAML 1.2 Core Schema.
  * @param {string} name - Input name
  * @returns {boolean|null} Boolean value or null if not set
  */
 function getBooleanInput(name) {
-  const input = core.getInput(name).toLowerCase();
-  if (!input) return null;
-  return input === 'true' || input === '1' || input === 'yes';
+  const raw = core.getInput(name);
+  if (!raw) return null;
+  const lower = raw.trim().toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  throw new TypeError(
+    `Input does not meet YAML 1.2 "Core Schema" specification: ${name}\n` +
+      'Support boolean input list: `true | True | TRUE | false | False | FALSE`'
+  );
 }
 
 /**
