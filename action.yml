@@ -169,6 +169,8 @@ outputs:
     description: 'Number of repositories that required no changes'
   failed-repositories:
     description: 'Number of repositories that failed to update'
+  warning-repositories:
+    description: 'Number of repositories that emitted warnings'
   results:
     description: 'JSON array of update results for each repository'
 
