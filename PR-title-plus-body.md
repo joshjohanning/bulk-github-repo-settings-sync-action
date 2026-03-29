@@ -1,6 +1,6 @@
 # Add `warning-repositories` output
 
-This adds a `warning-repositories` output and marks warning-only repos as `⚠️ Warning` in the summary.
+This adds a `warning-repositories` count output and marks repos that emitted warnings as `⚠️ Warning` in the summary.
 
 Why:
 
@@ -10,9 +10,9 @@ Why:
 Example:
 
 - a private repo on a free account reports warnings for CodeQL / secret scanning availability
-- the caller currently just sees a successful run with `changed-repositories > 0`
+- the calling workflow currently just sees a successful run with `changed-repositories > 0`
 
-With this change a caller can decide whether warning-only repos should be ignored, reported, or treated as a failure.
+With this change a calling workflow can decide whether repos that emitted warnings should be ignored, reported, or treated as a failure.
 
 Before:
 
