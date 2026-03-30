@@ -1,5 +1,7 @@
 # GitHub Copilot Instructions for Node.js Actions
 
+<!-- This file is managed by joshjohanning/sync-github-repo-settings. Do not edit directly — changes will be overwritten. -->
+
 ## Project Overview
 
 This is a Node.js GitHub Action with ESLint, Prettier, Jest testing, and ncc bundling. Follow these guidelines when making changes.
