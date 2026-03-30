@@ -131,6 +131,6 @@ These rules prevent CI failures and broken releases. **Never skip them.**
 - Follow the existing ESLint configuration in `eslint.config.js`
 - Use ES modules (`import`/`export`) consistently
 - Code is automatically formatted with Prettier — run `npm run format:write` to format
-- Use single quotes for strings
+- Use single quotes for strings - when a string contains embedded single quotes (e.g., `Invalid 'days' input`), use a template literal instead of escaped quotes or double quotes (do not modify ESLint or Prettier config to resolve quote conflicts)
 - Use JSDoc comments with parameter types and return types for exported functions
 - Organize imports: `@actions/*` first, then `@octokit/*`, then other dependencies, then local imports
