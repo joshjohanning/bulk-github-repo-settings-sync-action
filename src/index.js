@@ -141,13 +141,13 @@ export function replaceTemplateVariables(content, vars) {
  */
 function getBooleanInput(name) {
   const raw = core.getInput(name);
-  if (!raw) return null;
+  if (!raw || !raw.trim()) return null;
   const lower = raw.trim().toLowerCase();
   if (lower === 'true') return true;
   if (lower === 'false') return false;
   throw new TypeError(
-    `Input does not meet YAML 1.2 "Core Schema" specification: ${name}\n` +
-      'Support boolean input list: `true | True | TRUE | false | False | FALSE`'
+    `Unsupported boolean value for input "${name}": "${raw}". ` +
+      'Supported boolean values: true|false (case-insensitive, YAML 1.2 Core Schema).'
   );
 }
 
