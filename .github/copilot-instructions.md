@@ -1,172 +1,136 @@
 # GitHub Copilot Instructions for Node.js Actions
 
+<!-- This file is managed by joshjohanning/sync-github-repo-settings. Do not edit directly — changes will be overwritten. -->
+
 ## Project Overview
 
-This is a Node.js GitHub Action template with ESLint, Prettier, Jest testing, and ncc bundling. Follow these guidelines when making changes.
+This is a Node.js GitHub Action with ESLint, Prettier, Jest testing, and ncc bundling. Follow these guidelines when making changes.
 
-## Code Quality Standards
+## Critical Rules
 
-### ESLint Configuration
+These rules prevent CI failures and broken releases. **Never skip them.**
 
-- Follow the existing ESLint configuration in `eslint.config.js`
-- Use ES modules (`import`/`export`) consistently
-- Prefer `const` over `let` when variables don't change
-- Use descriptive variable names and JSDoc comments for functions
-- Handle errors gracefully with try/catch blocks
+- **MUST:** Run `npm run all` before committing. This runs format, lint, test, package, and badge generation. Fix any failures before proceeding.
+- **MUST:** Bump `package.json` version when the published artifact changes: action behavior, runtime requirements, production dependencies, inputs/outputs, or bundled code. Do **not** bump for docs-only, tests-only, CI-only, or devDependency-only changes.
+- **MUST:** When bumping versions or changing dependencies, run `npm install` first to sync `package-lock.json`, then run `npm run all`. A mismatched lockfile breaks CI.
+- **MUST:** Update `README.md` and `action.yml` when adding, removing, or changing inputs, outputs, or behavior. Keep usage examples in the README in sync with `action.yml`.
+- **MUST:** When updating Node.js support, update `runs.using` in `action.yml`, `engines.node` in `package.json`, and CI matrices together.
+- **MUST:** If the action calls GitHub APIs, support GitHub.com, GHES, and GHEC-DR using a `github-api-url` input with default `${{ github.api_url }}`.
+- **NEVER:** Log tokens, secrets, or authenticated URLs. Use `core.setSecret()` to mask sensitive values.
+- **NEVER:** Use `console.log` or `console.error`. Use `core.info()`, `core.warning()`, `core.error()`, and `core.debug()` instead.
 
-### Prettier Formatting
+## Action Entry Point Pattern
 
-- Code is automatically formatted with Prettier
-- Run `npm run format:write` to format all files
-- Use single quotes for strings unless they contain single quotes
-- Line length limit is enforced by Prettier config
+- Main logic lives in `src/index.js` with an async `run()` function and top-level try/catch
+- Use `core.setFailed(error.message)` in the catch block — do not use `process.exit(1)`
+- Export helper functions for testability
+- If the action calls GitHub APIs, initialize Octokit with `baseUrl` for GHES/GHEC-DR support
 
-### Import Organization
+## Input and Output Handling
 
-```javascript
-// Always follow this import order:
-import * as core from '@actions/core';
-import * as github from '@actions/github';
-import { Octokit } from '@octokit/rest';
-// ... other imports
-```
+### Inputs
 
-## Testing Guidelines
-
-### Jest Test Structure
-
-- Use ES modules with `jest.unstable_mockModule()` for mocking
-- Mock `@actions/core`, `@actions/github`, and external APIs
-- Test both success and error scenarios
-- Use descriptive test names that explain the behavior
-
-### Mock Patterns
-
-```javascript
-// Always mock modules before importing
-jest.unstable_mockModule('@actions/core', () => mockCore);
-const { functionToTest } = await import('../src/index.js');
-```
-
-### Test Coverage
-
-- Write unit tests for all exported functions
-- Test error handling paths
-- Mock external dependencies (GitHub API, file system, etc.)
-- Aim for meaningful assertions, not just code coverage
-
-## GitHub Actions Patterns
-
-### Node Runtime
-
-- Only use Node.js runtimes officially supported by GitHub Actions (see [GitHub Actions documentation](https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions#runs-for-javascript-actions) for current supported versions)
-- Use the same Node.js runtime version configured in this repo's `action.yml` for `runs.using`
-- When updating Node.js support, update `runs.using` in `action.yml`, the `engines.node` range in `package.json`, and CI/test matrices together to stay consistent
-
-### Input Handling
-
-- Use our custom `getInput()` function for reliable local/CI compatibility
+- Use `core.getInput()` for string inputs and `core.getBooleanInput()` for boolean inputs
 - Validate inputs early in the function
-- Provide sensible defaults where appropriate
 - Log input values for debugging (except sensitive data)
+- Every input in `action.yml` must be documented in the README
 
-### Output Setting
+### Outputs
 
-- Always set outputs using `core.setOutput()`
-- Use descriptive output names that match `action.yml`
-- Include outputs in job summaries when available
+- Set outputs using `core.setOutput()`
+- Output names must match what's defined in `action.yml`
 
-### Error Handling
+## Error Handling
 
-- Use `core.setFailed()` for action failures
+- Use `core.setFailed()` for fatal action failures
 - Use `core.warning()` for non-fatal issues
-- Catch and handle API errors gracefully
-- Provide helpful error messages
+- Check `error.status` for API errors — don't match on error message strings
+- Catch errors at call boundaries; let helper functions throw contextual errors rather than calling `core.setFailed()` directly
 
-### Local Development Support
+## GitHub API Usage
 
-- Support running locally with environment variables
-- Handle missing GitHub Actions environment gracefully
-- Provide clear documentation for local testing
+### Octokit Initialization
 
-## File Organization
+- Initialize with `baseUrl` for GHES/GHEC-DR support: `new Octokit({ auth: token, baseUrl: apiUrl })`
+- GHES/GHE documentation doesn't typically need to be called out separately in the README unless there are specific differences to highlight
 
-### Source Structure
+### Pagination
 
-- Main logic in `src/index.js`
-- Export functions for testing
-- Keep functions focused and single-purpose
-- Use JSDoc comments for all exported functions
+- Use `octokit.paginate()` for any endpoint that returns a list
+
+### Rate Limiting
+
+- When iterating across many repos/resources, avoid unbounded parallel API calls — batch or serialize to reduce rate-limit pressure
+
+## Logging and Job Summaries
+
+### Structured Logging
+
+- Use `core.info()` for normal output, `core.debug()` for verbose details
+- Use `core.startGroup()` / `core.endGroup()` for collapsible log sections when processing multiple items
+
+### Job Summaries
+
+- Use `core.summary` to add rich output to the Actions UI when summarizing key data or findings
+
+## Security
+
+- If the action performs git operations with tokens, sanitize error messages to strip embedded credentials before logging
+- Follow principle of least privilege for token permissions
+- Document required permissions in the README
+- Document when using a GitHub App would be more appropriate than `github.token` or a PAT
+
+## Testing
+
+### Jest with ES Modules
+
+- Use `jest.unstable_mockModule()` for ESM mocking — mocks must be registered **before** dynamic imports:
+
+  ```javascript
+  jest.unstable_mockModule('@actions/core', () => ({
+    getInput: jest.fn(),
+    setOutput: jest.fn(),
+    setFailed: jest.fn(),
+    info: jest.fn(),
+    warning: jest.fn()
+  }));
+
+  const core = await import('@actions/core');
+  const { functionToTest } = await import('../src/index.js');
+  ```
+
+### Test Environment Setup
+
+- Set `process.env` variables **before** importing the module under test when the module validates config at load time
+- Reset mocks and environment between tests
+
+### What to Test
+
+- Test both success and error paths
+- Assert `core.setFailed`, `core.warning`, and `core.setOutput` calls explicitly
+- Mock external dependencies (GitHub API, file system, etc.)
+- Export helper functions from `src/index.js` to make them individually testable
+
+## Build and Release
 
 ### Build Process
 
-- Use `npm run package` to bundle with ncc
-- Don't commit the bundled `dist/` directory (during publishing this gets published to **tag-only**)
-- Run `npm run all` before committing (format, lint, test, package, and badge updating)
+- Use `npm run package` to bundle with ncc into `dist/`
+- The `dist/` directory is not committed to the main branch — it is built by CI and published for Git tags (for example, release tags like `v1.2.3` or major-version tags like `v1`) by the publish workflow
+- Users consume the action via version tags: `uses: owner/action@v1`
 
-### Dependency and Version Changes
-
-- When bumping versions or changing dependencies, run `npm install` first to sync the `package-lock.json`, then run `npm run all`
-- Do not skip these steps -- a mismatched `package-lock.json` or failing checks will break CI
-
-## Documentation Standards
-
-### README and action.yml Updates
-
-- **Always update `README.md` and `action.yml` when adding, removing, or changing inputs, outputs, or behavior** -- do not forget this step
-- Keep usage examples in the README in sync with `action.yml`
-- Document all inputs and outputs in both `action.yml` (descriptions/defaults) and `README.md` (usage table/examples)
-- Include local development instructions
-- Update feature lists when adding functionality
-
-### Code Comments
-
-- Use JSDoc for function documentation
-- Include parameter types and return types
-- Add inline comments for complex logic
-- Document environment variable requirements
-
-## Dependencies
-
-### Adding New Dependencies
+### Dependencies
 
 - Prefer `@actions/*` packages for GitHub Actions functionality
-- Keep dependencies minimal and well-maintained
-- Update both `dependencies` and `devDependencies` appropriately
-- Test that bundling still works after adding dependencies
+- Use `@octokit/rest` for REST API calls and `@actions/github` for context and helpers
+- Test that ncc bundling still works after adding dependencies
+- Use semantic versioning: patch for bug fixes, minor for new features, major for breaking changes
 
-### Version Management
+## Code Style
 
-- **Always increment the package.json version for each change**
-- Use semantic versioning (major.minor.patch)
-- Increment patch for bug fixes, minor for new features, major for breaking changes
-- Update version before creating releases or publishing changes
-
-### GitHub API Usage
-
-- Use `@octokit/rest` for REST API calls
-- Use `@actions/github` for context and helpers
-- Handle rate limiting and authentication errors
-- Cache API responses when appropriate
-- Use pagination when necessary
-
-### GitHub Instance Support
-
-- **Always support GitHub.com, GHES, and GHEC-DR** using `github-api-url` input with default `${{ github.api_url }}`
-- Initialize Octokit with a fallback `baseUrl`: `new Octokit({ auth: token, baseUrl: apiUrl || 'https://api.github.com' })`
-- GHES/GHE documentation doesn't typically need to be called out separately in the README unless there are specific differences to highlight
-
-## Performance Considerations
-
-- Avoid unnecessary API calls (respect rate limits)
-- Use efficient data structures for large datasets
-- Handle large datasets with pagination and streaming when possible
-- Cache API responses when appropriate to reduce redundant calls
-
-## Security Best Practices
-
-- Never log sensitive data (tokens, secrets)
-- Use `core.setSecret()` to mask sensitive values
-- Validate and sanitize user inputs
-- Follow principle of least privilege for token permissions
-- Document when using a GitHub App would be more appropriate than `github.token` or a PAT
+- Follow the existing ESLint configuration in `eslint.config.js`
+- Use ES modules (`import`/`export`) consistently
+- Code is automatically formatted with Prettier — run `npm run format:write` to format
+- Use single quotes for strings - when a string contains embedded single quotes (e.g., `Invalid 'days' input`), use a template literal instead of escaped quotes or double quotes (do not modify ESLint or Prettier config to resolve quote conflicts)
+- Use JSDoc comments with parameter types and return types for exported functions
+- Organize imports: `@actions/*` first, then `@octokit/*`, then other dependencies, then local imports
