@@ -600,14 +600,14 @@ export async function parseRepositories(
 
 /**
  * Valid statuses for a sub-result.
+ * Only reportable statuses are included — unchanged/skipped operations
+ * do not push sub-results.
  * @readonly
  * @enum {string}
  */
 const SubResultStatus = Object.freeze({
   CHANGED: 'changed',
-  UNCHANGED: 'unchanged',
-  WARNING: 'warning',
-  SKIPPED: 'skipped'
+  WARNING: 'warning'
 });
 
 /**
