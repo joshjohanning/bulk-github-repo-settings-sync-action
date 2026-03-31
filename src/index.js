@@ -599,6 +599,29 @@ export async function parseRepositories(
 }
 
 /**
+ * Valid statuses for a sub-result.
+ * @readonly
+ * @enum {string}
+ */
+const SubResultStatus = Object.freeze({
+  CHANGED: 'changed',
+  UNCHANGED: 'unchanged',
+  WARNING: 'warning',
+  SKIPPED: 'skipped'
+});
+
+/**
+ * Create a normalized sub-result for a single feature operation.
+ * @param {string} kind - Feature identifier (e.g., 'settings', 'topics', 'code-scanning')
+ * @param {string} status - One of SubResultStatus values
+ * @param {string} message - Human-readable summary for the details column
+ * @returns {{ kind: string, status: string, message: string }}
+ */
+function createSubResult(kind, status, message) {
+  return { kind, status, message };
+}
+
+/**
  * Update repository settings
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
@@ -631,6 +654,7 @@ export async function updateRepositorySettings(
       repository: repo,
       success: false,
       hasWarnings: false,
+      subResults: [],
       error: 'Invalid repository format. Expected "owner/repo"'
     };
   }
@@ -654,6 +678,7 @@ export async function updateRepositorySettings(
           repository: repo,
           success: false,
           hasWarnings: false,
+          subResults: [],
           error: 'Access denied - GitHub App or token does not have permission to access this repository',
           accessDenied: true,
           dryRun
@@ -668,6 +693,7 @@ export async function updateRepositorySettings(
         repository: repo,
         success: true,
         hasWarnings: false,
+        subResults: [],
         archived: true,
         changes: [],
         dryRun
@@ -684,6 +710,7 @@ export async function updateRepositorySettings(
         repository: repo,
         success: false,
         hasWarnings: false,
+        subResults: [],
         error: 'Insufficient permissions - GitHub App may not be installed or does not have any access',
         insufficientPermissions: true,
         dryRun
@@ -710,6 +737,7 @@ export async function updateRepositorySettings(
         repository: repo,
         success: false,
         hasWarnings: false,
+        subResults: [],
         error:
           'Cannot read repository settings - GitHub App may not be installed on this repository or does not have sufficient access',
         insufficientPermissions: true,
@@ -797,6 +825,7 @@ export async function updateRepositorySettings(
       repository: repo,
       success: true,
       hasWarnings: false,
+      subResults: [],
       settings: updateParams,
       currentSettings,
       changes,
@@ -806,6 +835,14 @@ export async function updateRepositorySettings(
     // Update repository settings (skip in dry-run mode)
     if (!dryRun && changes.length > 0) {
       await octokit.rest.repos.update(updateParams);
+    }
+
+    if (changes.length > 0) {
+      const wouldPrefix = dryRun ? 'Would update ' : '';
+      const settingNames = changes.map(c => c.setting.replace(/_/g, '-'));
+      result.subResults.push(
+        createSubResult('settings', SubResultStatus.CHANGED, `${wouldPrefix}settings: ${settingNames.join(', ')}`)
+      );
     }
 
     // Handle topics
@@ -846,6 +883,13 @@ export async function updateRepositorySettings(
           } else {
             result.topicsWouldUpdate = true;
           }
+          const topicChanges = [];
+          if (topicsToAdd.length > 0) topicChanges.push(`+${topicsToAdd.join(', ')}`);
+          if (topicsToRemove.length > 0) topicChanges.push(`-${topicsToRemove.join(', ')}`);
+          const wouldPrefix = dryRun ? 'Would update ' : '';
+          result.subResults.push(
+            createSubResult('topics', SubResultStatus.CHANGED, `${wouldPrefix}topics: ${topicChanges.join(', ')}`)
+          );
         } else {
           result.topicsUnchanged = true;
         }
@@ -853,6 +897,7 @@ export async function updateRepositorySettings(
       } catch (error) {
         result.topicsWarning = `Could not process topics: ${error.message}`;
         result.hasWarnings = true;
+        result.subResults.push(createSubResult('topics', SubResultStatus.WARNING, 'Topics produced a warning'));
       }
     }
 
@@ -891,6 +936,10 @@ export async function updateRepositorySettings(
           } else {
             result.codeScanningWouldEnable = true;
           }
+          const wouldPrefix = dryRun ? 'Would update ' : '';
+          result.subResults.push(
+            createSubResult('code-scanning', SubResultStatus.CHANGED, `${wouldPrefix}CodeQL scanning`)
+          );
         } else {
           result.codeScanningUnchanged = true;
         }
@@ -898,6 +947,9 @@ export async function updateRepositorySettings(
         // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
         result.codeScanningWarning = `Could not process CodeQL: ${error.message}`;
         result.hasWarnings = true;
+        result.subResults.push(
+          createSubResult('code-scanning', SubResultStatus.WARNING, 'CodeQL scanning produced a warning')
+        );
       }
     }
 
@@ -957,6 +1009,11 @@ export async function updateRepositorySettings(
           } else {
             result.immutableReleasesWouldUpdate = true;
           }
+          const action = immutableReleases ? 'enable' : 'disable';
+          const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+          result.subResults.push(
+            createSubResult('immutable-releases', SubResultStatus.CHANGED, `${actionText} immutable releases`)
+          );
         } else {
           result.immutableReleasesUnchanged = true;
         }
@@ -964,6 +1021,9 @@ export async function updateRepositorySettings(
         // Immutable releases might fail for various reasons (insufficient permissions, not available, etc.)
         result.immutableReleasesWarning = `Could not process immutable releases: ${error.message}`;
         result.hasWarnings = true;
+        result.subResults.push(
+          createSubResult('immutable-releases', SubResultStatus.WARNING, 'Immutable releases produced a warning')
+        );
       }
     }
 
@@ -996,12 +1056,20 @@ export async function updateRepositorySettings(
             } else {
               result.secretScanningWouldUpdate = true;
             }
+            const action = securitySettings.secretScanning ? 'enable' : 'disable';
+            const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+            result.subResults.push(
+              createSubResult('secret-scanning', SubResultStatus.CHANGED, `${actionText} secret scanning`)
+            );
           } else {
             result.secretScanningUnchanged = true;
           }
         } catch (error) {
           result.secretScanningWarning = `Could not process secret scanning: ${error.message}`;
           result.hasWarnings = true;
+          result.subResults.push(
+            createSubResult('secret-scanning', SubResultStatus.WARNING, 'Secret scanning produced a warning')
+          );
           // If secret scanning is not available, push protection can't work either
           if (
             securitySettings.secretScanningPushProtection === true &&
@@ -1010,6 +1078,13 @@ export async function updateRepositorySettings(
           ) {
             result.secretScanningPushProtectionWarning =
               'Cannot enable push protection without secret scanning enabled';
+            result.subResults.push(
+              createSubResult(
+                'push-protection',
+                SubResultStatus.WARNING,
+                'Secret scanning push protection produced a warning'
+              )
+            );
           }
         }
       }
@@ -1043,12 +1118,28 @@ export async function updateRepositorySettings(
             } else {
               result.secretScanningPushProtectionWouldUpdate = true;
             }
+            const action = securitySettings.secretScanningPushProtection ? 'enable' : 'disable';
+            const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+            result.subResults.push(
+              createSubResult(
+                'push-protection',
+                SubResultStatus.CHANGED,
+                `${actionText} secret scanning push protection`
+              )
+            );
           } else {
             result.secretScanningPushProtectionUnchanged = true;
           }
         } catch (error) {
           result.secretScanningPushProtectionWarning = `Could not process secret scanning push protection: ${error.message}`;
           result.hasWarnings = true;
+          result.subResults.push(
+            createSubResult(
+              'push-protection',
+              SubResultStatus.WARNING,
+              'Secret scanning push protection produced a warning'
+            )
+          );
         }
       }
 
@@ -1108,12 +1199,20 @@ export async function updateRepositorySettings(
             } else {
               result.dependabotAlertsWouldUpdate = true;
             }
+            const action = securitySettings.dependabotAlerts ? 'enable' : 'disable';
+            const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+            result.subResults.push(
+              createSubResult('dependabot-alerts', SubResultStatus.CHANGED, `${actionText} Dependabot alerts`)
+            );
           } else {
             result.dependabotAlertsUnchanged = true;
           }
         } catch (error) {
           result.dependabotAlertsWarning = `Could not process Dependabot alerts: ${error.message}`;
           result.hasWarnings = true;
+          result.subResults.push(
+            createSubResult('dependabot-alerts', SubResultStatus.WARNING, 'Dependabot alerts produced a warning')
+          );
         }
       }
 
@@ -1172,12 +1271,28 @@ export async function updateRepositorySettings(
             } else {
               result.dependabotSecurityUpdatesWouldUpdate = true;
             }
+            const action = securitySettings.dependabotSecurityUpdates ? 'enable' : 'disable';
+            const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+            result.subResults.push(
+              createSubResult(
+                'dependabot-security-updates',
+                SubResultStatus.CHANGED,
+                `${actionText} Dependabot security updates`
+              )
+            );
           } else {
             result.dependabotSecurityUpdatesUnchanged = true;
           }
         } catch (error) {
           result.dependabotSecurityUpdatesWarning = `Could not process Dependabot security updates: ${error.message}`;
           result.hasWarnings = true;
+          result.subResults.push(
+            createSubResult(
+              'dependabot-security-updates',
+              SubResultStatus.WARNING,
+              'Dependabot security updates produced a warning'
+            )
+          );
         }
       }
     } // End of if (securitySettings)
@@ -1188,6 +1303,7 @@ export async function updateRepositorySettings(
       repository: repo,
       success: false,
       hasWarnings: false,
+      subResults: [],
       error: error.message,
       dryRun
     };
@@ -2861,314 +2977,15 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
 }
 
 /**
- * Get a list of specific changes made to a repository
- * @param {Object} result - Repository update result object
- * @param {boolean} dryRun - Whether this is a dry-run
- * @returns {Array<string>} List of change descriptions
- */
-function getChangesList(result, dryRun) {
-  const changes = [];
-  const wouldPrefix = dryRun ? 'Would update ' : '';
-
-  /**
-   * Escape a string for safe use in an HTML attribute.
-   * @param {string} value - Raw attribute value
-   * @returns {string} Escaped attribute value
-   */
-  const escapeHtmlAttribute = value =>
-    String(value)
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-
-  /**
-   * Format a PR reference as an HTML link if a valid URL is available.
-   * Falls back to plain text if the URL is missing or invalid.
-   * @param {number} prNumber - PR number
-   * @param {string} prUrl - PR URL
-   * @returns {string} Formatted PR reference (linked or plain)
-   */
-  const formatPrRef = (prNumber, prUrl) => {
-    if (!prUrl) {
-      return `PR #${prNumber}`;
-    }
-
-    try {
-      const parsedUrl = new URL(prUrl);
-      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-        core.warning(`Ignoring PR URL with unsupported protocol in summary: ${prUrl}`);
-        return `PR #${prNumber}`;
-      }
-
-      const safeUrl = escapeHtmlAttribute(prUrl);
-      return `<a href="${safeUrl}">PR #${prNumber}</a>`;
-    } catch {
-      core.warning(`Ignoring invalid PR URL in summary: ${prUrl}`);
-      return `PR #${prNumber}`;
-    }
-  };
-
-  /**
-   * Get the summary text for a file sync operation based on its status.
-   * @param {string} fileLabel - Human-readable file label (e.g., 'dependabot.yml', 'copilot-instructions.md')
-   * @param {string} status - Sync status string
-   * @param {number} prNumber - PR number (if applicable)
-   * @param {string} prUrl - PR URL (if applicable)
-   * @returns {string} Summary text for the sync status
-   */
-  const getSyncSummaryText = (fileLabel, status, prNumber, prUrl) => {
-    if (status === 'pr-up-to-date') {
-      return `${fileLabel} ${formatPrRef(prNumber, prUrl)} up-to-date (pending merge)`;
-    } else if (status === 'pr-exists') {
-      return `${fileLabel} PR exists (${formatPrRef(prNumber, prUrl)})`;
-    } else if (status === 'would-update-pr') {
-      return `Would update existing ${formatPrRef(prNumber, prUrl)} for ${fileLabel}`;
-    } else if (status.startsWith('would-')) {
-      return `Would sync ${fileLabel}`;
-    }
-    return `${wouldPrefix}${fileLabel} (${formatPrRef(prNumber, prUrl)})`;
-  };
-
-  // Repository settings changes
-  if (result.changes && result.changes.length > 0) {
-    const settingNames = result.changes.map(c => c.setting.replace(/_/g, '-'));
-    changes.push(`${wouldPrefix}settings: ${settingNames.join(', ')}`);
-  }
-
-  // Topics changes
-  if (result.topicsChange) {
-    const topicChanges = [];
-    if (result.topicsChange.added.length > 0) {
-      topicChanges.push(`+${result.topicsChange.added.join(', ')}`);
-    }
-    if (result.topicsChange.removed.length > 0) {
-      topicChanges.push(`-${result.topicsChange.removed.join(', ')}`);
-    }
-    changes.push(`${wouldPrefix}topics: ${topicChanges.join(', ')}`);
-  }
-
-  // Code scanning changes
-  if (result.codeScanningChange) {
-    changes.push(`${wouldPrefix}CodeQL scanning`);
-  }
-
-  // Immutable releases changes
-  if (result.immutableReleasesChange) {
-    const action = result.immutableReleasesChange.to ? 'enable' : 'disable';
-    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
-    changes.push(`${actionText} immutable releases`);
-  }
-
-  // Secret scanning changes
-  if (result.secretScanningChange) {
-    const action = result.secretScanningChange.to ? 'enable' : 'disable';
-    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
-    changes.push(`${actionText} secret scanning`);
-  }
-
-  // Secret scanning push protection changes
-  if (result.secretScanningPushProtectionChange) {
-    const action = result.secretScanningPushProtectionChange.to ? 'enable' : 'disable';
-    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
-    changes.push(`${actionText} secret scanning push protection`);
-  }
-
-  // Dependabot alerts changes
-  if (result.dependabotAlertsChange) {
-    const action = result.dependabotAlertsChange.to ? 'enable' : 'disable';
-    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
-    changes.push(`${actionText} Dependabot alerts`);
-  }
-
-  // Dependabot security updates changes
-  if (result.dependabotSecurityUpdatesChange) {
-    const action = result.dependabotSecurityUpdatesChange.to ? 'enable' : 'disable';
-    const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
-    changes.push(`${actionText} Dependabot security updates`);
-  }
-
-  // Dependabot changes
-  if (
-    result.dependabotSync?.success &&
-    result.dependabotSync.dependabotYml &&
-    result.dependabotSync.dependabotYml !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'dependabot.yml',
-        result.dependabotSync.dependabotYml,
-        result.dependabotSync.prNumber,
-        result.dependabotSync.prUrl
-      )
-    );
-  }
-
-  // Gitignore changes
-  if (
-    result.gitignoreSync?.success &&
-    result.gitignoreSync.gitignore &&
-    result.gitignoreSync.gitignore !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        '.gitignore',
-        result.gitignoreSync.gitignore,
-        result.gitignoreSync.prNumber,
-        result.gitignoreSync.prUrl
-      )
-    );
-  }
-
-  // Ruleset changes
-  if (result.rulesetSync?.success && result.rulesetSync.ruleset && result.rulesetSync.ruleset !== 'unchanged') {
-    const status = result.rulesetSync.ruleset;
-    if (status === 'pr-up-to-date') {
-      // Rulesets don't use PRs, so this shouldn't happen, but handle it gracefully
-      changes.push(`ruleset up-to-date`);
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync ruleset`);
-    } else {
-      changes.push(`${wouldPrefix}ruleset`);
-    }
-  }
-
-  // Pull request template changes
-  if (
-    result.pullRequestTemplateSync?.success &&
-    result.pullRequestTemplateSync.pullRequestTemplate &&
-    result.pullRequestTemplateSync.pullRequestTemplate !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'PR template',
-        result.pullRequestTemplateSync.pullRequestTemplate,
-        result.pullRequestTemplateSync.prNumber,
-        result.pullRequestTemplateSync.prUrl
-      )
-    );
-  }
-
-  // Workflow files changes
-  if (
-    result.workflowFilesSync?.success &&
-    result.workflowFilesSync.workflowFiles &&
-    result.workflowFilesSync.workflowFiles !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'workflow files',
-        result.workflowFilesSync.workflowFiles,
-        result.workflowFilesSync.prNumber,
-        result.workflowFilesSync.prUrl
-      )
-    );
-  }
-
-  // Autolinks changes
-  if (
-    result.autolinksSync?.success &&
-    result.autolinksSync.autolinks &&
-    result.autolinksSync.autolinks !== 'unchanged'
-  ) {
-    const status = result.autolinksSync.autolinks;
-    if (status === 'pr-up-to-date') {
-      // Autolinks don't use PRs, so this shouldn't happen, but handle it gracefully
-      changes.push(`autolinks up-to-date`);
-    } else if (status.startsWith('would-')) {
-      changes.push(`Would sync autolinks`);
-    } else {
-      changes.push(`${wouldPrefix}autolinks`);
-    }
-  }
-
-  // Copilot instructions changes
-  if (
-    result.copilotInstructionsSync?.success &&
-    result.copilotInstructionsSync.copilotInstructions &&
-    result.copilotInstructionsSync.copilotInstructions !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'copilot-instructions.md',
-        result.copilotInstructionsSync.copilotInstructions,
-        result.copilotInstructionsSync.prNumber,
-        result.copilotInstructionsSync.prUrl
-      )
-    );
-  }
-
-  // Package.json changes
-  if (
-    result.packageJsonSync?.success &&
-    result.packageJsonSync.packageJson &&
-    result.packageJsonSync.packageJson !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'package.json',
-        result.packageJsonSync.packageJson,
-        result.packageJsonSync.prNumber,
-        result.packageJsonSync.prUrl
-      )
-    );
-  }
-
-  // CODEOWNERS changes
-  if (
-    result.codeownersSync?.success &&
-    result.codeownersSync.codeowners &&
-    result.codeownersSync.codeowners !== 'unchanged'
-  ) {
-    changes.push(
-      getSyncSummaryText(
-        'CODEOWNERS',
-        result.codeownersSync.codeowners,
-        result.codeownersSync.prNumber,
-        result.codeownersSync.prUrl
-      )
-    );
-  }
-
-  return changes;
-}
-
-/**
  * Check if a repository result has any changes
  * @param {Object} result - Repository update result object
- * @returns {boolean} True if there are any changes (settings, topics, code scanning, immutable releases, dependabot, gitignore, rulesets, pull request template, workflow files, autolinks, copilot instructions, package.json, or codeowners)
+ * @returns {boolean} True if there are any changes
  */
 function hasRepositoryChanges(result) {
-  // Helper to check if a sync status represents something to report
-  // 'unchanged' means nothing to show, but 'pr-up-to-date' means there's a pending PR to display
-  const hasSyncChanges = status => status && status !== 'unchanged';
-
-  return (
-    (result.changes && result.changes.length > 0) ||
-    result.topicsChange ||
-    result.codeScanningChange ||
-    result.immutableReleasesChange ||
-    result.secretScanningChange ||
-    result.secretScanningPushProtectionChange ||
-    result.dependabotAlertsChange ||
-    result.dependabotSecurityUpdatesChange ||
-    (result.dependabotSync && result.dependabotSync.success && hasSyncChanges(result.dependabotSync.dependabotYml)) ||
-    (result.gitignoreSync && result.gitignoreSync.success && hasSyncChanges(result.gitignoreSync.gitignore)) ||
-    (result.rulesetSync && result.rulesetSync.success && hasSyncChanges(result.rulesetSync.ruleset)) ||
-    (result.pullRequestTemplateSync &&
-      result.pullRequestTemplateSync.success &&
-      hasSyncChanges(result.pullRequestTemplateSync.pullRequestTemplate)) ||
-    (result.workflowFilesSync &&
-      result.workflowFilesSync.success &&
-      hasSyncChanges(result.workflowFilesSync.workflowFiles)) ||
-    (result.autolinksSync && result.autolinksSync.success && hasSyncChanges(result.autolinksSync.autolinks)) ||
-    (result.copilotInstructionsSync &&
-      result.copilotInstructionsSync.success &&
-      hasSyncChanges(result.copilotInstructionsSync.copilotInstructions)) ||
-    (result.packageJsonSync && result.packageJsonSync.success && hasSyncChanges(result.packageJsonSync.packageJson)) ||
-    (result.codeownersSync && result.codeownersSync.success && hasSyncChanges(result.codeownersSync.codeowners))
-  );
+  if (result.subResults && result.subResults.length > 0) {
+    return result.subResults.some(s => s.status === SubResultStatus.CHANGED);
+  }
+  return false;
 }
 
 /**
@@ -3564,10 +3381,18 @@ export async function run() {
           if (dependabotResult.prUrl) {
             core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
           }
+          if (dependabotResult.dependabotYml && dependabotResult.dependabotYml !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('dependabot-sync', SubResultStatus.CHANGED, dependabotResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.dependabotSyncWarning = dependabotResult.error;
           core.warning(`  ⚠️  ${dependabotResult.error}`);
+          result.subResults.push(
+            createSubResult('dependabot-sync', SubResultStatus.WARNING, 'Dependabot sync produced a warning')
+          );
         }
       }
 
@@ -3584,10 +3409,16 @@ export async function run() {
           if (gitignoreResult.prUrl) {
             core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
           }
+          if (gitignoreResult.gitignore && gitignoreResult.gitignore !== 'unchanged') {
+            result.subResults.push(createSubResult('gitignore-sync', SubResultStatus.CHANGED, gitignoreResult.message));
+          }
         } else {
           result.hasWarnings = true;
           result.gitignoreSyncWarning = gitignoreResult.error;
           core.warning(`  ⚠️  ${gitignoreResult.error}`);
+          result.subResults.push(
+            createSubResult('gitignore-sync', SubResultStatus.WARNING, 'Gitignore sync produced a warning')
+          );
         }
       }
 
@@ -3607,10 +3438,16 @@ export async function run() {
 
         if (rulesetResult.success) {
           core.info(`  📋 ${rulesetResult.message}`);
+          if (rulesetResult.ruleset && rulesetResult.ruleset !== 'unchanged') {
+            result.subResults.push(createSubResult('ruleset-sync', SubResultStatus.CHANGED, rulesetResult.message));
+          }
         } else {
           result.hasWarnings = true;
           result.rulesetSyncWarning = rulesetResult.error;
           core.warning(`  ⚠️  ${rulesetResult.error}`);
+          result.subResults.push(
+            createSubResult('ruleset-sync', SubResultStatus.WARNING, 'Ruleset sync produced a warning')
+          );
         }
       }
 
@@ -3633,10 +3470,18 @@ export async function run() {
           if (templateResult.prUrl) {
             core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
           }
+          if (templateResult.pullRequestTemplate && templateResult.pullRequestTemplate !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('pr-template-sync', SubResultStatus.CHANGED, templateResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.pullRequestTemplateSyncWarning = templateResult.error;
           core.warning(`  ⚠️  ${templateResult.error}`);
+          result.subResults.push(
+            createSubResult('pr-template-sync', SubResultStatus.WARNING, 'PR template sync produced a warning')
+          );
         }
       }
 
@@ -3653,10 +3498,18 @@ export async function run() {
           if (workflowResult.prUrl) {
             core.info(`  🔗 PR URL: ${workflowResult.prUrl}`);
           }
+          if (workflowResult.workflowFiles && workflowResult.workflowFiles !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('workflow-files-sync', SubResultStatus.CHANGED, workflowResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.workflowFilesSyncWarning = workflowResult.error;
           core.warning(`  ⚠️  ${workflowResult.error}`);
+          result.subResults.push(
+            createSubResult('workflow-files-sync', SubResultStatus.WARNING, 'Workflow files sync produced a warning')
+          );
         }
       }
 
@@ -3670,10 +3523,16 @@ export async function run() {
 
         if (autolinksResult.success) {
           core.info(`  🔗 ${autolinksResult.message}`);
+          if (autolinksResult.autolinks && autolinksResult.autolinks !== 'unchanged') {
+            result.subResults.push(createSubResult('autolinks-sync', SubResultStatus.CHANGED, autolinksResult.message));
+          }
         } else {
           result.hasWarnings = true;
           result.autolinksSyncWarning = autolinksResult.error;
           core.warning(`  ⚠️  ${autolinksResult.error}`);
+          result.subResults.push(
+            createSubResult('autolinks-sync', SubResultStatus.WARNING, 'Autolinks sync produced a warning')
+          );
         }
       }
 
@@ -3696,10 +3555,22 @@ export async function run() {
           if (copilotResult.prUrl) {
             core.info(`  🔗 PR URL: ${copilotResult.prUrl}`);
           }
+          if (copilotResult.copilotInstructions && copilotResult.copilotInstructions !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('copilot-instructions-sync', SubResultStatus.CHANGED, copilotResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.copilotInstructionsSyncWarning = copilotResult.error;
           core.warning(`  ⚠️  ${copilotResult.error}`);
+          result.subResults.push(
+            createSubResult(
+              'copilot-instructions-sync',
+              SubResultStatus.WARNING,
+              'Copilot instructions sync produced a warning'
+            )
+          );
         }
       }
 
@@ -3728,10 +3599,18 @@ export async function run() {
           if (codeownersResult.prUrl) {
             core.info(`  🔗 PR URL: ${codeownersResult.prUrl}`);
           }
+          if (codeownersResult.codeowners && codeownersResult.codeowners !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('codeowners-sync', SubResultStatus.CHANGED, codeownersResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.codeownersSyncWarning = codeownersResult.error;
           core.warning(`  ⚠️  ${codeownersResult.error}`);
+          result.subResults.push(
+            createSubResult('codeowners-sync', SubResultStatus.WARNING, 'CODEOWNERS sync produced a warning')
+          );
         }
       }
 
@@ -3767,12 +3646,23 @@ export async function run() {
               core.info(`     - ${dryRun ? 'Would update' : 'Updated'} ${change.field}`);
             }
           }
+          if (packageJsonResult.packageJson && packageJsonResult.packageJson !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('package-json-sync', SubResultStatus.CHANGED, packageJsonResult.message)
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.packageJsonSyncWarning = packageJsonResult.error;
           core.warning(`  ⚠️  ${packageJsonResult.error}`);
+          result.subResults.push(
+            createSubResult('package-json-sync', SubResultStatus.WARNING, 'Package.json sync produced a warning')
+          );
         }
       }
+
+      // Derive hasWarnings from subResults
+      result.hasWarnings = result.subResults.some(s => s.status === SubResultStatus.WARNING);
 
       if (result.success) {
         successCount++;
@@ -3992,82 +3882,11 @@ export async function run() {
 
         if (r.archived) {
           details = 'Repository is archived';
-        } else if (r.hasWarnings) {
-          const warningsList = [];
-
-          // Set of result property names to exclude from change list when a warning exists.
-          const warningKeys = new Set();
-
-          if (r.codeScanningWarning) {
-            warningsList.push('CodeQL scanning produced a warning');
-            warningKeys.add('codeScanningChange');
-            warningKeys.add('codeScanningWouldEnable');
-          }
-          if (r.topicsWarning) {
-            warningsList.push('Topics produced a warning');
-            warningKeys.add('topicsChange');
-          }
-          if (r.secretScanningWarning) {
-            warningsList.push('Secret scanning produced a warning');
-            warningKeys.add('secretScanningChange');
-            warningKeys.add('secretScanningUpdated');
-            warningKeys.add('secretScanningWouldUpdate');
-          }
-          if (r.secretScanningPushProtectionWarning) {
-            warningsList.push('Secret scanning push protection produced a warning');
-            warningKeys.add('secretScanningPushProtectionChange');
-            warningKeys.add('secretScanningPushProtectionUpdated');
-            warningKeys.add('secretScanningPushProtectionWouldUpdate');
-          }
-          if (r.immutableReleasesWarning) {
-            warningsList.push('Immutable releases produced a warning');
-            warningKeys.add('immutableReleasesChange');
-            warningKeys.add('immutableReleasesWouldUpdate');
-          }
-          if (r.dependabotAlertsWarning) {
-            warningsList.push('Dependabot alerts produced a warning');
-            warningKeys.add('dependabotAlertsChange');
-            warningKeys.add('dependabotAlertsUpdated');
-            warningKeys.add('dependabotAlertsWouldUpdate');
-          }
-          if (r.dependabotSecurityUpdatesWarning) {
-            warningsList.push('Dependabot security updates produced a warning');
-            warningKeys.add('dependabotSecurityUpdatesChange');
-            warningKeys.add('dependabotSecurityUpdatesUpdated');
-            warningKeys.add('dependabotSecurityUpdatesWouldUpdate');
-          }
-
-          // Sync helper warnings
-          if (r.dependabotSyncWarning) warningsList.push('Dependabot sync produced a warning');
-          if (r.gitignoreSyncWarning) warningsList.push('Gitignore sync produced a warning');
-          if (r.rulesetSyncWarning) warningsList.push('Ruleset sync produced a warning');
-          if (r.pullRequestTemplateSyncWarning) warningsList.push('PR template sync produced a warning');
-          if (r.workflowFilesSyncWarning) warningsList.push('Workflow files sync produced a warning');
-          if (r.autolinksSyncWarning) warningsList.push('Autolinks sync produced a warning');
-          if (r.copilotInstructionsSyncWarning) warningsList.push('Copilot instructions sync produced a warning');
-          if (r.codeownersSyncWarning) warningsList.push('CODEOWNERS sync produced a warning');
-          if (r.packageJsonSyncWarning) warningsList.push('Package.json sync produced a warning');
-
-          // Only include changes for features that didn't produce warnings.
-          // getChangesList checks result properties to build change strings,
-          // so we filter by removing those properties from a copy of the result.
-          const filteredResult = { ...r };
-
-          for (const key of warningKeys) {
-            delete filteredResult[key];
-          }
-
-          const successChanges = getChangesList(filteredResult, dryRun);
-
-          const allDetails = [...warningsList, ...successChanges];
-          details = allDetails.length > 0 ? allDetails.join('; ') : 'Warning occurred';
-        } else if (hasChanges) {
-          const changesList = getChangesList(r, dryRun);
-          if (changesList.length > 0) {
-            details = changesList.join('; ');
-          } else {
-            details = dryRun ? 'Would update' : 'Updated';
-          }
+        } else if (r.subResults && r.subResults.length > 0) {
+          const messages = r.subResults
+            .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
+            .map(s => s.message);
+          details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
         } else {
           details = 'No changes needed';
         }

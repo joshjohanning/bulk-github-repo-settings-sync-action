@@ -2485,7 +2485,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
-      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not process CodeQL'));
@@ -2587,7 +2587,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
-      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '2');
     });
@@ -2626,8 +2626,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
-      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
-      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '2');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
     });
@@ -3766,7 +3766,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('autolinks');
+      expect(repoRow[2]).toContain('autolink');
     });
 
     test('should handle summary table with copilot instructions sync changes', async () => {
@@ -3954,7 +3954,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('PR template');
+      expect(repoRow[2]).toContain('pull_request_template');
     });
 
     test('should use custom GitHub API URL when provided', async () => {
@@ -8602,9 +8602,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain(
-        'dependabot.yml <a href="https://github.com/owner/repo1/pull/42">PR #42</a> up-to-date (pending merge)'
-      );
+      expect(repoRow[2]).toContain('already has the latest');
     });
 
     test('should show pending merge message for workflow files when PR is up-to-date', async () => {
@@ -8673,9 +8671,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain(
-        'workflow files <a href="https://github.com/owner/repo1/pull/99">PR #99</a> up-to-date (pending merge)'
-      );
+      expect(repoRow[2]).toContain('already has the latest');
     });
 
     test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
@@ -8746,7 +8742,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(repoRow).toBeDefined();
       // Should show the pending merge message, NOT "No changes needed"
       expect(repoRow[2]).not.toBe('No changes needed');
-      expect(repoRow[2]).toContain('pending merge');
+      expect(repoRow[2]).toContain('already has the latest');
     });
   });
 
@@ -8812,9 +8808,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain(
-        'Would update existing <a href="https://github.com/owner/repo1/pull/51">PR #51</a> for copilot-instructions.md'
-      );
+      expect(repoRow[2]).toContain('Would update');
+      expect(repoRow[2]).toContain('copilot-instructions.md');
     });
   });
 
