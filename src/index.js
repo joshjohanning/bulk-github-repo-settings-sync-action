@@ -659,6 +659,7 @@ export async function updateRepositorySettings(
     return {
       repository: repo,
       success: false,
+      hasWarnings: false,
       error: 'Invalid repository format. Expected "owner/repo"'
     };
   }
@@ -681,6 +682,7 @@ export async function updateRepositorySettings(
         return {
           repository: repo,
           success: false,
+          hasWarnings: false,
           error: 'Access denied - GitHub App or token does not have permission to access this repository',
           accessDenied: true,
           dryRun
@@ -710,6 +712,7 @@ export async function updateRepositorySettings(
       return {
         repository: repo,
         success: false,
+        hasWarnings: false,
         error: 'Insufficient permissions - GitHub App may not be installed or does not have any access',
         insufficientPermissions: true,
         dryRun
@@ -735,6 +738,7 @@ export async function updateRepositorySettings(
       return {
         repository: repo,
         success: false,
+        hasWarnings: false,
         error:
           'Cannot read repository settings - GitHub App may not be installed on this repository or does not have sufficient access',
         insufficientPermissions: true,
@@ -3997,6 +4001,53 @@ export async function run() {
 
         if (r.archived) {
           details = 'Repository is archived';
+        } else if (r.hasWarnings) {
+          const changesList = getChangesList(r, dryRun);
+          const warningsList = [];
+          const warningFeatures = new Set();
+
+          if (r.codeScanningWarning) {
+            warningsList.push('CodeQL scanning produced a warning');
+            warningFeatures.add('CodeQL');
+          }
+          if (r.topicsWarning) {
+            warningsList.push('Topics produced a warning');
+            warningFeatures.add('Topics');
+          }
+          if (r.secretScanningWarning) {
+            warningsList.push('Secret scanning produced a warning');
+            warningFeatures.add('secret scanning');
+          }
+          if (r.secretScanningPushProtectionWarning) {
+            warningsList.push('Secret scanning push protection produced a warning');
+            warningFeatures.add('push protection');
+          }
+          if (r.immutableReleasesWarning) {
+            warningsList.push('Immutable releases produced a warning');
+            warningFeatures.add('Immutable');
+          }
+          if (r.dependabotAlertsWarning) {
+            warningsList.push('Dependabot alerts produced a warning');
+            warningFeatures.add('Dependabot alerts');
+          }
+          if (r.dependabotSecurityUpdatesWarning) {
+            warningsList.push('Dependabot security updates produced a warning');
+            warningFeatures.add('Dependabot security');
+          }
+
+          // Filter out changes that correspond to warnings
+          const successChanges = changesList.filter(change => {
+            const lowerChange = change.toLowerCase();
+            for (const feature of warningFeatures) {
+              if (lowerChange.includes(feature.toLowerCase())) {
+                return false;
+              }
+            }
+            return true;
+          });
+
+          const allDetails = [...warningsList, ...successChanges];
+          details = allDetails.length > 0 ? allDetails.join('; ') : 'Warning occurred';
         } else if (hasChanges) {
           const changesList = getChangesList(r, dryRun);
           if (changesList.length > 0) {
