@@ -3167,7 +3167,100 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(repoRow).toBeDefined();
       expect(repoRow[1]).toBe('\u26A0\uFE0F Warning');
-      expect(repoRow[2]).toContain('CodeQL scanning');
+      expect(repoRow[2]).toContain('CodeQL scanning produced a warning');
+    });
+
+    test('should show warning details with dedup filtering in summary table', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'true',
+          'secret-scanning': 'true',
+          'secret-scanning-push-protection': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false,
+          security_and_analysis: {
+            secret_scanning: { status: 'disabled' },
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        }
+      });
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'not-configured' }
+      });
+      // CodeQL fails
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(
+        new Error('Advanced Security must be enabled')
+      );
+      // Secret scanning succeeds
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+
+      expect(repoRow[1]).toBe('\u26A0\uFE0F Warning');
+      // CodeQL should show as warning
+      expect(repoRow[2]).toContain('CodeQL scanning produced a warning');
+      // Secret scanning succeeded — should show as a change, not duplicated
+      expect(repoRow[2]).toContain('secret scanning');
+      expect(repoRow[2]).not.toContain('Secret scanning produced a warning');
+    });
+
+    test('should cascade secret scanning unavailable warning to push protection', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'secret-scanning': 'true',
+          'secret-scanning-push-protection': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false,
+          security_and_analysis: {
+            secret_scanning: { status: 'disabled' },
+            secret_scanning_push_protection: { status: 'disabled' }
+          }
+        }
+      });
+      // Secret scanning fails with "not available"
+      mockOctokit.rest.repos.update.mockRejectedValue(
+        new Error('Secret scanning is not available for this repository.')
+      );
+
+      await run();
+
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+
+      expect(repoRow[1]).toBe('\u26A0\uFE0F Warning');
+      expect(repoRow[2]).toContain('Secret scanning produced a warning');
+      expect(repoRow[2]).toContain('Secret scanning push protection produced a warning');
     });
 
     test('should include immutable releases changes in summary table', async () => {

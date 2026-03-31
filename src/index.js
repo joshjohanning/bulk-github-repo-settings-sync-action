@@ -3589,6 +3589,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.dependabotSyncWarning = dependabotResult.error;
           core.warning(`  ⚠️  ${dependabotResult.error}`);
         }
       }
@@ -3608,6 +3609,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.gitignoreSyncWarning = gitignoreResult.error;
           core.warning(`  ⚠️  ${gitignoreResult.error}`);
         }
       }
@@ -3630,6 +3632,7 @@ export async function run() {
           core.info(`  📋 ${rulesetResult.message}`);
         } else {
           result.hasWarnings = true;
+          result.rulesetSyncWarning = rulesetResult.error;
           core.warning(`  ⚠️  ${rulesetResult.error}`);
         }
       }
@@ -3655,6 +3658,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.pullRequestTemplateSyncWarning = templateResult.error;
           core.warning(`  ⚠️  ${templateResult.error}`);
         }
       }
@@ -3674,6 +3678,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.workflowFilesSyncWarning = workflowResult.error;
           core.warning(`  ⚠️  ${workflowResult.error}`);
         }
       }
@@ -3690,6 +3695,7 @@ export async function run() {
           core.info(`  🔗 ${autolinksResult.message}`);
         } else {
           result.hasWarnings = true;
+          result.autolinksSyncWarning = autolinksResult.error;
           core.warning(`  ⚠️  ${autolinksResult.error}`);
         }
       }
@@ -3715,6 +3721,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.copilotInstructionsSyncWarning = copilotResult.error;
           core.warning(`  ⚠️  ${copilotResult.error}`);
         }
       }
@@ -3746,6 +3753,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.codeownersSyncWarning = codeownersResult.error;
           core.warning(`  ⚠️  ${codeownersResult.error}`);
         }
       }
@@ -3784,6 +3792,7 @@ export async function run() {
           }
         } else {
           result.hasWarnings = true;
+          result.packageJsonSyncWarning = packageJsonResult.error;
           core.warning(`  ⚠️  ${packageJsonResult.error}`);
         }
       }
@@ -4011,6 +4020,7 @@ export async function run() {
           const warningsList = [];
           const warningFeatures = new Set();
 
+          // Security/repo settings warnings
           if (r.codeScanningWarning) {
             warningsList.push('CodeQL scanning produced a warning');
             warningFeatures.add('CodeQL');
@@ -4029,7 +4039,7 @@ export async function run() {
           }
           if (r.immutableReleasesWarning) {
             warningsList.push('Immutable releases produced a warning');
-            warningFeatures.add('Immutable');
+            warningFeatures.add('immutable releases');
           }
           if (r.dependabotAlertsWarning) {
             warningsList.push('Dependabot alerts produced a warning');
@@ -4039,6 +4049,17 @@ export async function run() {
             warningsList.push('Dependabot security updates produced a warning');
             warningFeatures.add('Dependabot security');
           }
+
+          // Sync helper warnings
+          if (r.dependabotSyncWarning) warningsList.push('Dependabot sync produced a warning');
+          if (r.gitignoreSyncWarning) warningsList.push('Gitignore sync produced a warning');
+          if (r.rulesetSyncWarning) warningsList.push('Ruleset sync produced a warning');
+          if (r.pullRequestTemplateSyncWarning) warningsList.push('PR template sync produced a warning');
+          if (r.workflowFilesSyncWarning) warningsList.push('Workflow files sync produced a warning');
+          if (r.autolinksSyncWarning) warningsList.push('Autolinks sync produced a warning');
+          if (r.copilotInstructionsSyncWarning) warningsList.push('Copilot instructions sync produced a warning');
+          if (r.codeownersSyncWarning) warningsList.push('CODEOWNERS sync produced a warning');
+          if (r.packageJsonSyncWarning) warningsList.push('Package.json sync produced a warning');
 
           // Filter out changes that correspond to warnings
           const successChanges = changesList.filter(change => {
