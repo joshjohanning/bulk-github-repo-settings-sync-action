@@ -821,6 +821,10 @@ export async function updateRepositorySettings(
       }
     }
 
+    // TODO(v3): Remove legacy properties from the result object (e.g., topicsChange, codeScanningWarning,
+    // secretScanningUpdated, hasWarnings, etc.) once consumers have migrated to subResults.
+    // Legacy properties are preserved for backward compatibility of the results JSON output.
+    // See: https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/pull/120
     const result = {
       repository: repo,
       success: true,
@@ -3368,6 +3372,10 @@ export async function run() {
         continue;
       }
 
+      // TODO(v3): Remove legacy sync warning properties (e.g., dependabotSyncWarning, gitignoreSyncWarning)
+      // and hasWarnings assignments below once consumers use subResults directly.
+      // See: https://github.com/joshjohanning/bulk-github-repo-settings-sync-action/pull/120
+
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Checking dependabot.yml...`);
@@ -3662,6 +3670,7 @@ export async function run() {
       }
 
       // Derive hasWarnings from subResults
+      // TODO(v3): Remove hasWarnings once consumers use subResults directly
       result.hasWarnings = result.subResults.some(s => s.status === SubResultStatus.WARNING);
 
       if (result.success) {
