@@ -1031,6 +1031,11 @@ export async function updateRepositorySettings(
         } catch (error) {
           result.secretScanningWarning = `Could not process secret scanning: ${error.message}`;
           result.hasWarnings = true;
+          // If secret scanning is not available, push protection can't work either
+          if (error.message.includes('not available')) {
+            result.secretScanningPushProtectionWarning =
+              'Cannot enable push protection without secret scanning enabled';
+          }
         }
       }
 
