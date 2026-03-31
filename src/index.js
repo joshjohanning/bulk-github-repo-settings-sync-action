@@ -4,30 +4,10 @@
  *
  * Local Development & Testing:
  *
- * 1. Set environment variables to simulate GitHub Actions inputs:
- *    export INPUT_GITHUB_TOKEN="ghp_your_token_here"
- *    export INPUT_GITHUB_API_URL="https://api.github.com"  # Optional, defaults to github.api_url
- *    export INPUT_REPOSITORIES="owner/repo1,owner/repo2"
- *    export INPUT_ALLOW_SQUASH_MERGE="true"
- *    export INPUT_ALLOW_MERGE_COMMIT="false"
- *    export INPUT_ALLOW_REBASE_MERGE="true"
- *    export INPUT_ALLOW_AUTO_MERGE="true"
- *    export INPUT_DELETE_BRANCH_ON_MERGE="true"
- *    export INPUT_ALLOW_UPDATE_BRANCH="true"
- *    export INPUT_DEPENDABOT_YML="./path/to/dependabot.yml"
- *    export INPUT_DEPENDABOT_PR_TITLE="chore: update dependabot.yml"
+ * Uses core.getInput() which reads INPUT_<NAME> env vars (hyphens preserved).
+ * Since shell variables can't contain hyphens, set these via env(1):
  *
- * 2. Run locally:
- *    node src/index.js
- *
- * Example with YAML file:
- *    export INPUT_REPOSITORIES_FILE="repos.yml"
- *    node src/index.js
- *
- * Example with all repos:
- *    export INPUT_REPOSITORIES="all"
- *    export INPUT_OWNER="your-org-or-user"
- *    node src/index.js
+ *    env 'INPUT_GITHUB-TOKEN=ghp_xxx' 'INPUT_REPOSITORIES=owner/repo1,owner/repo2' node src/index.js
  */
 
 import * as core from '@actions/core';
@@ -152,32 +132,23 @@ export function replaceTemplateVariables(content, vars) {
 }
 
 /**
- * Get input value (works reliably in both GitHub Actions and local environments)
- * @param {string} name - Input name (with dashes)
- * @returns {string} Input value
- */
-function getInput(name) {
-  // Try core.getInput first (works in GitHub Actions)
-  let value = core.getInput(name);
-
-  // Fallback: try direct environment variable access (for local development)
-  if (!value) {
-    const envName = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
-    value = process.env[envName] || '';
-  }
-
-  return value;
-}
-
-/**
- * Convert string input to boolean (more permissive than core.getBooleanInput)
+ * Get optional boolean input - returns null if not set.
+ * Unlike core.getBooleanInput (which throws on empty input), this returns null
+ * for unset inputs so callers can distinguish "not configured" from "false".
+ * Handles case-insensitive true/false per YAML 1.2 Core Schema.
  * @param {string} name - Input name
  * @returns {boolean|null} Boolean value or null if not set
  */
 function getBooleanInput(name) {
-  const input = getInput(name).toLowerCase();
-  if (!input) return null;
-  return input === 'true' || input === '1' || input === 'yes';
+  const raw = core.getInput(name);
+  if (!raw || !raw.trim()) return null;
+  const lower = raw.trim().toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  throw new TypeError(
+    `Unsupported boolean value for input "${name}": "${raw}". ` +
+      'Supported boolean values: true|false (case-insensitive, YAML 1.2 Core Schema).'
+  );
 }
 
 /**
@@ -3201,13 +3172,13 @@ function hasRepositoryChanges(result) {
 export async function run() {
   try {
     // Get inputs
-    const githubToken = getInput('github-token');
-    const githubApiUrl = getInput('github-api-url') || 'https://api.github.com';
-    const repositories = getInput('repositories');
-    const repositoriesFile = getInput('repositories-file');
-    const owner = getInput('owner');
-    const customPropertyName = getInput('custom-property-name');
-    const customPropertyValue = getInput('custom-property-value');
+    const githubToken = core.getInput('github-token');
+    const githubApiUrl = core.getInput('github-api-url') || 'https://api.github.com';
+    const repositories = core.getInput('repositories');
+    const repositoriesFile = core.getInput('repositories-file');
+    const owner = core.getInput('owner');
+    const customPropertyName = core.getInput('custom-property-name');
+    const customPropertyValue = core.getInput('custom-property-value');
 
     // Get settings inputs
     const settings = {
@@ -3242,7 +3213,7 @@ export async function run() {
     const dryRun = getBooleanInput('dry-run');
 
     // Parse topics if provided
-    const topicsInput = getInput('topics');
+    const topicsInput = core.getInput('topics');
     const topics = topicsInput
       ? topicsInput
           .split(',')
@@ -3251,50 +3222,50 @@ export async function run() {
       : null;
 
     // Get dependabot.yml settings
-    const dependabotYml = getInput('dependabot-yml');
-    const dependabotPrTitle = getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
+    const dependabotYml = core.getInput('dependabot-yml');
+    const dependabotPrTitle = core.getInput('dependabot-pr-title') || 'chore: update dependabot.yml';
 
     // Get .gitignore settings
-    const gitignore = getInput('gitignore');
-    const gitignorePrTitle = getInput('gitignore-pr-title') || 'chore: update .gitignore';
+    const gitignore = core.getInput('gitignore');
+    const gitignorePrTitle = core.getInput('gitignore-pr-title') || 'chore: update .gitignore';
 
     // Get rulesets settings
-    const rulesetsFile = getInput('rulesets-file');
+    const rulesetsFile = core.getInput('rulesets-file');
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets');
 
     // Get pull request template settings
-    const pullRequestTemplate = getInput('pull-request-template');
+    const pullRequestTemplate = core.getInput('pull-request-template');
     const pullRequestTemplatePrTitle =
-      getInput('pull-request-template-pr-title') || 'chore: update pull request template';
+      core.getInput('pull-request-template-pr-title') || 'chore: update pull request template';
 
     // Get workflow files settings
-    const workflowFilesInput = getInput('workflow-files');
+    const workflowFilesInput = core.getInput('workflow-files');
     const workflowFiles = workflowFilesInput
       ? workflowFilesInput
           .split(',')
           .map(f => f.trim())
           .filter(f => f.length > 0)
       : null;
-    const workflowFilesPrTitle = getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
+    const workflowFilesPrTitle = core.getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
 
     // Get autolinks settings
-    const autolinksFile = getInput('autolinks-file');
+    const autolinksFile = core.getInput('autolinks-file');
 
     // Get copilot instructions settings
-    const copilotInstructionsMd = getInput('copilot-instructions-md');
+    const copilotInstructionsMd = core.getInput('copilot-instructions-md');
     const copilotInstructionsPrTitle =
-      getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
+      core.getInput('copilot-instructions-pr-title') || 'chore: update copilot-instructions.md';
 
     // Get CODEOWNERS settings
-    const codeowners = getInput('codeowners');
-    const codeownersTargetPath = getInput('codeowners-target-path') || '.github/CODEOWNERS';
-    const codeownersPrTitle = getInput('codeowners-pr-title') || 'chore: update CODEOWNERS';
+    const codeowners = core.getInput('codeowners');
+    const codeownersTargetPath = core.getInput('codeowners-target-path') || '.github/CODEOWNERS';
+    const codeownersPrTitle = core.getInput('codeowners-pr-title') || 'chore: update CODEOWNERS';
 
     // Get package.json sync settings
-    const packageJsonFile = getInput('package-json-file');
+    const packageJsonFile = core.getInput('package-json-file');
     const syncScripts = getBooleanInput('package-json-sync-scripts');
     const syncEngines = getBooleanInput('package-json-sync-engines');
-    const packageJsonPrTitle = getInput('package-json-pr-title') || 'chore: update package.json';
+    const packageJsonPrTitle = core.getInput('package-json-pr-title') || 'chore: update package.json';
 
     core.info('Starting Bulk GitHub Repository Settings Action...');
 
