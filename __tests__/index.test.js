@@ -2659,6 +2659,53 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(results[1].codeScanningWarning).toContain('Could not process CodeQL');
     });
 
+    test('should include subResults with correct shape and preserve legacy properties', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'code-scanning': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // Settings change succeeds, CodeQL fails with warning
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'not-configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(new Error('Advanced Security required'));
+
+      await run();
+
+      const resultsCall = mockCore.setOutput.mock.calls.find(([name]) => name === 'results');
+      const results = JSON.parse(resultsCall[1]);
+      const result = results[0];
+
+      // Verify subResults array exists with correct entries
+      expect(result.subResults).toBeDefined();
+      expect(Array.isArray(result.subResults)).toBe(true);
+
+      // Should have a CHANGED sub-result for settings
+      const settingsSubResult = result.subResults.find(s => s.kind === 'settings');
+      expect(settingsSubResult).toBeDefined();
+      expect(settingsSubResult.status).toBe('changed');
+      expect(settingsSubResult.message).toContain('settings');
+
+      // Should have a WARNING sub-result for code-scanning
+      const codeScanningSubResult = result.subResults.find(s => s.kind === 'code-scanning');
+      expect(codeScanningSubResult).toBeDefined();
+      expect(codeScanningSubResult.status).toBe('warning');
+      expect(codeScanningSubResult.message).toContain('CodeQL');
+
+      // Verify legacy properties are still present for backward compat
+      expect(result.changes).toBeDefined();
+      expect(result.changes.length).toBeGreaterThan(0);
+      expect(result.codeScanningWarning).toContain('Could not process CodeQL');
+      expect(result.hasWarnings).toBe(true);
+    });
+
     for (const warningCase of [
       {
         name: 'topics',
