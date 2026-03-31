@@ -1015,7 +1015,8 @@ export async function updateRepositorySettings(
       }
 
       // Handle secret scanning push protection settings
-      if (securitySettings.secretScanningPushProtection !== null) {
+      // Skip if we already set a cascade warning from secret scanning failure
+      if (securitySettings.secretScanningPushProtection !== null && !result.secretScanningPushProtectionWarning) {
         try {
           // Get current push protection status from security_and_analysis
           const currentPushProtection =
@@ -4000,7 +4001,7 @@ export async function run() {
           if (r.codeScanningWarning) {
             warningsList.push('CodeQL scanning produced a warning');
             warningKeys.add('codeScanningChange');
-            warningKeys.add('codeScanningWouldUpdate');
+            warningKeys.add('codeScanningWouldEnable');
           }
           if (r.topicsWarning) {
             warningsList.push('Topics produced a warning');
@@ -4108,6 +4109,8 @@ export async function run() {
       for (const result of results) {
         if (!result.success) {
           core.info(`  ${result.repository}: ❌ ${result.error}`);
+        } else if (result.hasWarnings) {
+          core.info(`  ${result.repository}: ⚠️ Warning`);
         } else {
           const hasChanges = hasRepositoryChanges(result);
           const details = dryRun
