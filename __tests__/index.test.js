@@ -3248,10 +3248,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         }
       });
-      // Secret scanning fails with "not available"
-      mockOctokit.rest.repos.update.mockRejectedValue(
-        new Error('Secret scanning is not available for this repository.')
-      );
+      // Secret scanning fails with "not available" (403)
+      const secretScanningError = new Error('Secret scanning is not available for this repository.');
+      secretScanningError.status = 403;
+      mockOctokit.rest.repos.update.mockRejectedValue(secretScanningError);
 
       await run();
 

@@ -1003,7 +1003,11 @@ export async function updateRepositorySettings(
           result.secretScanningWarning = `Could not process secret scanning: ${error.message}`;
           result.hasWarnings = true;
           // If secret scanning is not available, push protection can't work either
-          if (error.message.includes('not available') && securitySettings.secretScanningPushProtection !== null) {
+          if (
+            securitySettings.secretScanningPushProtection === true &&
+            typeof error.status === 'number' &&
+            (error.status === 403 || error.status === 404)
+          ) {
             result.secretScanningPushProtectionWarning =
               'Cannot enable push protection without secret scanning enabled';
           }
@@ -3990,47 +3994,46 @@ export async function run() {
         } else if (r.hasWarnings) {
           const warningsList = [];
 
-          // Map warning properties to corresponding change properties to avoid duplicates.
-          // Uses result property checks instead of substring matching for precision.
-          const warningChangeMap = new Map();
+          // Set of result property names to exclude from change list when a warning exists.
+          const warningKeys = new Set();
 
           if (r.codeScanningWarning) {
             warningsList.push('CodeQL scanning produced a warning');
-            warningChangeMap.set('codeScanningChange', true);
-            warningChangeMap.set('codeScanningWouldUpdate', true);
+            warningKeys.add('codeScanningChange');
+            warningKeys.add('codeScanningWouldUpdate');
           }
           if (r.topicsWarning) {
             warningsList.push('Topics produced a warning');
-            warningChangeMap.set('topicsChange', true);
+            warningKeys.add('topicsChange');
           }
           if (r.secretScanningWarning) {
             warningsList.push('Secret scanning produced a warning');
-            warningChangeMap.set('secretScanningChange', true);
-            warningChangeMap.set('secretScanningUpdated', true);
-            warningChangeMap.set('secretScanningWouldUpdate', true);
+            warningKeys.add('secretScanningChange');
+            warningKeys.add('secretScanningUpdated');
+            warningKeys.add('secretScanningWouldUpdate');
           }
           if (r.secretScanningPushProtectionWarning) {
             warningsList.push('Secret scanning push protection produced a warning');
-            warningChangeMap.set('secretScanningPushProtectionChange', true);
-            warningChangeMap.set('secretScanningPushProtectionUpdated', true);
-            warningChangeMap.set('secretScanningPushProtectionWouldUpdate', true);
+            warningKeys.add('secretScanningPushProtectionChange');
+            warningKeys.add('secretScanningPushProtectionUpdated');
+            warningKeys.add('secretScanningPushProtectionWouldUpdate');
           }
           if (r.immutableReleasesWarning) {
             warningsList.push('Immutable releases produced a warning');
-            warningChangeMap.set('immutableReleasesChange', true);
-            warningChangeMap.set('immutableReleasesWouldUpdate', true);
+            warningKeys.add('immutableReleasesChange');
+            warningKeys.add('immutableReleasesWouldUpdate');
           }
           if (r.dependabotAlertsWarning) {
             warningsList.push('Dependabot alerts produced a warning');
-            warningChangeMap.set('dependabotAlertsChange', true);
-            warningChangeMap.set('dependabotAlertsUpdated', true);
-            warningChangeMap.set('dependabotAlertsWouldUpdate', true);
+            warningKeys.add('dependabotAlertsChange');
+            warningKeys.add('dependabotAlertsUpdated');
+            warningKeys.add('dependabotAlertsWouldUpdate');
           }
           if (r.dependabotSecurityUpdatesWarning) {
             warningsList.push('Dependabot security updates produced a warning');
-            warningChangeMap.set('dependabotSecurityUpdatesChange', true);
-            warningChangeMap.set('dependabotSecurityUpdatesUpdated', true);
-            warningChangeMap.set('dependabotSecurityUpdatesWouldUpdate', true);
+            warningKeys.add('dependabotSecurityUpdatesChange');
+            warningKeys.add('dependabotSecurityUpdatesUpdated');
+            warningKeys.add('dependabotSecurityUpdatesWouldUpdate');
           }
 
           // Sync helper warnings
@@ -4046,10 +4049,10 @@ export async function run() {
 
           // Only include changes for features that didn't produce warnings.
           // getChangesList checks result properties to build change strings,
-          // so we filter by checking those same properties on the result.
+          // so we filter by removing those properties from a copy of the result.
           const filteredResult = { ...r };
 
-          for (const key of warningChangeMap.keys()) {
+          for (const key of warningKeys) {
             delete filteredResult[key];
           }
 
