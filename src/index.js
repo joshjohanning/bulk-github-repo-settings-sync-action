@@ -1032,7 +1032,7 @@ export async function updateRepositorySettings(
           result.secretScanningWarning = `Could not process secret scanning: ${error.message}`;
           result.hasWarnings = true;
           // If secret scanning is not available, push protection can't work either
-          if (error.message.includes('not available')) {
+          if (error.message.includes('not available') && securitySettings.secretScanningPushProtection !== null) {
             result.secretScanningPushProtectionWarning =
               'Cannot enable push protection without secret scanning enabled';
           }
@@ -1211,6 +1211,7 @@ export async function updateRepositorySettings(
     return {
       repository: repo,
       success: false,
+      hasWarnings: false,
       error: error.message,
       dryRun
     };
@@ -4016,38 +4017,49 @@ export async function run() {
         if (r.archived) {
           details = 'Repository is archived';
         } else if (r.hasWarnings) {
-          const changesList = getChangesList(r, dryRun);
           const warningsList = [];
-          const warningFeatures = new Set();
 
-          // Security/repo settings warnings
+          // Map warning properties to corresponding change properties to avoid duplicates.
+          // Uses result property checks instead of substring matching for precision.
+          const warningChangeMap = new Map();
+
           if (r.codeScanningWarning) {
             warningsList.push('CodeQL scanning produced a warning');
-            warningFeatures.add('CodeQL');
+            warningChangeMap.set('codeScanningChange', true);
+            warningChangeMap.set('codeScanningWouldUpdate', true);
           }
           if (r.topicsWarning) {
             warningsList.push('Topics produced a warning');
-            warningFeatures.add('Topics');
+            warningChangeMap.set('topicsChange', true);
           }
           if (r.secretScanningWarning) {
             warningsList.push('Secret scanning produced a warning');
-            warningFeatures.add('secret scanning');
+            warningChangeMap.set('secretScanningChange', true);
+            warningChangeMap.set('secretScanningUpdated', true);
+            warningChangeMap.set('secretScanningWouldUpdate', true);
           }
           if (r.secretScanningPushProtectionWarning) {
             warningsList.push('Secret scanning push protection produced a warning');
-            warningFeatures.add('push protection');
+            warningChangeMap.set('secretScanningPushProtectionChange', true);
+            warningChangeMap.set('secretScanningPushProtectionUpdated', true);
+            warningChangeMap.set('secretScanningPushProtectionWouldUpdate', true);
           }
           if (r.immutableReleasesWarning) {
             warningsList.push('Immutable releases produced a warning');
-            warningFeatures.add('immutable releases');
+            warningChangeMap.set('immutableReleasesChange', true);
+            warningChangeMap.set('immutableReleasesWouldUpdate', true);
           }
           if (r.dependabotAlertsWarning) {
             warningsList.push('Dependabot alerts produced a warning');
-            warningFeatures.add('Dependabot alerts');
+            warningChangeMap.set('dependabotAlertsChange', true);
+            warningChangeMap.set('dependabotAlertsUpdated', true);
+            warningChangeMap.set('dependabotAlertsWouldUpdate', true);
           }
           if (r.dependabotSecurityUpdatesWarning) {
             warningsList.push('Dependabot security updates produced a warning');
-            warningFeatures.add('Dependabot security');
+            warningChangeMap.set('dependabotSecurityUpdatesChange', true);
+            warningChangeMap.set('dependabotSecurityUpdatesUpdated', true);
+            warningChangeMap.set('dependabotSecurityUpdatesWouldUpdate', true);
           }
 
           // Sync helper warnings
@@ -4061,16 +4073,16 @@ export async function run() {
           if (r.codeownersSyncWarning) warningsList.push('CODEOWNERS sync produced a warning');
           if (r.packageJsonSyncWarning) warningsList.push('Package.json sync produced a warning');
 
-          // Filter out changes that correspond to warnings
-          const successChanges = changesList.filter(change => {
-            const lowerChange = change.toLowerCase();
-            for (const feature of warningFeatures) {
-              if (lowerChange.includes(feature.toLowerCase())) {
-                return false;
-              }
-            }
-            return true;
-          });
+          // Only include changes for features that didn't produce warnings.
+          // getChangesList checks result properties to build change strings,
+          // so we filter by checking those same properties on the result.
+          const filteredResult = { ...r };
+
+          for (const key of warningChangeMap.keys()) {
+            delete filteredResult[key];
+          }
+
+          const successChanges = getChangesList(filteredResult, dryRun);
 
           const allDetails = [...warningsList, ...successChanges];
           details = allDetails.length > 0 ? allDetails.join('; ') : 'Warning occurred';
