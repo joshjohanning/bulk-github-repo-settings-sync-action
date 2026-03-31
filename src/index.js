@@ -630,6 +630,7 @@ export async function updateRepositorySettings(
     return {
       repository: repo,
       success: false,
+      hasWarnings: false,
       error: 'Invalid repository format. Expected "owner/repo"'
     };
   }
@@ -652,6 +653,7 @@ export async function updateRepositorySettings(
         return {
           repository: repo,
           success: false,
+          hasWarnings: false,
           error: 'Access denied - GitHub App or token does not have permission to access this repository',
           accessDenied: true,
           dryRun
@@ -665,6 +667,7 @@ export async function updateRepositorySettings(
       return {
         repository: repo,
         success: true,
+        hasWarnings: false,
         archived: true,
         changes: [],
         dryRun
@@ -680,6 +683,7 @@ export async function updateRepositorySettings(
       return {
         repository: repo,
         success: false,
+        hasWarnings: false,
         error: 'Insufficient permissions - GitHub App may not be installed or does not have any access',
         insufficientPermissions: true,
         dryRun
@@ -705,6 +709,7 @@ export async function updateRepositorySettings(
       return {
         repository: repo,
         success: false,
+        hasWarnings: false,
         error:
           'Cannot read repository settings - GitHub App may not be installed on this repository or does not have sufficient access',
         insufficientPermissions: true,
@@ -791,6 +796,7 @@ export async function updateRepositorySettings(
     const result = {
       repository: repo,
       success: true,
+      hasWarnings: false,
       settings: updateParams,
       currentSettings,
       changes,
@@ -846,6 +852,7 @@ export async function updateRepositorySettings(
         result.topics = topics;
       } catch (error) {
         result.topicsWarning = `Could not process topics: ${error.message}`;
+        result.hasWarnings = true;
       }
     }
 
@@ -890,6 +897,7 @@ export async function updateRepositorySettings(
       } catch (error) {
         // CodeQL setup might fail for various reasons (not supported language, already enabled, etc.)
         result.codeScanningWarning = `Could not process CodeQL: ${error.message}`;
+        result.hasWarnings = true;
       }
     }
 
@@ -955,6 +963,7 @@ export async function updateRepositorySettings(
       } catch (error) {
         // Immutable releases might fail for various reasons (insufficient permissions, not available, etc.)
         result.immutableReleasesWarning = `Could not process immutable releases: ${error.message}`;
+        result.hasWarnings = true;
       }
     }
 
@@ -992,11 +1001,22 @@ export async function updateRepositorySettings(
           }
         } catch (error) {
           result.secretScanningWarning = `Could not process secret scanning: ${error.message}`;
+          result.hasWarnings = true;
+          // If secret scanning is not available, push protection can't work either
+          if (
+            securitySettings.secretScanningPushProtection === true &&
+            typeof error.status === 'number' &&
+            (error.status === 403 || error.status === 404)
+          ) {
+            result.secretScanningPushProtectionWarning =
+              'Cannot enable push protection without secret scanning enabled';
+          }
         }
       }
 
       // Handle secret scanning push protection settings
-      if (securitySettings.secretScanningPushProtection !== null) {
+      // Skip if we already set a cascade warning from secret scanning failure
+      if (securitySettings.secretScanningPushProtection !== null && !result.secretScanningPushProtectionWarning) {
         try {
           // Get current push protection status from security_and_analysis
           const currentPushProtection =
@@ -1028,6 +1048,7 @@ export async function updateRepositorySettings(
           }
         } catch (error) {
           result.secretScanningPushProtectionWarning = `Could not process secret scanning push protection: ${error.message}`;
+          result.hasWarnings = true;
         }
       }
 
@@ -1092,6 +1113,7 @@ export async function updateRepositorySettings(
           }
         } catch (error) {
           result.dependabotAlertsWarning = `Could not process Dependabot alerts: ${error.message}`;
+          result.hasWarnings = true;
         }
       }
 
@@ -1155,6 +1177,7 @@ export async function updateRepositorySettings(
           }
         } catch (error) {
           result.dependabotSecurityUpdatesWarning = `Could not process Dependabot security updates: ${error.message}`;
+          result.hasWarnings = true;
         }
       }
     } // End of if (securitySettings)
@@ -1164,6 +1187,7 @@ export async function updateRepositorySettings(
     return {
       repository: repo,
       success: false,
+      hasWarnings: false,
       error: error.message,
       dryRun
     };
@@ -3356,6 +3380,7 @@ export async function run() {
     let successCount = 0;
     let failureCount = 0;
     let changedCount = 0;
+    let warningCount = 0;
 
     for (const repoConfig of repoList) {
       const repo = repoConfig.repo;
@@ -3540,6 +3565,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${dependabotResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.dependabotSyncWarning = dependabotResult.error;
           core.warning(`  ⚠️  ${dependabotResult.error}`);
         }
       }
@@ -3558,6 +3585,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.gitignoreSyncWarning = gitignoreResult.error;
           core.warning(`  ⚠️  ${gitignoreResult.error}`);
         }
       }
@@ -3579,6 +3608,8 @@ export async function run() {
         if (rulesetResult.success) {
           core.info(`  📋 ${rulesetResult.message}`);
         } else {
+          result.hasWarnings = true;
+          result.rulesetSyncWarning = rulesetResult.error;
           core.warning(`  ⚠️  ${rulesetResult.error}`);
         }
       }
@@ -3603,6 +3634,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${templateResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.pullRequestTemplateSyncWarning = templateResult.error;
           core.warning(`  ⚠️  ${templateResult.error}`);
         }
       }
@@ -3621,6 +3654,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${workflowResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.workflowFilesSyncWarning = workflowResult.error;
           core.warning(`  ⚠️  ${workflowResult.error}`);
         }
       }
@@ -3636,6 +3671,8 @@ export async function run() {
         if (autolinksResult.success) {
           core.info(`  🔗 ${autolinksResult.message}`);
         } else {
+          result.hasWarnings = true;
+          result.autolinksSyncWarning = autolinksResult.error;
           core.warning(`  ⚠️  ${autolinksResult.error}`);
         }
       }
@@ -3660,6 +3697,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${copilotResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.copilotInstructionsSyncWarning = copilotResult.error;
           core.warning(`  ⚠️  ${copilotResult.error}`);
         }
       }
@@ -3690,6 +3729,8 @@ export async function run() {
             core.info(`  🔗 PR URL: ${codeownersResult.prUrl}`);
           }
         } else {
+          result.hasWarnings = true;
+          result.codeownersSyncWarning = codeownersResult.error;
           core.warning(`  ⚠️  ${codeownersResult.error}`);
         }
       }
@@ -3727,12 +3768,17 @@ export async function run() {
             }
           }
         } else {
+          result.hasWarnings = true;
+          result.packageJsonSyncWarning = packageJsonResult.error;
           core.warning(`  ⚠️  ${packageJsonResult.error}`);
         }
       }
 
       if (result.success) {
         successCount++;
+        if (result.hasWarnings) {
+          warningCount++;
+        }
         const repoHasChanges = hasRepositoryChanges(result);
         if (repoHasChanges) {
           changedCount++;
@@ -3915,6 +3961,7 @@ export async function run() {
     core.setOutput('changed-repositories', changedCount.toString());
     core.setOutput('unchanged-repositories', unchangedCount.toString());
     core.setOutput('failed-repositories', failureCount.toString());
+    core.setOutput('warning-repositories', warningCount.toString());
     core.setOutput('results', JSON.stringify(results));
 
     // Create summary
@@ -3929,19 +3976,94 @@ export async function run() {
           return [r.repository, '❌ Failed', r.error];
         }
 
+        const hasChanges = hasRepositoryChanges(r);
+        let status;
+        let details;
+
         if (r.archived) {
-          return [r.repository, '⏭️ Skipped', 'Repository is archived'];
+          status = '⏭️ Skipped';
+        } else if (r.hasWarnings) {
+          status = '⚠️ Warning';
+        } else if (hasChanges) {
+          status = '✅ Changed';
+        } else {
+          status = '➖ No changes';
         }
 
-        // Determine what actually happened
-        const hasChanges = hasRepositoryChanges(r);
+        if (r.archived) {
+          details = 'Repository is archived';
+        } else if (r.hasWarnings) {
+          const warningsList = [];
 
-        let details;
-        if (hasChanges) {
-          // Get specific list of changes
+          // Set of result property names to exclude from change list when a warning exists.
+          const warningKeys = new Set();
+
+          if (r.codeScanningWarning) {
+            warningsList.push('CodeQL scanning produced a warning');
+            warningKeys.add('codeScanningChange');
+            warningKeys.add('codeScanningWouldEnable');
+          }
+          if (r.topicsWarning) {
+            warningsList.push('Topics produced a warning');
+            warningKeys.add('topicsChange');
+          }
+          if (r.secretScanningWarning) {
+            warningsList.push('Secret scanning produced a warning');
+            warningKeys.add('secretScanningChange');
+            warningKeys.add('secretScanningUpdated');
+            warningKeys.add('secretScanningWouldUpdate');
+          }
+          if (r.secretScanningPushProtectionWarning) {
+            warningsList.push('Secret scanning push protection produced a warning');
+            warningKeys.add('secretScanningPushProtectionChange');
+            warningKeys.add('secretScanningPushProtectionUpdated');
+            warningKeys.add('secretScanningPushProtectionWouldUpdate');
+          }
+          if (r.immutableReleasesWarning) {
+            warningsList.push('Immutable releases produced a warning');
+            warningKeys.add('immutableReleasesChange');
+            warningKeys.add('immutableReleasesWouldUpdate');
+          }
+          if (r.dependabotAlertsWarning) {
+            warningsList.push('Dependabot alerts produced a warning');
+            warningKeys.add('dependabotAlertsChange');
+            warningKeys.add('dependabotAlertsUpdated');
+            warningKeys.add('dependabotAlertsWouldUpdate');
+          }
+          if (r.dependabotSecurityUpdatesWarning) {
+            warningsList.push('Dependabot security updates produced a warning');
+            warningKeys.add('dependabotSecurityUpdatesChange');
+            warningKeys.add('dependabotSecurityUpdatesUpdated');
+            warningKeys.add('dependabotSecurityUpdatesWouldUpdate');
+          }
+
+          // Sync helper warnings
+          if (r.dependabotSyncWarning) warningsList.push('Dependabot sync produced a warning');
+          if (r.gitignoreSyncWarning) warningsList.push('Gitignore sync produced a warning');
+          if (r.rulesetSyncWarning) warningsList.push('Ruleset sync produced a warning');
+          if (r.pullRequestTemplateSyncWarning) warningsList.push('PR template sync produced a warning');
+          if (r.workflowFilesSyncWarning) warningsList.push('Workflow files sync produced a warning');
+          if (r.autolinksSyncWarning) warningsList.push('Autolinks sync produced a warning');
+          if (r.copilotInstructionsSyncWarning) warningsList.push('Copilot instructions sync produced a warning');
+          if (r.codeownersSyncWarning) warningsList.push('CODEOWNERS sync produced a warning');
+          if (r.packageJsonSyncWarning) warningsList.push('Package.json sync produced a warning');
+
+          // Only include changes for features that didn't produce warnings.
+          // getChangesList checks result properties to build change strings,
+          // so we filter by removing those properties from a copy of the result.
+          const filteredResult = { ...r };
+
+          for (const key of warningKeys) {
+            delete filteredResult[key];
+          }
+
+          const successChanges = getChangesList(filteredResult, dryRun);
+
+          const allDetails = [...warningsList, ...successChanges];
+          details = allDetails.length > 0 ? allDetails.join('; ') : 'Warning occurred';
+        } else if (hasChanges) {
           const changesList = getChangesList(r, dryRun);
           if (changesList.length > 0) {
-            // Format as bullet points for readability
             details = changesList.join('; ');
           } else {
             details = dryRun ? 'Would update' : 'Updated';
@@ -3950,7 +4072,7 @@ export async function run() {
           details = 'No changes needed';
         }
 
-        return [r.repository, hasChanges ? '✅ Changed' : '➖ No changes', details];
+        return [r.repository, status, details];
       })
     ];
 
@@ -3969,6 +4091,7 @@ export async function run() {
         .addRaw(`\n**Total Repositories:** ${repoList.length}`)
         .addRaw(`\n**Changed:** ${changedCount}`)
         .addRaw(`\n**Unchanged:** ${unchangedCount}`)
+        .addRaw(`\n**Warnings:** ${warningCount}`)
         .addRaw(`\n**Failed:** ${failureCount}\n\n`)
         .addTable(summaryTable)
         .write();
@@ -3981,10 +4104,13 @@ export async function run() {
       core.info(`Total Repositories: ${repoList.length}`);
       core.info(`Changed: ${changedCount}`);
       core.info(`Unchanged: ${unchangedCount}`);
+      core.info(`Warnings: ${warningCount}`);
       core.info(`Failed: ${failureCount}`);
       for (const result of results) {
         if (!result.success) {
           core.info(`  ${result.repository}: ❌ ${result.error}`);
+        } else if (result.hasWarnings) {
+          core.info(`  ${result.repository}: ⚠️ Warning`);
         } else {
           const hasChanges = hasRepositoryChanges(result);
           const details = dryRun
