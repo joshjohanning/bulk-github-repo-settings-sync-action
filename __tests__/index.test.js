@@ -2292,6 +2292,18 @@ describe('Bulk GitHub Repository Settings Action', () => {
   });
 
   describe('Action execution', () => {
+    const makeReadableRepoData = (overrides = {}) => ({
+      archived: false,
+      permissions: { admin: true, push: true, pull: true },
+      allow_squash_merge: false,
+      allow_merge_commit: true,
+      allow_rebase_merge: true,
+      delete_branch_on_merge: false,
+      allow_auto_merge: false,
+      allow_update_branch: false,
+      ...overrides
+    });
+
     const getResultsOutput = () => {
       const resultsCall = mockCore.setOutput.mock.calls.find(([name]) => name === 'results');
       return JSON.parse(resultsCall[1]);
@@ -2719,18 +2731,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
           return inputs[name] || '';
         });
 
-        mockOctokit.rest.repos.get.mockResolvedValue({
-          data: {
-            archived: false,
-            permissions: { admin: true, push: true, pull: true },
-            allow_squash_merge: false,
-            allow_merge_commit: true,
-            allow_rebase_merge: true,
-            delete_branch_on_merge: false,
-            allow_auto_merge: false,
-            allow_update_branch: false
-          }
-        });
+        mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
         mockOctokit.rest.repos.update.mockResolvedValue({});
         mockOctokit.rest.repos.getAllTopics.mockResolvedValue({ data: { names: [] } });
         mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
@@ -2759,18 +2760,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         setupMocks: () => {
           setMockFileContent('version: 2\nupdates: []', './dependabot.yml');
           mockOctokit.rest.repos.get
-            .mockResolvedValueOnce({
-              data: {
-                archived: false,
-                permissions: { admin: true, push: true, pull: true },
-                allow_squash_merge: false,
-                allow_merge_commit: true,
-                allow_rebase_merge: true,
-                delete_branch_on_merge: false,
-                allow_auto_merge: false,
-                allow_update_branch: false
-              }
-            })
+            .mockResolvedValueOnce({ data: makeReadableRepoData() })
             .mockRejectedValueOnce(new Error('Repo fetch failed'));
         },
         warningText: 'Failed to sync dependabot.yml: Repo fetch failed'
@@ -2784,18 +2774,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         setupMocks: () => {
           setMockFileContent('node_modules/\n', './source.gitignore');
           mockOctokit.rest.repos.get
-            .mockResolvedValueOnce({
-              data: {
-                archived: false,
-                permissions: { admin: true, push: true, pull: true },
-                allow_squash_merge: false,
-                allow_merge_commit: true,
-                allow_rebase_merge: true,
-                delete_branch_on_merge: false,
-                allow_auto_merge: false,
-                allow_update_branch: false
-              }
-            })
+            .mockResolvedValueOnce({ data: makeReadableRepoData() })
             .mockRejectedValueOnce(new Error('Repo fetch failed'));
         },
         warningText: 'Failed to sync .gitignore: Repo fetch failed'
@@ -2809,18 +2788,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         setupMocks: () => {
           setMockFileContent('## Description', './pull_request_template.md');
           mockOctokit.rest.repos.get
-            .mockResolvedValueOnce({
-              data: {
-                archived: false,
-                permissions: { admin: true, push: true, pull: true },
-                allow_squash_merge: false,
-                allow_merge_commit: true,
-                allow_rebase_merge: true,
-                delete_branch_on_merge: false,
-                allow_auto_merge: false,
-                allow_update_branch: false
-              }
-            })
+            .mockResolvedValueOnce({ data: makeReadableRepoData() })
             .mockRejectedValueOnce(new Error('Repo fetch failed'));
         },
         warningText: 'Failed to sync pull request template: Repo fetch failed'
@@ -2834,18 +2802,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         setupMocks: () => {
           setMockFileContent('name: CI\non: push', './ci.yml');
           mockOctokit.rest.repos.get
-            .mockResolvedValueOnce({
-              data: {
-                archived: false,
-                permissions: { admin: true, push: true, pull: true },
-                allow_squash_merge: false,
-                allow_merge_commit: true,
-                allow_rebase_merge: true,
-                delete_branch_on_merge: false,
-                allow_auto_merge: false,
-                allow_update_branch: false
-              }
-            })
+            .mockResolvedValueOnce({ data: makeReadableRepoData() })
             .mockRejectedValueOnce(new Error('Repo fetch failed'));
         },
         warningText: 'Failed to sync workflow files: Repo fetch failed'
@@ -2870,18 +2827,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         setupMocks: () => {
           setMockFileContent('# Instructions', './copilot-instructions.md');
           mockOctokit.rest.repos.get
-            .mockResolvedValueOnce({
-              data: {
-                archived: false,
-                permissions: { admin: true, push: true, pull: true },
-                allow_squash_merge: false,
-                allow_merge_commit: true,
-                allow_rebase_merge: true,
-                delete_branch_on_merge: false,
-                allow_auto_merge: false,
-                allow_update_branch: false
-              }
-            })
+            .mockResolvedValueOnce({ data: makeReadableRepoData() })
             .mockRejectedValueOnce(new Error('Repo fetch failed'));
         },
         warningText: 'Failed to sync copilot-instructions.md: Repo fetch failed'
@@ -2919,18 +2865,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
           return inputs[name] || '';
         });
 
-        mockOctokit.rest.repos.get.mockResolvedValue({
-          data: {
-            archived: false,
-            permissions: { admin: true, push: true, pull: true },
-            allow_squash_merge: false,
-            allow_merge_commit: true,
-            allow_rebase_merge: true,
-            delete_branch_on_merge: false,
-            allow_auto_merge: false,
-            allow_update_branch: false
-          }
-        });
+        mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
         mockOctokit.rest.repos.update.mockResolvedValue({});
         mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
         mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
