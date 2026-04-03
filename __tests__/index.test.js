@@ -2516,6 +2516,86 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test('should honor repo-specific delete-unmanaged-rulesets override', async () => {
+      setMockFileContent(
+        JSON.stringify({
+          repos: [
+            {
+              repo: 'owner/repo1',
+              'rulesets-file': './ruleset.json',
+              'delete-unmanaged-rulesets': true
+            }
+          ]
+        }),
+        'repos.yml'
+      );
+      setMockYamlContent(
+        {
+          repos: [
+            {
+              repo: 'owner/repo1',
+              'rulesets-file': './ruleset.json',
+              'delete-unmanaged-rulesets': true
+            }
+          ]
+        },
+        JSON.stringify({
+          repos: [
+            {
+              repo: 'owner/repo1',
+              'rulesets-file': './ruleset.json',
+              'delete-unmanaged-rulesets': true
+            }
+          ]
+        })
+      );
+      setMockFileContent(
+        JSON.stringify({
+          name: 'ci',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }),
+        './ruleset.json'
+      );
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'delete-unmanaged-rulesets': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: makeReadableRepoData()
+      });
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [
+          { id: 123, name: 'ci' },
+          { id: 456, name: 'obsolete' }
+        ]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: {
+          id: 123,
+          name: 'ci',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+
+      await run();
+
+      expect(mockOctokit.rest.repos.deleteRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        ruleset_id: 456
+      });
+    });
+
     test('should separate clean, warning-only, and failed repositories in mixed runs', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
