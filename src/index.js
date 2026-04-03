@@ -621,6 +621,10 @@ function createSubResult(kind, status, message) {
   return { kind, status, message };
 }
 
+function formatPrLink(prNumber, prUrl) {
+  return prUrl ? `<a href="${prUrl}">PR #${prNumber}</a>` : `PR #${prNumber}`;
+}
+
 /**
  * Update repository settings
  * @param {Octokit} octokit - Octokit instance
@@ -1542,13 +1546,14 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       }
 
       // If no files need updates in the PR branch, it's already up to date
+      const prLink = formatPrLink(existingPR.number, existingPR.html_url);
       if (prBranchFilesToUpdate.length === 0) {
         core.info(`  ✓ PR #${existingPR.number} already has the latest ${targetDesc}`);
         return {
           repository: repo,
           success: true,
           [resultKey]: 'pr-up-to-date',
-          message: `PR #${existingPR.number} already has the latest ${targetDesc}`,
+          message: `${prLink} already has the latest ${targetDesc}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           filesProcessed: fileInfos.map(f => f.targetPath),
@@ -1565,10 +1570,10 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         let message;
         if (fileInfos.length === 1) {
           message = prBranchFilesToUpdate[0].isNew
-            ? `Would create ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
-            : `Would update ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+            ? `Would create ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`
+            : `Would update ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`;
         } else {
-          message = `Would update ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+          message = `Would update ${prBranchFilesToUpdate.length} file(s) in existing ${prLink}`;
         }
         return {
           repository: repo,
@@ -1625,10 +1630,10 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       let message;
       if (fileInfos.length === 1) {
         message = prBranchFilesToUpdate[0].isNew
-          ? `Created ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
-          : `Updated ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+          ? `Created ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`
+          : `Updated ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`;
       } else {
-        message = `Updated ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+        message = `Updated ${prBranchFilesToUpdate.length} file(s) in existing ${prLink}`;
       }
 
       return {
@@ -1782,12 +1787,13 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
 
     // Build message
     let message;
+    const prLink = formatPrLink(prNumber, pr.html_url);
     if (fileInfos.length === 1) {
       message = filesToUpdate[0].isNew
-        ? `Created ${filesToUpdate[0].targetPath} via PR #${prNumber}`
-        : `Updated ${filesToUpdate[0].targetPath} via PR #${prNumber}`;
+        ? `Created ${filesToUpdate[0].targetPath} via ${prLink}`
+        : `Updated ${filesToUpdate[0].targetPath} via ${prLink}`;
     } else {
-      message = `Synced ${filesToUpdate.length} file(s) via PR #${prNumber}`;
+      message = `Synced ${filesToUpdate.length} file(s) via ${prLink}`;
     }
 
     return {
@@ -2157,7 +2163,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
           repository: repo,
           success: true,
           packageJson: 'pr-up-to-date',
-          message: `PR #${existingPR.number} already has the latest ${targetPath}`,
+          message: `${formatPrLink(existingPR.number, existingPR.html_url)} already has the latest ${targetPath}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           dryRun
@@ -2172,7 +2178,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
           repository: repo,
           success: true,
           packageJson: 'would-update-pr',
-          message: `Would update ${targetPath} in existing PR #${existingPR.number}`,
+          message: `Would update ${targetPath} in existing ${formatPrLink(existingPR.number, existingPR.html_url)}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           changes,
@@ -2212,7 +2218,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
         packageJson: 'pr-updated',
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
-        message: `Updated ${targetPath} in existing PR #${existingPR.number}`,
+        message: `Updated ${targetPath} in existing ${formatPrLink(existingPR.number, existingPR.html_url)}`,
         changes,
         dryRun
       };
@@ -2309,7 +2315,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
       packageJson: 'updated',
       prNumber: pr.number,
       prUrl: pr.html_url,
-      message: `Updated ${targetPath} via PR #${pr.number}`,
+      message: `Updated ${targetPath} via ${formatPrLink(pr.number, pr.html_url)}`,
       changes,
       dryRun
     };
