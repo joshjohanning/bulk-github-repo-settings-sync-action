@@ -1,0 +1,9 @@
+{
+  "autolinks": [
+    {
+      "key_prefix": "ENG-",
+      "url_template": "https://example.com/engineering/ENG-<num>",
+      "is_alphanumeric": false
+    }
+  ]
+}

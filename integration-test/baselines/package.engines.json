@@ -1,0 +1,14 @@
+{
+  "name": "integration-target-engines",
+  "private": true,
+  "scripts": {
+    "lint": "eslint .",
+    "test": "npm run lint && node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "leftpad": "1.0.0"
+  }
+}

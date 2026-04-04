@@ -1,0 +1,8 @@
+name: Integration Release
+on:
+  workflow_dispatch:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo integration-release

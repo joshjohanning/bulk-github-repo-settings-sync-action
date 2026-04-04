@@ -1,0 +1,8 @@
+name: Integration CI
+on:
+  push:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo integration-ci

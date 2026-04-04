@@ -1,0 +1,435 @@
+name: Live Integration Tests
+
+on:
+  workflow_call:
+    inputs:
+      prepare-only:
+        required: false
+        default: false
+        type: boolean
+      suite:
+        required: false
+        default: all
+        type: string
+  workflow_dispatch:
+    inputs:
+      prepare-only:
+        description: 'Only prepare repositories and skip running the live tests'
+        required: false
+        default: false
+        type: boolean
+      suite:
+        description: 'Suite to run'
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - main
+          - selection
+          - failure
+
+concurrency:
+  group: live-integration-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-main:
+    if: ${{ inputs.suite == 'all' || inputs.suite == 'main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render main live test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repos.prepare.template.yml integration-test/configs/repos.prepare.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.prepare.yml
+          cp integration-test/configs/repos.template.yml integration-test/configs/repos.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.yml
+          cp integration-test/configs/repos.dry-run.template.yml integration-test/configs/repos.dry-run.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.dry-run.yml
+
+      - name: Prepare main live test repositories
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.prepare.yml
+        run: node integration-test/scripts/prepare-live-test-repositories.js
+
+  test-main:
+    if: ${{ !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'main') }}
+    needs: prepare-main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render main live test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repos.template.yml integration-test/configs/repos.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.yml
+          cp integration-test/configs/repos.dry-run.template.yml integration-test/configs/repos.dry-run.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.dry-run.yml
+
+      - name: Package local action
+        run: npm run package
+
+      - name: Run dry-run scenario against live test repositories
+        id: live-sync-dry-run
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories-file: ./integration-test/configs/repos.dry-run.yml
+          dry-run: true
+
+      - name: Assert dry-run live integration results
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.dry-run.yml
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.live-sync-dry-run.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.live-sync-dry-run.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.live-sync-dry-run.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.live-sync-dry-run.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.live-sync-dry-run.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.live-sync-dry-run.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-dry-run.js
+
+      - name: Run action against prepared live test repositories
+        id: live-sync
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories-file: ./integration-test/configs/repos.yml
+
+      - name: Assert live integration results
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.yml
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.live-sync.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.live-sync.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.live-sync.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.live-sync.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.live-sync.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.live-sync.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-state.js
+
+  prepare-selection:
+    if: ${{ inputs.suite == 'all' || inputs.suite == 'selection' }}
+    needs:
+      - prepare-main
+      - test-main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render repo selection test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repos.selection.prepare.template.yml integration-test/configs/repos.selection.prepare.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.selection.prepare.yml
+          cp integration-test/configs/repo-selection.rules.repos.template.yml integration-test/configs/repo-selection.rules.repos.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repo-selection.rules.repos.yml
+          cp integration-test/configs/repo-selection.rules.all.template.yml integration-test/configs/repo-selection.rules.all.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repo-selection.rules.all.yml
+
+      - name: Prepare repo selection test repositories
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.selection.prepare.yml
+        run: node integration-test/scripts/prepare-live-test-repositories.js
+
+  test-selection:
+    if: ${{ !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'selection') }}
+    needs: prepare-selection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render repo selection test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repo-selection.rules.repos.template.yml integration-test/configs/repo-selection.rules.repos.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repo-selection.rules.repos.yml
+          cp integration-test/configs/repo-selection.rules.all.template.yml integration-test/configs/repo-selection.rules.all.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repo-selection.rules.all.yml
+
+      - name: Package local action
+        run: npm run package
+
+      - name: Run repositories list scenario
+        id: selection-list
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories: ${{ vars.LIVE_TEST_ORG }}/it-select-list-a,${{ vars.LIVE_TEST_ORG }}/it-select-list-b
+          topics: selection-list
+
+      - name: Assert repositories list scenario
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          SELECTION_SCENARIO: selection-list
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.selection-list.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.selection-list.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.selection-list.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.selection-list.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.selection-list.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.selection-list.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-repo-selection.js
+
+      - name: Run custom property scenario
+        id: selection-custom-property
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          owner: ${{ vars.LIVE_TEST_ORG }}
+          custom-property-name: live_test_selector
+          custom-property-value: blue,green
+          topics: selection-custom-property
+
+      - name: Assert custom property scenario
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          SELECTION_SCENARIO: selection-custom-property
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.selection-custom-property.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.selection-custom-property.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.selection-custom-property.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.selection-custom-property.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.selection-custom-property.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.selection-custom-property.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-repo-selection.js
+
+      - name: Run rules repos scenario
+        id: selection-rules-repos
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories-file: ./integration-test/configs/repo-selection.rules.repos.yml
+
+      - name: Assert rules repos scenario
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          SELECTION_SCENARIO: selection-rules-repos
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.selection-rules-repos.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.selection-rules-repos.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.selection-rules-repos.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.selection-rules-repos.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.selection-rules-repos.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.selection-rules-repos.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-repo-selection.js
+
+      - name: Run repositories all scenario
+        id: selection-all
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories: all
+          owner: ${{ vars.LIVE_TEST_ORG }}
+          topics: selection-all
+
+      - name: Assert repositories all scenario
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          SELECTION_SCENARIO: selection-all
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.selection-all.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.selection-all.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.selection-all.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.selection-all.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.selection-all.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.selection-all.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-repo-selection.js
+
+      - name: Run rules all and property scenario
+        id: selection-rules-all-and-property
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories-file: ./integration-test/configs/repo-selection.rules.all.yml
+
+      - name: Assert rules all and property scenario
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          SELECTION_SCENARIO: selection-rules-all-and-property
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.selection-rules-all-and-property.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.selection-rules-all-and-property.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.selection-rules-all-and-property.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.selection-rules-all-and-property.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.selection-rules-all-and-property.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.selection-rules-all-and-property.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-repo-selection.js
+
+  prepare-failure:
+    if: ${{ inputs.suite == 'all' || inputs.suite == 'failure' }}
+    needs:
+      - prepare-selection
+      - test-selection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render failure test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repos.failure.prepare.template.yml integration-test/configs/repos.failure.prepare.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.failure.prepare.yml
+          cp integration-test/configs/repos.failure.template.yml integration-test/configs/repos.failure.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.failure.yml
+
+      - name: Prepare failure test repositories
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.failure.prepare.yml
+        run: node integration-test/scripts/prepare-live-test-repositories.js
+
+  test-failure:
+    if: ${{ !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'failure') }}
+    needs: prepare-failure
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render failure test configuration
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        run: |
+          cp integration-test/configs/repos.failure.template.yml integration-test/configs/repos.failure.yml
+          sed -i "s|__LIVE_TEST_ORG__|${LIVE_TEST_ORG}|g" integration-test/configs/repos.failure.yml
+
+      - name: Package local action
+        run: npm run package
+
+      - name: Run failure scenarios against live test repositories
+        id: live-sync-failures
+        uses: ./
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-api-url: ${{ github.api_url }}
+          repositories-file: ./integration-test/configs/repos.failure.yml
+
+      - name: Print failure scenario action outputs
+        run: |
+          echo "updated-repositories=${{ steps.live-sync-failures.outputs.updated-repositories }}"
+          echo "changed-repositories=${{ steps.live-sync-failures.outputs.changed-repositories }}"
+          echo "unchanged-repositories=${{ steps.live-sync-failures.outputs.unchanged-repositories }}"
+          echo "failed-repositories=${{ steps.live-sync-failures.outputs.failed-repositories }}"
+          echo "warning-repositories=${{ steps.live-sync-failures.outputs.warning-repositories }}"
+          echo "::group::results"
+          echo '${{ steps.live-sync-failures.outputs.results }}' | jq
+          echo "::endgroup::"
+
+      - name: Assert failure scenario results
+        env:
+          INTEGRATION_GH_TOKEN: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          INTEGRATION_API_URL: ${{ github.api_url }}
+          INTEGRATION_REPOSITORIES_FILE: integration-test/configs/repos.failure.yml
+          ACTION_UPDATED_REPOSITORIES: ${{ steps.live-sync-failures.outputs['updated-repositories'] }}
+          ACTION_CHANGED_REPOSITORIES: ${{ steps.live-sync-failures.outputs['changed-repositories'] }}
+          ACTION_UNCHANGED_REPOSITORIES: ${{ steps.live-sync-failures.outputs['unchanged-repositories'] }}
+          ACTION_FAILED_REPOSITORIES: ${{ steps.live-sync-failures.outputs['failed-repositories'] }}
+          ACTION_WARNING_REPOSITORIES: ${{ steps.live-sync-failures.outputs['warning-repositories'] }}
+          ACTION_RESULTS: ${{ steps.live-sync-failures.outputs['results'] }}
+        run: node integration-test/scripts/assert-live-test-failures.js

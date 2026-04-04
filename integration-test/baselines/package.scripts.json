@@ -1,0 +1,14 @@
+{
+  "name": "integration-target-scripts",
+  "private": true,
+  "scripts": {
+    "lint": "eslint src",
+    "test": "node legacy-test.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "leftpad": "1.0.0"
+  }
+}

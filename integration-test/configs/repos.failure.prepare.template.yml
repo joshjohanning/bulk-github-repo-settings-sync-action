@@ -1,0 +1,8 @@
+repos:
+  - repo: __LIVE_TEST_ORG__/it-archived-a
+  - repo: __LIVE_TEST_ORG__/it-invalid-codeowners-path-a
+  - repo: __LIVE_TEST_ORG__/it-invalid-autolinks-file-a
+  - repo: __LIVE_TEST_ORG__/it-invalid-rulesets-file-a
+  - repo: __LIVE_TEST_ORG__/it-invalid-package-json-file-a
+  - repo: __LIVE_TEST_ORG__/it-missing-package-json-a
+  - repo: __LIVE_TEST_ORG__/it-invalid-workflows-file-a

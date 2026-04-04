@@ -1,0 +1,100 @@
+name: Delete Live Integration Test Repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      target-org:
+        description: 'Type the exact LIVE_TEST_ORG value to confirm which organization will be affected'
+        required: true
+        type: string
+      really-delete:
+        description: 'Acknowledge that this will delete every repository in LIVE_TEST_ORG'
+        required: true
+        default: false
+        type: boolean
+      confirmation-phrase:
+        description: 'Type exactly: DELETE ALL REPOS IN LIVE_TEST_ORG'
+        required: true
+        type: string
+
+concurrency:
+  group: delete-live-test-repositories-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  delete-live-test-repositories:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate destructive action confirmations
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+          INPUT_TARGET_ORG: ${{ inputs['target-org'] }}
+          INPUT_REALLY_DELETE: ${{ inputs['really-delete'] }}
+          INPUT_CONFIRMATION_PHRASE: ${{ inputs['confirmation-phrase'] }}
+        run: |
+          test -n "$LIVE_TEST_ORG" || { echo "LIVE_TEST_ORG is not configured"; exit 1; }
+          test "$INPUT_TARGET_ORG" = "$LIVE_TEST_ORG" || {
+            echo "target-org must exactly match LIVE_TEST_ORG ($LIVE_TEST_ORG)";
+            exit 1;
+          }
+          test "$INPUT_REALLY_DELETE" = "true" || {
+            echo "really-delete must be enabled";
+            exit 1;
+          }
+          test "$INPUT_CONFIRMATION_PHRASE" = "DELETE ALL REPOS IN LIVE_TEST_ORG" || {
+            echo "confirmation-phrase must exactly equal: DELETE ALL REPOS IN LIVE_TEST_ORG";
+            exit 1;
+          }
+
+      - name: List repositories that will be deleted
+        uses: actions/github-script@v8
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          script: |
+            const org = process.env.LIVE_TEST_ORG;
+            const repos = await github.paginate(github.rest.repos.listForOrg, {
+              org,
+              type: 'all',
+              per_page: 100
+            });
+
+            core.info(`Found ${repos.length} repositories in ${org}`);
+            for (const repo of repos) {
+              core.info(`- ${repo.full_name}`);
+            }
+
+            core.setOutput('repo-count', String(repos.length));
+
+      - name: Delete all repositories in LIVE_TEST_ORG
+        uses: actions/github-script@v8
+        env:
+          LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
+        with:
+          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          script: |
+            const org = process.env.LIVE_TEST_ORG;
+            const repos = await github.paginate(github.rest.repos.listForOrg, {
+              org,
+              type: 'all',
+              per_page: 100
+            });
+
+            if (repos.length === 0) {
+              core.info(`No repositories to delete in ${org}`);
+              return;
+            }
+
+            for (const repo of repos) {
+              core.info(`Deleting ${repo.full_name}`);
+              await github.rest.repos.delete({
+                owner: org,
+                repo: repo.name
+              });
+            }
+
+            core.info(`Deleted ${repos.length} repositories from ${org}`);

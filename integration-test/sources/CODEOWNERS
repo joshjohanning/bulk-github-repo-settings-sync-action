@@ -1,0 +1,3 @@
+# Live integration fixture for CODEOWNERS sync validation
+* @acme/platform
+*.md @acme/docs

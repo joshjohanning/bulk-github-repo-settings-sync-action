@@ -1,0 +1,16 @@
+repos:
+  - repo: __LIVE_TEST_ORG__/it-select-list-a
+  - repo: __LIVE_TEST_ORG__/it-select-list-b
+  - repo: __LIVE_TEST_ORG__/it-select-list-c
+  - repo: __LIVE_TEST_ORG__/it-select-all-a
+  - repo: __LIVE_TEST_ORG__/it-select-all-b
+  - repo: __LIVE_TEST_ORG__/it-select-all-c
+  - repo: __LIVE_TEST_ORG__/it-select-prop-a
+  - repo: __LIVE_TEST_ORG__/it-select-prop-b
+  - repo: __LIVE_TEST_ORG__/it-select-prop-c
+  - repo: __LIVE_TEST_ORG__/it-select-rules-a
+  - repo: __LIVE_TEST_ORG__/it-select-rules-b
+  - repo: __LIVE_TEST_ORG__/it-select-rules-c
+  - repo: __LIVE_TEST_ORG__/it-select-rules-all-a
+  - repo: __LIVE_TEST_ORG__/it-select-rules-all-b
+  - repo: __LIVE_TEST_ORG__/it-select-rules-all-c

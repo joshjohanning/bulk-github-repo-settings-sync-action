@@ -1,0 +1,16 @@
+owner: __LIVE_TEST_ORG__
+rules:
+  - selector:
+      repos:
+        - it-select-rules-a
+        - it-select-rules-b
+    settings:
+      topics: selection-rules-base
+      allow-update-branch: true
+
+  - selector:
+      repos:
+        - it-select-rules-b
+    settings:
+      topics: selection-rules-override
+      delete-branch-on-merge: true
