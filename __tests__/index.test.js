@@ -293,6 +293,8 @@ const {
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
+  escapeHtmlAttribute,
+  formatPrLink,
   resetKnownRepoConfigKeysCache,
   replaceTemplateVariables
 } = await import('../src/index.js');
@@ -366,6 +368,67 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'dry-run': ''
       };
       return inputs[name] || '';
+    });
+  });
+
+  describe('escapeHtmlAttribute', () => {
+    test('should escape ampersands', () => {
+      expect(escapeHtmlAttribute('a&b')).toBe('a&amp;b');
+    });
+
+    test('should escape double quotes', () => {
+      expect(escapeHtmlAttribute('a"b')).toBe('a&quot;b');
+    });
+
+    test('should escape single quotes', () => {
+      expect(escapeHtmlAttribute(`a'b`)).toBe('a&#39;b');
+    });
+
+    test('should escape angle brackets', () => {
+      expect(escapeHtmlAttribute('a<b>c')).toBe('a&lt;b&gt;c');
+    });
+
+    test('should handle strings with no special characters', () => {
+      expect(escapeHtmlAttribute('https://github.com/owner/repo/pull/1')).toBe('https://github.com/owner/repo/pull/1');
+    });
+  });
+
+  describe('formatPrLink', () => {
+    test('should return clickable HTML link for valid URL', () => {
+      expect(formatPrLink(42, 'https://github.com/owner/repo/pull/42')).toBe(
+        '<a href="https://github.com/owner/repo/pull/42">PR #42</a>'
+      );
+    });
+
+    test('should return plain text when prUrl is undefined', () => {
+      expect(formatPrLink(42, undefined)).toBe('PR #42');
+    });
+
+    test('should return plain text when prUrl is empty string', () => {
+      expect(formatPrLink(42, '')).toBe('PR #42');
+    });
+
+    test('should reject javascript: protocol URLs', () => {
+      const result = formatPrLink(42, 'javascript:alert(1)');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('unsupported protocol'));
+    });
+
+    test('should reject data: protocol URLs', () => {
+      const result = formatPrLink(42, 'data:text/html,<script>alert(1)</script>');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('unsupported protocol'));
+    });
+
+    test('should fall back to plain text for malformed URLs', () => {
+      const result = formatPrLink(42, 'not a url at all');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('invalid PR URL'));
+    });
+
+    test('should escape special HTML characters in URL', () => {
+      const result = formatPrLink(42, 'https://example.com/pull/42?a=1&b=2');
+      expect(result).toBe('<a href="https://example.com/pull/42?a=1&amp;b=2">PR #42</a>');
     });
   });
 
@@ -3900,6 +3963,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('CODEOWNERS');
+      expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/46">PR #46</a>');
     });
 
     test('should handle summary table with package.json sync changes', async () => {
@@ -4002,6 +4066,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('pull_request_template');
+      expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/46">PR #46</a>');
     });
 
     test('should use custom GitHub API URL when provided', async () => {
@@ -4378,6 +4443,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('Updated');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -4439,7 +4505,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dependabotYml).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(result.message).toContain('PR #50 already has the latest');
+      expect(result.message).toContain('already has the latest');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -4485,6 +4552,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dependabotYml).toBe('pr-updated-created');
       expect(result.prNumber).toBe(50);
       expect(result.message).toContain('Created');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -5604,7 +5672,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.pullRequestTemplate).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(result.message).toContain('PR #50 already has the latest');
+      expect(result.message).toContain('already has the latest');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -6132,7 +6201,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.workflowFiles).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(result.message).toContain('PR #50 already has the latest');
+      expect(result.message).toContain('already has the latest');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -7073,7 +7143,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.gitignore).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(result.message).toContain('PR #50 already has the latest');
+      expect(result.message).toContain('already has the latest');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -7428,7 +7499,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.copilotInstructions).toBe('pr-up-to-date');
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
-      expect(result.message).toContain('PR #50 already has the latest');
+      expect(result.message).toContain('already has the latest');
+      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -8650,6 +8722,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/42">PR #42</a>');
     });
 
     test('should show pending merge message for workflow files when PR is up-to-date', async () => {
@@ -8719,6 +8792,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/99">PR #99</a>');
     });
 
     test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
@@ -8790,6 +8864,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // Should show the pending merge message, NOT "No changes needed"
       expect(repoRow[2]).not.toBe('No changes needed');
       expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/42">PR #42</a>');
     });
   });
 
