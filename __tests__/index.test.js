@@ -4001,7 +4001,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('pull_request_template');
+      expect(repoRow[2]).toContain('PR template');
     });
 
     test('should use custom GitHub API URL when provided', async () => {
@@ -8649,7 +8649,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('up-to-date (pending merge)');
     });
 
     test('should show pending merge message for workflow files when PR is up-to-date', async () => {
@@ -8718,7 +8718,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('up-to-date (pending merge)');
     });
 
     test('should identify pr-up-to-date as reportable change (not no-changes-needed)', async () => {
@@ -8789,7 +8789,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(repoRow).toBeDefined();
       // Should show the pending merge message, NOT "No changes needed"
       expect(repoRow[2]).not.toBe('No changes needed');
-      expect(repoRow[2]).toContain('already has the latest');
+      expect(repoRow[2]).toContain('up-to-date (pending merge)');
     });
   });
 

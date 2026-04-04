@@ -611,14 +611,63 @@ const SubResultStatus = Object.freeze({
 });
 
 /**
+ * Human-readable labels for sync operation kinds in the summary table.
+ */
+const SYNC_KIND_LABELS = Object.freeze({
+  'dependabot-sync': 'dependabot.yml',
+  'gitignore-sync': '.gitignore',
+  'ruleset-sync': 'ruleset',
+  'pr-template-sync': 'PR template',
+  'workflow-files-sync': 'workflow files',
+  'autolinks-sync': 'autolinks',
+  'copilot-instructions-sync': 'copilot-instructions.md',
+  'codeowners-sync': 'CODEOWNERS',
+  'package-json-sync': 'package.json'
+});
+
+/**
  * Create a normalized sub-result for a single feature operation.
  * @param {string} kind - Feature identifier (e.g., 'settings', 'topics', 'code-scanning')
  * @param {string} status - One of SubResultStatus values
- * @param {string} message - Human-readable summary for the details column
- * @returns {{ kind: string, status: string, message: string }}
+ * @param {string} message - Human-readable detail for logging
+ * @param {{ syncStatus?: string, prNumber?: number }} [extra] - Optional sync metadata
+ * @returns {{ kind: string, status: string, message: string, syncStatus?: string, prNumber?: number }}
  */
-function createSubResult(kind, status, message) {
-  return { kind, status, message };
+function createSubResult(kind, status, message, extra) {
+  const sub = { kind, status, message };
+  if (extra?.syncStatus) sub.syncStatus = extra.syncStatus;
+  if (extra?.prNumber) sub.prNumber = extra.prNumber;
+  return sub;
+}
+
+/**
+ * Format a curated summary message for a sub-result in the summary table.
+ * Uses the label map for human-readable names and sync status for phrasing.
+ * @param {{ kind: string, status: string, message: string, syncStatus?: string, prNumber?: number }} subResult
+ * @param {boolean} dryRun - Whether this is a dry-run
+ * @returns {string} Curated summary text
+ */
+function formatSubResultSummary(subResult, dryRun) {
+  const label = SYNC_KIND_LABELS[subResult.kind];
+  if (!label) return subResult.message;
+
+  const syncStatus = subResult.syncStatus;
+  if (!syncStatus) return subResult.message;
+
+  const prRef = subResult.prNumber ? `PR #${subResult.prNumber}` : '';
+
+  if (syncStatus === 'pr-up-to-date') {
+    return `${label} ${prRef} up-to-date (pending merge)`;
+  } else if (syncStatus === 'pr-exists') {
+    return `${label} PR exists (${prRef})`;
+  } else if (syncStatus === 'would-update-pr') {
+    return `Would update existing ${prRef} for ${label}`;
+  } else if (syncStatus.startsWith('would-')) {
+    return `Would sync ${label}`;
+  }
+
+  const wouldPrefix = dryRun ? 'Would sync ' : '';
+  return `${wouldPrefix}${label} (${prRef})`;
 }
 
 /**
@@ -3391,7 +3440,10 @@ export async function run() {
           }
           if (dependabotResult.dependabotYml && dependabotResult.dependabotYml !== 'unchanged') {
             result.subResults.push(
-              createSubResult('dependabot-sync', SubResultStatus.CHANGED, dependabotResult.message)
+              createSubResult('dependabot-sync', SubResultStatus.CHANGED, dependabotResult.message, {
+                syncStatus: dependabotResult.dependabotYml,
+                prNumber: dependabotResult.prNumber
+              })
             );
           }
         } else {
@@ -3418,7 +3470,12 @@ export async function run() {
             core.info(`  🔗 PR URL: ${gitignoreResult.prUrl}`);
           }
           if (gitignoreResult.gitignore && gitignoreResult.gitignore !== 'unchanged') {
-            result.subResults.push(createSubResult('gitignore-sync', SubResultStatus.CHANGED, gitignoreResult.message));
+            result.subResults.push(
+              createSubResult('gitignore-sync', SubResultStatus.CHANGED, gitignoreResult.message, {
+                syncStatus: gitignoreResult.gitignore,
+                prNumber: gitignoreResult.prNumber
+              })
+            );
           }
         } else {
           result.hasWarnings = true;
@@ -3447,7 +3504,11 @@ export async function run() {
         if (rulesetResult.success) {
           core.info(`  📋 ${rulesetResult.message}`);
           if (rulesetResult.ruleset && rulesetResult.ruleset !== 'unchanged') {
-            result.subResults.push(createSubResult('ruleset-sync', SubResultStatus.CHANGED, rulesetResult.message));
+            result.subResults.push(
+              createSubResult('ruleset-sync', SubResultStatus.CHANGED, rulesetResult.message, {
+                syncStatus: rulesetResult.ruleset
+              })
+            );
           }
         } else {
           result.hasWarnings = true;
@@ -3480,7 +3541,10 @@ export async function run() {
           }
           if (templateResult.pullRequestTemplate && templateResult.pullRequestTemplate !== 'unchanged') {
             result.subResults.push(
-              createSubResult('pr-template-sync', SubResultStatus.CHANGED, templateResult.message)
+              createSubResult('pr-template-sync', SubResultStatus.CHANGED, templateResult.message, {
+                syncStatus: templateResult.pullRequestTemplate,
+                prNumber: templateResult.prNumber
+              })
             );
           }
         } else {
@@ -3508,7 +3572,10 @@ export async function run() {
           }
           if (workflowResult.workflowFiles && workflowResult.workflowFiles !== 'unchanged') {
             result.subResults.push(
-              createSubResult('workflow-files-sync', SubResultStatus.CHANGED, workflowResult.message)
+              createSubResult('workflow-files-sync', SubResultStatus.CHANGED, workflowResult.message, {
+                syncStatus: workflowResult.workflowFiles,
+                prNumber: workflowResult.prNumber
+              })
             );
           }
         } else {
@@ -3532,7 +3599,11 @@ export async function run() {
         if (autolinksResult.success) {
           core.info(`  🔗 ${autolinksResult.message}`);
           if (autolinksResult.autolinks && autolinksResult.autolinks !== 'unchanged') {
-            result.subResults.push(createSubResult('autolinks-sync', SubResultStatus.CHANGED, autolinksResult.message));
+            result.subResults.push(
+              createSubResult('autolinks-sync', SubResultStatus.CHANGED, autolinksResult.message, {
+                syncStatus: autolinksResult.autolinks
+              })
+            );
           }
         } else {
           result.hasWarnings = true;
@@ -3565,7 +3636,10 @@ export async function run() {
           }
           if (copilotResult.copilotInstructions && copilotResult.copilotInstructions !== 'unchanged') {
             result.subResults.push(
-              createSubResult('copilot-instructions-sync', SubResultStatus.CHANGED, copilotResult.message)
+              createSubResult('copilot-instructions-sync', SubResultStatus.CHANGED, copilotResult.message, {
+                syncStatus: copilotResult.copilotInstructions,
+                prNumber: copilotResult.prNumber
+              })
             );
           }
         } else {
@@ -3609,7 +3683,10 @@ export async function run() {
           }
           if (codeownersResult.codeowners && codeownersResult.codeowners !== 'unchanged') {
             result.subResults.push(
-              createSubResult('codeowners-sync', SubResultStatus.CHANGED, codeownersResult.message)
+              createSubResult('codeowners-sync', SubResultStatus.CHANGED, codeownersResult.message, {
+                syncStatus: codeownersResult.codeowners,
+                prNumber: codeownersResult.prNumber
+              })
             );
           }
         } else {
@@ -3656,7 +3733,10 @@ export async function run() {
           }
           if (packageJsonResult.packageJson && packageJsonResult.packageJson !== 'unchanged') {
             result.subResults.push(
-              createSubResult('package-json-sync', SubResultStatus.CHANGED, packageJsonResult.message)
+              createSubResult('package-json-sync', SubResultStatus.CHANGED, packageJsonResult.message, {
+                syncStatus: packageJsonResult.packageJson,
+                prNumber: packageJsonResult.prNumber
+              })
             );
           }
         } else {
@@ -3894,7 +3974,7 @@ export async function run() {
         } else if (r.subResults && r.subResults.length > 0) {
           const messages = r.subResults
             .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
-            .map(s => s.message);
+            .map(s => formatSubResultSummary(s, dryRun));
           details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
         } else {
           details = 'No changes needed';
