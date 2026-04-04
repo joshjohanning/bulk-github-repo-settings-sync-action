@@ -293,6 +293,8 @@ const {
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
+  escapeHtmlAttribute,
+  formatPrLink,
   resetKnownRepoConfigKeysCache,
   replaceTemplateVariables
 } = await import('../src/index.js');
@@ -366,6 +368,67 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'dry-run': ''
       };
       return inputs[name] || '';
+    });
+  });
+
+  describe('escapeHtmlAttribute', () => {
+    test('should escape ampersands', () => {
+      expect(escapeHtmlAttribute('a&b')).toBe('a&amp;b');
+    });
+
+    test('should escape double quotes', () => {
+      expect(escapeHtmlAttribute('a"b')).toBe('a&quot;b');
+    });
+
+    test('should escape single quotes', () => {
+      expect(escapeHtmlAttribute(`a'b`)).toBe('a&#39;b');
+    });
+
+    test('should escape angle brackets', () => {
+      expect(escapeHtmlAttribute('a<b>c')).toBe('a&lt;b&gt;c');
+    });
+
+    test('should handle strings with no special characters', () => {
+      expect(escapeHtmlAttribute('https://github.com/owner/repo/pull/1')).toBe('https://github.com/owner/repo/pull/1');
+    });
+  });
+
+  describe('formatPrLink', () => {
+    test('should return clickable HTML link for valid URL', () => {
+      expect(formatPrLink(42, 'https://github.com/owner/repo/pull/42')).toBe(
+        '<a href="https://github.com/owner/repo/pull/42">PR #42</a>'
+      );
+    });
+
+    test('should return plain text when prUrl is undefined', () => {
+      expect(formatPrLink(42, undefined)).toBe('PR #42');
+    });
+
+    test('should return plain text when prUrl is empty string', () => {
+      expect(formatPrLink(42, '')).toBe('PR #42');
+    });
+
+    test('should reject javascript: protocol URLs', () => {
+      const result = formatPrLink(42, 'javascript:alert(1)');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('unsupported protocol'));
+    });
+
+    test('should reject data: protocol URLs', () => {
+      const result = formatPrLink(42, 'data:text/html,<script>alert(1)</script>');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('unsupported protocol'));
+    });
+
+    test('should fall back to plain text for malformed URLs', () => {
+      const result = formatPrLink(42, 'not a url at all');
+      expect(result).toBe('PR #42');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('invalid PR URL'));
+    });
+
+    test('should escape special HTML characters in URL', () => {
+      const result = formatPrLink(42, 'https://example.com/pull/42?a=1&b=2');
+      expect(result).toBe('<a href="https://example.com/pull/42?a=1&amp;b=2">PR #42</a>');
     });
   });
 

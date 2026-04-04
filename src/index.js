@@ -621,7 +621,7 @@ function createSubResult(kind, status, message) {
   return { kind, status, message };
 }
 
-function escapeHtmlAttribute(value) {
+export function escapeHtmlAttribute(value) {
   return String(value)
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
@@ -630,14 +630,14 @@ function escapeHtmlAttribute(value) {
     .replace(/>/g, '&gt;');
 }
 
-function formatPrLink(prNumber, prUrl) {
+export function formatPrLink(prNumber, prUrl) {
   if (!prUrl) {
     return `PR #${prNumber}`;
   }
 
   try {
     const parsedUrl = new URL(prUrl);
-    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    if (parsedUrl.protocol !== 'https:') {
       core.warning(`Ignoring PR URL with unsupported protocol in summary: ${prUrl}`);
       return `PR #${prNumber}`;
     }
