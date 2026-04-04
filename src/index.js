@@ -655,7 +655,8 @@ function formatSubResultSummary(subResult, dryRun) {
   const syncStatus = subResult.syncStatus;
   if (!syncStatus) return subResult.message;
 
-  const prRef = formatPrLink(subResult.prNumber, subResult.prUrl);
+  const hasPr = subResult.prNumber != null;
+  const prRef = hasPr ? formatPrLink(subResult.prNumber, subResult.prUrl) : '';
 
   if (syncStatus === 'pr-up-to-date') {
     return `${label} ${prRef} up-to-date (pending merge)`;
@@ -668,7 +669,7 @@ function formatSubResultSummary(subResult, dryRun) {
   }
 
   const wouldPrefix = dryRun ? 'Would sync ' : '';
-  return `${wouldPrefix}${label} (${prRef})`;
+  return hasPr ? `${wouldPrefix}${label} (${prRef})` : `${wouldPrefix}${label}`;
 }
 
 export function escapeHtmlAttribute(value) {
