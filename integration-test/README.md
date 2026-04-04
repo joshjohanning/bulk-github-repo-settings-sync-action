@@ -60,6 +60,20 @@ In this action repository where the tests are run:
 `LIVE_TEST_ORG` is the repository variable name.
 Its value must be the exact name of that dedicated test organization.
 
+### Alternative: GitHub App (recommended for OSS)
+
+Instead of a PAT, you can use a GitHub App installed only on the test org.
+This limits the blast radius if the token is ever exposed.
+
+1. Create a GitHub App with the same permissions listed above.
+2. Install it on the test org only.
+3. In this repository, set:
+   - Variable `LIVE_TEST_APP_ID` — the App ID
+   - Secret `LIVE_TEST_APP_PRIVATE_KEY` — the App private key
+
+When `LIVE_TEST_APP_ID` is configured, the workflow generates an
+installation token automatically and uses it instead of `LIVE_TEST_ORG_GH_TOKEN`.
+
 ## Usage
 
 The integration tests are controlled by these workflows:
