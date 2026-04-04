@@ -630,13 +630,14 @@ const SYNC_KIND_LABELS = Object.freeze({
  * @param {string} kind - Feature identifier (e.g., 'settings', 'topics', 'code-scanning')
  * @param {string} status - One of SubResultStatus values
  * @param {string} message - Human-readable detail for logging
- * @param {{ syncStatus?: string, prNumber?: number }} [extra] - Optional sync metadata
- * @returns {{ kind: string, status: string, message: string, syncStatus?: string, prNumber?: number }}
+ * @param {{ syncStatus?: string, prNumber?: number, prUrl?: string }} [extra] - Optional sync metadata
+ * @returns {{ kind: string, status: string, message: string, syncStatus?: string, prNumber?: number, prUrl?: string }}
  */
 function createSubResult(kind, status, message, extra) {
   const sub = { kind, status, message };
   if (extra?.syncStatus) sub.syncStatus = extra.syncStatus;
   if (extra?.prNumber) sub.prNumber = extra.prNumber;
+  if (extra?.prUrl) sub.prUrl = extra.prUrl;
   return sub;
 }
 
@@ -654,7 +655,7 @@ function formatSubResultSummary(subResult, dryRun) {
   const syncStatus = subResult.syncStatus;
   if (!syncStatus) return subResult.message;
 
-  const prRef = subResult.prNumber ? `PR #${subResult.prNumber}` : '';
+  const prRef = formatPrLink(subResult.prNumber, subResult.prUrl);
 
   if (syncStatus === 'pr-up-to-date') {
     return `${label} ${prRef} up-to-date (pending merge)`;
@@ -668,6 +669,35 @@ function formatSubResultSummary(subResult, dryRun) {
 
   const wouldPrefix = dryRun ? 'Would sync ' : '';
   return `${wouldPrefix}${label} (${prRef})`;
+}
+
+export function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+export function formatPrLink(prNumber, prUrl) {
+  if (!prUrl) {
+    return `PR #${prNumber}`;
+  }
+
+  try {
+    const parsedUrl = new URL(prUrl);
+    if (parsedUrl.protocol !== 'https:') {
+      core.warning(`Ignoring PR URL with unsupported protocol in summary: ${prUrl}`);
+      return `PR #${prNumber}`;
+    }
+
+    const safeUrl = escapeHtmlAttribute(prUrl);
+    return `<a href="${safeUrl}">PR #${prNumber}</a>`;
+  } catch {
+    core.warning(`Ignoring invalid PR URL in summary: ${prUrl}`);
+    return `PR #${prNumber}`;
+  }
 }
 
 /**
@@ -1591,13 +1621,14 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       }
 
       // If no files need updates in the PR branch, it's already up to date
+      const prLink = formatPrLink(existingPR.number, existingPR.html_url);
       if (prBranchFilesToUpdate.length === 0) {
         core.info(`  ✓ PR #${existingPR.number} already has the latest ${targetDesc}`);
         return {
           repository: repo,
           success: true,
           [resultKey]: 'pr-up-to-date',
-          message: `PR #${existingPR.number} already has the latest ${targetDesc}`,
+          message: `${prLink} already has the latest ${targetDesc}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           filesProcessed: fileInfos.map(f => f.targetPath),
@@ -1614,10 +1645,10 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         let message;
         if (fileInfos.length === 1) {
           message = prBranchFilesToUpdate[0].isNew
-            ? `Would create ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
-            : `Would update ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+            ? `Would create ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`
+            : `Would update ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`;
         } else {
-          message = `Would update ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+          message = `Would update ${prBranchFilesToUpdate.length} file(s) in existing ${prLink}`;
         }
         return {
           repository: repo,
@@ -1674,10 +1705,10 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       let message;
       if (fileInfos.length === 1) {
         message = prBranchFilesToUpdate[0].isNew
-          ? `Created ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`
-          : `Updated ${prBranchFilesToUpdate[0].targetPath} in existing PR #${existingPR.number}`;
+          ? `Created ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`
+          : `Updated ${prBranchFilesToUpdate[0].targetPath} in existing ${prLink}`;
       } else {
-        message = `Updated ${prBranchFilesToUpdate.length} file(s) in existing PR #${existingPR.number}`;
+        message = `Updated ${prBranchFilesToUpdate.length} file(s) in existing ${prLink}`;
       }
 
       return {
@@ -1831,12 +1862,13 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
 
     // Build message
     let message;
+    const prLink = formatPrLink(prNumber, pr.html_url);
     if (fileInfos.length === 1) {
       message = filesToUpdate[0].isNew
-        ? `Created ${filesToUpdate[0].targetPath} via PR #${prNumber}`
-        : `Updated ${filesToUpdate[0].targetPath} via PR #${prNumber}`;
+        ? `Created ${filesToUpdate[0].targetPath} via ${prLink}`
+        : `Updated ${filesToUpdate[0].targetPath} via ${prLink}`;
     } else {
-      message = `Synced ${filesToUpdate.length} file(s) via PR #${prNumber}`;
+      message = `Synced ${filesToUpdate.length} file(s) via ${prLink}`;
     }
 
     return {
@@ -2206,7 +2238,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
           repository: repo,
           success: true,
           packageJson: 'pr-up-to-date',
-          message: `PR #${existingPR.number} already has the latest ${targetPath}`,
+          message: `${formatPrLink(existingPR.number, existingPR.html_url)} already has the latest ${targetPath}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           dryRun
@@ -2221,7 +2253,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
           repository: repo,
           success: true,
           packageJson: 'would-update-pr',
-          message: `Would update ${targetPath} in existing PR #${existingPR.number}`,
+          message: `Would update ${targetPath} in existing ${formatPrLink(existingPR.number, existingPR.html_url)}`,
           prNumber: existingPR.number,
           prUrl: existingPR.html_url,
           changes,
@@ -2261,7 +2293,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
         packageJson: 'pr-updated',
         prNumber: existingPR.number,
         prUrl: existingPR.html_url,
-        message: `Updated ${targetPath} in existing PR #${existingPR.number}`,
+        message: `Updated ${targetPath} in existing ${formatPrLink(existingPR.number, existingPR.html_url)}`,
         changes,
         dryRun
       };
@@ -2358,7 +2390,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
       packageJson: 'updated',
       prNumber: pr.number,
       prUrl: pr.html_url,
-      message: `Updated ${targetPath} via PR #${pr.number}`,
+      message: `Updated ${targetPath} via ${formatPrLink(pr.number, pr.html_url)}`,
       changes,
       dryRun
     };
@@ -3442,7 +3474,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('dependabot-sync', SubResultStatus.CHANGED, dependabotResult.message, {
                 syncStatus: dependabotResult.dependabotYml,
-                prNumber: dependabotResult.prNumber
+                prNumber: dependabotResult.prNumber,
+                prUrl: dependabotResult.prUrl
               })
             );
           }
@@ -3473,7 +3506,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('gitignore-sync', SubResultStatus.CHANGED, gitignoreResult.message, {
                 syncStatus: gitignoreResult.gitignore,
-                prNumber: gitignoreResult.prNumber
+                prNumber: gitignoreResult.prNumber,
+                prUrl: gitignoreResult.prUrl
               })
             );
           }
@@ -3543,7 +3577,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('pr-template-sync', SubResultStatus.CHANGED, templateResult.message, {
                 syncStatus: templateResult.pullRequestTemplate,
-                prNumber: templateResult.prNumber
+                prNumber: templateResult.prNumber,
+                prUrl: templateResult.prUrl
               })
             );
           }
@@ -3574,7 +3609,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('workflow-files-sync', SubResultStatus.CHANGED, workflowResult.message, {
                 syncStatus: workflowResult.workflowFiles,
-                prNumber: workflowResult.prNumber
+                prNumber: workflowResult.prNumber,
+                prUrl: workflowResult.prUrl
               })
             );
           }
@@ -3638,7 +3674,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('copilot-instructions-sync', SubResultStatus.CHANGED, copilotResult.message, {
                 syncStatus: copilotResult.copilotInstructions,
-                prNumber: copilotResult.prNumber
+                prNumber: copilotResult.prNumber,
+                prUrl: copilotResult.prUrl
               })
             );
           }
@@ -3685,7 +3722,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('codeowners-sync', SubResultStatus.CHANGED, codeownersResult.message, {
                 syncStatus: codeownersResult.codeowners,
-                prNumber: codeownersResult.prNumber
+                prNumber: codeownersResult.prNumber,
+                prUrl: codeownersResult.prUrl
               })
             );
           }
@@ -3735,7 +3773,8 @@ export async function run() {
             result.subResults.push(
               createSubResult('package-json-sync', SubResultStatus.CHANGED, packageJsonResult.message, {
                 syncStatus: packageJsonResult.packageJson,
-                prNumber: packageJsonResult.prNumber
+                prNumber: packageJsonResult.prNumber,
+                prUrl: packageJsonResult.prUrl
               })
             );
           }
