@@ -621,8 +621,33 @@ function createSubResult(kind, status, message) {
   return { kind, status, message };
 }
 
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function formatPrLink(prNumber, prUrl) {
-  return prUrl ? `<a href="${prUrl}">PR #${prNumber}</a>` : `PR #${prNumber}`;
+  if (!prUrl) {
+    return `PR #${prNumber}`;
+  }
+
+  try {
+    const parsedUrl = new URL(prUrl);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      core.warning(`Ignoring PR URL with unsupported protocol in summary: ${prUrl}`);
+      return `PR #${prNumber}`;
+    }
+
+    const safeUrl = escapeHtmlAttribute(prUrl);
+    return `<a href="${safeUrl}">PR #${prNumber}</a>`;
+  } catch {
+    core.warning(`Ignoring invalid PR URL in summary: ${prUrl}`);
+    return `PR #${prNumber}`;
+  }
 }
 
 /**
