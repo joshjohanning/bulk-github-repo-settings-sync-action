@@ -11,10 +11,6 @@ export function info(message) {
   writeLine(process.stdout, message);
 }
 
-export function errorLine(message) {
-  writeLine(process.stderr, message);
-}
-
 export function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
