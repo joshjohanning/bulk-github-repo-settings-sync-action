@@ -660,8 +660,6 @@ function formatSubResultSummary(subResult, dryRun) {
 
   if (syncStatus === 'pr-up-to-date') {
     return `${label} ${prRef} up-to-date (pending merge)`;
-  } else if (syncStatus === 'pr-exists') {
-    return `${label} PR exists (${prRef})`;
   } else if (syncStatus === 'would-update-pr') {
     return `Would update existing ${prRef} for ${label}`;
   } else if (syncStatus.startsWith('would-')) {

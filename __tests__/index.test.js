@@ -4524,7 +4524,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('Updated');
       expect(result.message).toContain('PR #50');
-      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
           branch: 'dependabot-yml-sync',
@@ -4632,7 +4631,6 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dependabotYml).toBe('pr-updated-created');
       expect(result.prNumber).toBe(50);
       expect(result.message).toContain('Created');
-      expect(result.message).toContain('PR #50');
       expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
