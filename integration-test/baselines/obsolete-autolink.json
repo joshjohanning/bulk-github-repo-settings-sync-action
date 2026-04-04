@@ -1,0 +1,5 @@
+{
+  "key_prefix": "OLD-",
+  "url_template": "https://example.com/legacy/OLD-<num>",
+  "is_alphanumeric": false
+}

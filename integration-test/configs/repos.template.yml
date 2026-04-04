@@ -1,0 +1,122 @@
+repos:
+  - repo: __LIVE_TEST_ORG__/it-settings-a
+    allow-squash-merge: true
+    allow-auto-merge: true
+    delete-branch-on-merge: true
+
+  - repo: __LIVE_TEST_ORG__/it-merge-commit-a
+    allow-merge-commit: false
+
+  - repo: __LIVE_TEST_ORG__/it-rebase-merge-a
+    allow-rebase-merge: true
+
+  - repo: __LIVE_TEST_ORG__/it-update-branch-a
+    allow-update-branch: true
+
+  - repo: __LIVE_TEST_ORG__/it-immutable-releases-a
+    immutable-releases: true
+
+  - repo: __LIVE_TEST_ORG__/it-code-scanning-a
+    code-scanning: true
+
+  - repo: __LIVE_TEST_ORG__/it-secret-scanning-a
+    secret-scanning: true
+
+  - repo: __LIVE_TEST_ORG__/it-push-protection-a
+    secret-scanning: true
+    secret-scanning-push-protection: true
+
+  - repo: __LIVE_TEST_ORG__/it-dependabot-alerts-a
+    dependabot-alerts: true
+
+  - repo: __LIVE_TEST_ORG__/it-dependabot-security-updates-a
+    dependabot-alerts: true
+    dependabot-security-updates: true
+
+  - repo: __LIVE_TEST_ORG__/it-dependabot-yml-a
+    dependabot-yml: ./integration-test/sources/dependabot.yml
+
+  - repo: __LIVE_TEST_ORG__/it-gitignore-a
+    gitignore: ./integration-test/sources/gitignore
+
+  - repo: __LIVE_TEST_ORG__/it-rulesets-a
+    rulesets-file: ./integration-test/sources/ruleset.json
+    delete-unmanaged-rulesets: true
+
+  - repo: __LIVE_TEST_ORG__/it-pull-request-template-a
+    pull-request-template: ./integration-test/sources/pull-request-template.md
+
+  - repo: __LIVE_TEST_ORG__/it-workflow-single-a
+    workflow-files: ./integration-test/sources/workflow-ci.yml
+
+  - repo: __LIVE_TEST_ORG__/it-workflows-a
+    workflow-files:
+      - ./integration-test/sources/workflow-ci.yml
+      - ./integration-test/sources/workflow-release.yml
+
+  - repo: __LIVE_TEST_ORG__/it-autolinks-a
+    autolinks-file: ./integration-test/sources/autolinks.json
+
+  - repo: __LIVE_TEST_ORG__/it-copilot-a
+    copilot-instructions-md: ./integration-test/sources/copilot-instructions.md
+
+  - repo: __LIVE_TEST_ORG__/it-package-json-a
+    package-json-file: ./integration-test/sources/package.full.json
+
+  - repo: __LIVE_TEST_ORG__/it-package-json-scripts-a
+    package-json-file: ./integration-test/sources/package.full.json
+    package-json-sync-scripts: true
+    package-json-sync-engines: false
+
+  - repo: __LIVE_TEST_ORG__/it-package-json-engines-a
+    package-json-file: ./integration-test/sources/package.full.json
+    package-json-sync-scripts: false
+    package-json-sync-engines: true
+
+  - repo: __LIVE_TEST_ORG__/it-codeowners-root-a
+    codeowners: ./integration-test/sources/CODEOWNERS
+    codeowners-target-path: CODEOWNERS
+
+  - repo: __LIVE_TEST_ORG__/it-codeowners-docs-a
+    codeowners: ./integration-test/sources/CODEOWNERS
+    codeowners-target-path: docs/CODEOWNERS
+
+  - repo: __LIVE_TEST_ORG__/it-codeowners-vars-a
+    codeowners: ./integration-test/sources/CODEOWNERS.template
+    codeowners-vars:
+      default_team: '@__LIVE_TEST_ORG__/platform'
+      docs_team: '@__LIVE_TEST_ORG__/docs'
+
+  - repo: __LIVE_TEST_ORG__/it-pr-up-to-date-a
+    dependabot-yml: ./integration-test/sources/dependabot.yml
+
+  - repo: __LIVE_TEST_ORG__/it-pr-updated-a
+    dependabot-yml: ./integration-test/sources/dependabot.yml
+
+  - repo: __LIVE_TEST_ORG__/it-pr-workflows-created-a
+    workflow-files:
+      - ./integration-test/sources/workflow-ci.yml
+      - ./integration-test/sources/workflow-release.yml
+
+  - repo: __LIVE_TEST_ORG__/it-pr-workflows-mixed-a
+    workflow-files:
+      - ./integration-test/sources/workflow-ci.yml
+      - ./integration-test/sources/workflow-release.yml
+
+  - repo: __LIVE_TEST_ORG__/it-pr-package-json-up-to-date-a
+    package-json-file: ./integration-test/sources/package.full.json
+
+  - repo: __LIVE_TEST_ORG__/it-pr-package-json-updated-a
+    package-json-file: ./integration-test/sources/package.full.json
+
+  - repo: __LIVE_TEST_ORG__/it-topics-a
+    topics: integration-live,topics-check
+
+  - repo: __LIVE_TEST_ORG__/it-codeowners-a
+    codeowners: ./integration-test/sources/CODEOWNERS
+
+  - repo: __LIVE_TEST_ORG__/it-warning-a
+    codeowners: ./integration-test/sources/DOES-NOT-EXIST
+
+  - repo: __LIVE_TEST_ORG__/it-unchanged-a
+    topics: unchanged-live,stable-check

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+
+# Repository-specific entries (preserved during sync)
+.env.local
+notes/

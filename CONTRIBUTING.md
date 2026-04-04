@@ -36,3 +36,11 @@ Follow the existing ESLint configuration and Prettier formatting. The project us
 ## Pull Requests
 
 Please ensure all tests pass and code is properly formatted before submitting a pull request.
+
+## Live Integration Testing
+
+This repository includes maintainer-facing live workflows that exercise the
+action against real GitHub repositories in a dedicated disposable test org.
+
+For setup, permissions, workflow usage, and coverage details, see
+`integration-test/README.md`.

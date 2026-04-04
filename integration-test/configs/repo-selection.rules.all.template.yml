@@ -1,0 +1,16 @@
+owner: __LIVE_TEST_ORG__
+rules:
+  - selector:
+      all: true
+    settings:
+      topics: selection-rules-all
+
+  - selector:
+      custom-property:
+        name: live_test_rules_selector
+        values:
+          - blue
+          - green
+    settings:
+      topics: selection-rules-all,selection-rules-property
+      allow-auto-merge: true

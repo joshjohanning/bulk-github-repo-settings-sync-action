@@ -1,0 +1,3 @@
+# CODEOWNERS template for live integration
+* {{default_team}}
+*.md {{docs_team}}

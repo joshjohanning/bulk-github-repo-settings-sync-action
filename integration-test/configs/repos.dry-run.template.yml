@@ -1,0 +1,11 @@
+repos:
+  - repo: __LIVE_TEST_ORG__/it-dry-run-a
+    allow-squash-merge: true
+    allow-auto-merge: true
+    delete-branch-on-merge: true
+
+  - repo: __LIVE_TEST_ORG__/it-pr-dry-run-update-a
+    dependabot-yml: ./integration-test/sources/dependabot.yml
+
+  - repo: __LIVE_TEST_ORG__/it-pr-package-json-dry-run-update-a
+    package-json-file: ./integration-test/sources/package.full.json

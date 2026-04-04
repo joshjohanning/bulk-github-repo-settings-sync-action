@@ -1,0 +1,14 @@
+{
+  "name": "integration-target-pr",
+  "private": true,
+  "scripts": {
+    "lint": "eslint src",
+    "test": "node stale-test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "leftpad": "1.0.0"
+  }
+}

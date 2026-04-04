@@ -1,0 +1,8 @@
+name: Old Integration CI
+on:
+  push:
+jobs:
+  old-check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo old-ci

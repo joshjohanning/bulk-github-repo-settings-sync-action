@@ -1,0 +1,23 @@
+repos:
+  - repo: __LIVE_TEST_ORG__/it-archived-a
+    topics: archived-check
+
+  - repo: __LIVE_TEST_ORG__/it-invalid-codeowners-path-a
+    codeowners: ./integration-test/sources/CODEOWNERS
+    codeowners-target-path: invalid/CODEOWNERS
+
+  - repo: __LIVE_TEST_ORG__/it-invalid-autolinks-file-a
+    autolinks-file: ./integration-test/sources/autolinks.invalid.json
+
+  - repo: __LIVE_TEST_ORG__/it-invalid-rulesets-file-a
+    rulesets-file: ./integration-test/sources/ruleset.invalid.json
+
+  - repo: __LIVE_TEST_ORG__/it-invalid-package-json-file-a
+    package-json-file: ./integration-test/sources/package.invalid.json
+
+  - repo: __LIVE_TEST_ORG__/it-missing-package-json-a
+    package-json-file: ./integration-test/sources/package.full.json
+
+  - repo: __LIVE_TEST_ORG__/it-invalid-workflows-file-a
+    workflow-files:
+      - ./integration-test/sources/DOES-NOT-EXIST.yml

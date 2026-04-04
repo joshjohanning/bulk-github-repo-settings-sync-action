@@ -1,0 +1,11 @@
+{
+  "name": "integration-source",
+  "private": true,
+  "scripts": {
+    "lint": "eslint .",
+    "test": "npm run lint && node --test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
