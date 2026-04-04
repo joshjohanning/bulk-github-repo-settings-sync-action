@@ -69,8 +69,23 @@ function assertPackageJsonChanges(repoFullName, changes, expectedChanges) {
   }
 }
 
+function assertSubResult(repoFullName, result, kind, status = 'changed') {
+  assert(
+    result.subResults?.some(subResult => subResult.kind === kind && subResult.status === status),
+    `${repoFullName} should include a ${status} ${kind} sub-result`
+  );
+}
+
 async function assertSinglePrFileSyncRepo(octokit, repoFullName, result, options) {
-  const { branchName, targetPath, expectedContent, statusKey, statusProperty, expectedStatus = 'created' } = options;
+  const {
+    branchName,
+    targetPath,
+    expectedContent,
+    statusKey,
+    statusProperty,
+    expectedStatus = 'created',
+    expectedSubResultKind
+  } = options;
   const pulls = await listOpenPullRequestsForBranch(octokit, repoFullName, branchName);
 
   assert(pulls.length === 1, `${repoFullName} should have exactly one open PR for ${branchName}`);
@@ -90,6 +105,7 @@ async function assertSinglePrFileSyncRepo(octokit, repoFullName, result, options
     result[statusKey]?.[statusProperty] === expectedStatus,
     `${repoFullName} ${statusKey}.${statusProperty} should report status ${expectedStatus}`
   );
+  assertSubResult(repoFullName, result, expectedSubResultKind);
 
   if (expectedStatus === 'created') {
     assertSortedStringArray(
@@ -115,6 +131,7 @@ async function assertSettingsRepo(octokit, repoFullName, result) {
 
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
+  assertSubResult(repoFullName, result, 'settings');
 }
 
 function assertChangedSetting(result, repoFullName, settingName) {
@@ -130,18 +147,21 @@ async function assertMergeCommitRepo(octokit, repoFullName, result) {
   const repository = await getRepository(octokit, repoFullName);
   assert(repository.allow_merge_commit === false, `${repoFullName} should have merge commits disabled`);
   assertChangedSetting(result, repoFullName, 'allow_merge_commit');
+  assertSubResult(repoFullName, result, 'settings');
 }
 
 async function assertRebaseMergeRepo(octokit, repoFullName, result) {
   const repository = await getRepository(octokit, repoFullName);
   assert(repository.allow_rebase_merge === true, `${repoFullName} should have rebase merge enabled`);
   assertChangedSetting(result, repoFullName, 'allow_rebase_merge');
+  assertSubResult(repoFullName, result, 'settings');
 }
 
 async function assertUpdateBranchRepo(octokit, repoFullName, result) {
   const repository = await getRepository(octokit, repoFullName);
   assert(repository.allow_update_branch === true, `${repoFullName} should have update branch enabled`);
   assertChangedSetting(result, repoFullName, 'allow_update_branch');
+  assertSubResult(repoFullName, result, 'settings');
 }
 
 async function assertImmutableReleasesRepo(octokit, repoFullName, result) {
@@ -151,6 +171,7 @@ async function assertImmutableReleasesRepo(octokit, repoFullName, result) {
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
   assert(result.immutableReleasesChange?.to === true, `${repoFullName} should report immutable releases enabled`);
+  assertSubResult(repoFullName, result, 'immutable-releases');
 }
 
 async function assertCodeScanningRepo(octokit, repoFullName, result) {
@@ -160,6 +181,7 @@ async function assertCodeScanningRepo(octokit, repoFullName, result) {
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
   assert(result.codeScanningChange?.to === 'configured', `${repoFullName} should report CodeQL configured`);
+  assertSubResult(repoFullName, result, 'code-scanning');
 }
 
 async function assertSecretScanningRepo(octokit, repoFullName, result) {
@@ -172,6 +194,7 @@ async function assertSecretScanningRepo(octokit, repoFullName, result) {
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
   assert(result.secretScanningChange?.to === true, `${repoFullName} should report secret scanning enabled`);
+  assertSubResult(repoFullName, result, 'secret-scanning');
 }
 
 async function assertPushProtectionRepo(octokit, repoFullName, result) {
@@ -192,6 +215,8 @@ async function assertPushProtectionRepo(octokit, repoFullName, result) {
     result.secretScanningPushProtectionChange?.to === true,
     `${repoFullName} should report push protection enabled`
   );
+  assertSubResult(repoFullName, result, 'secret-scanning');
+  assertSubResult(repoFullName, result, 'push-protection');
 }
 
 async function assertDependabotAlertsRepo(octokit, repoFullName, result) {
@@ -201,6 +226,7 @@ async function assertDependabotAlertsRepo(octokit, repoFullName, result) {
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
   assert(result.dependabotAlertsChange?.to === true, `${repoFullName} should report Dependabot alerts enabled`);
+  assertSubResult(repoFullName, result, 'dependabot-alerts');
 }
 
 async function assertDependabotSecurityUpdatesRepo(octokit, repoFullName, result) {
@@ -216,6 +242,8 @@ async function assertDependabotSecurityUpdatesRepo(octokit, repoFullName, result
     result.dependabotSecurityUpdatesChange?.to === true,
     `${repoFullName} should report Dependabot security updates enabled`
   );
+  assertSubResult(repoFullName, result, 'dependabot-alerts');
+  assertSubResult(repoFullName, result, 'dependabot-security-updates');
 }
 
 async function assertDependabotYmlRepo(octokit, repoFullName, result) {
@@ -224,7 +252,8 @@ async function assertDependabotYmlRepo(octokit, repoFullName, result) {
     targetPath: '.github/dependabot.yml',
     expectedContent: readFixture('integration-test/sources/dependabot.yml'),
     statusKey: 'dependabotSync',
-    statusProperty: 'dependabotYml'
+    statusProperty: 'dependabotYml',
+    expectedSubResultKind: 'dependabot-sync'
   });
 }
 
@@ -235,7 +264,8 @@ async function assertDependabotPrRepo(octokit, repoFullName, result, expectedSta
     expectedContent: readFixture(expectedFixturePath),
     statusKey: 'dependabotSync',
     statusProperty: 'dependabotYml',
-    expectedStatus
+    expectedStatus,
+    expectedSubResultKind: 'dependabot-sync'
   });
 }
 
@@ -246,7 +276,8 @@ async function assertGitignoreRepo(octokit, repoFullName, result) {
     expectedContent: readFixture('integration-test/expected/gitignore'),
     statusKey: 'gitignoreSync',
     statusProperty: 'gitignore',
-    expectedStatus: 'updated'
+    expectedStatus: 'updated',
+    expectedSubResultKind: 'gitignore-sync'
   });
 }
 
@@ -267,6 +298,7 @@ async function assertRulesetsRepo(octokit, repoFullName, result) {
     ),
     `${repoFullName} should report the obsolete ruleset as deleted`
   );
+  assertSubResult(repoFullName, result, 'ruleset-sync');
 }
 
 async function assertPullRequestTemplateRepo(octokit, repoFullName, result) {
@@ -275,7 +307,8 @@ async function assertPullRequestTemplateRepo(octokit, repoFullName, result) {
     targetPath: '.github/pull_request_template.md',
     expectedContent: readFixture('integration-test/sources/pull-request-template.md'),
     statusKey: 'pullRequestTemplateSync',
-    statusProperty: 'pullRequestTemplate'
+    statusProperty: 'pullRequestTemplate',
+    expectedSubResultKind: 'pr-template-sync'
   });
 }
 
@@ -285,7 +318,8 @@ async function assertWorkflowSingleRepo(octokit, repoFullName, result) {
     targetPath: '.github/workflows/workflow-ci.yml',
     expectedContent: readFixture('integration-test/sources/workflow-ci.yml'),
     statusKey: 'workflowFilesSync',
-    statusProperty: 'workflowFiles'
+    statusProperty: 'workflowFiles',
+    expectedSubResultKind: 'workflow-files-sync'
   });
 }
 
@@ -338,6 +372,7 @@ async function assertWorkflowFilesRepo(octokit, repoFullName, result) {
     result.workflowFilesSync?.workflowFiles === 'mixed',
     `${repoFullName} workflow files sync should report mixed`
   );
+  assertSubResult(repoFullName, result, 'workflow-files-sync');
 }
 
 async function assertWorkflowPrRepo(octokit, repoFullName, result, expectedStatus) {
@@ -379,6 +414,7 @@ async function assertWorkflowPrRepo(octokit, repoFullName, result, expectedStatu
     result.workflowFilesSync?.workflowFiles === expectedStatus,
     `${repoFullName} workflow files sync should report ${expectedStatus}`
   );
+  assertSubResult(repoFullName, result, 'workflow-files-sync');
 
   if (expectedStatus === 'pr-updated-created') {
     assertSortedStringArray(
@@ -419,6 +455,7 @@ async function assertAutolinksRepo(octokit, repoFullName, result) {
     `${repoFullName} autolinks sync should report OLD- deleted`
   );
   assert(result.autolinksSync?.autolinksUnchanged === 0, `${repoFullName} should report zero unchanged autolinks`);
+  assertSubResult(repoFullName, result, 'autolinks-sync');
 }
 
 async function assertCopilotRepo(octokit, repoFullName, result) {
@@ -427,7 +464,8 @@ async function assertCopilotRepo(octokit, repoFullName, result) {
     targetPath: '.github/copilot-instructions.md',
     expectedContent: readFixture('integration-test/sources/copilot-instructions.md'),
     statusKey: 'copilotInstructionsSync',
-    statusProperty: 'copilotInstructions'
+    statusProperty: 'copilotInstructions',
+    expectedSubResultKind: 'copilot-instructions-sync'
   });
 }
 
@@ -455,6 +493,7 @@ async function assertPackageJsonRepo(octokit, repoFullName, result, expectations
   assertPrMetadata(repoFullName, result.packageJsonSync, pulls[0]);
 
   assertPackageJsonChanges(repoFullName, result.packageJsonSync?.changes, expectations.changes);
+  assertSubResult(repoFullName, result, 'package-json-sync');
 }
 
 async function assertPackageJsonPrRepo(octokit, repoFullName, result, expectations) {
@@ -481,6 +520,7 @@ async function assertPackageJsonPrRepo(octokit, repoFullName, result, expectatio
     result.packageJsonSync?.packageJson === expectations.status,
     `${repoFullName} package.json sync should report ${expectations.status}`
   );
+  assertSubResult(repoFullName, result, 'package-json-sync');
 
   if (expectations.changes) {
     assertPackageJsonChanges(repoFullName, result.packageJsonSync?.changes, expectations.changes);
@@ -493,7 +533,8 @@ async function assertCodeownersRootRepo(octokit, repoFullName, result) {
     targetPath: 'CODEOWNERS',
     expectedContent: readFixture('integration-test/sources/CODEOWNERS'),
     statusKey: 'codeownersSync',
-    statusProperty: 'codeowners'
+    statusProperty: 'codeowners',
+    expectedSubResultKind: 'codeowners-sync'
   });
 }
 
@@ -509,7 +550,8 @@ async function assertCodeownersVarsRepo(octokit, repoFullName, result) {
     targetPath: '.github/CODEOWNERS',
     expectedContent,
     statusKey: 'codeownersSync',
-    statusProperty: 'codeowners'
+    statusProperty: 'codeowners',
+    expectedSubResultKind: 'codeowners-sync'
   });
 }
 
@@ -519,7 +561,8 @@ async function assertCodeownersDocsRepo(octokit, repoFullName, result) {
     targetPath: 'docs/CODEOWNERS',
     expectedContent: readFixture('integration-test/sources/CODEOWNERS'),
     statusKey: 'codeownersSync',
-    statusProperty: 'codeowners'
+    statusProperty: 'codeowners',
+    expectedSubResultKind: 'codeowners-sync'
   });
 }
 
@@ -534,6 +577,7 @@ async function assertTopicsRepo(octokit, repoFullName, result) {
 
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
+  assertSubResult(repoFullName, result, 'topics');
 }
 
 async function assertCodeownersRepo(octokit, repoFullName, result) {
@@ -547,6 +591,7 @@ async function assertCodeownersRepo(octokit, repoFullName, result) {
 
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
+  assertSubResult(repoFullName, result, 'codeowners-sync');
 }
 
 async function assertWarningRepo(octokit, repoFullName, result) {
@@ -556,6 +601,7 @@ async function assertWarningRepo(octokit, repoFullName, result) {
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === true, `${repoFullName} should have warnings`);
   assert(result.codeownersSyncWarning, `${repoFullName} should expose a CODEOWNERS warning`);
+  assertSubResult(repoFullName, result, 'codeowners-sync', 'warning');
 }
 
 async function assertUnchangedRepo(octokit, repoFullName, result) {
@@ -569,6 +615,7 @@ async function assertUnchangedRepo(octokit, repoFullName, result) {
 
   assert(result.success === true, `${repoFullName} result should be successful`);
   assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
+  assert((result.subResults?.length ?? 0) === 0, `${repoFullName} should not report any sub-results`);
 }
 
 async function main() {

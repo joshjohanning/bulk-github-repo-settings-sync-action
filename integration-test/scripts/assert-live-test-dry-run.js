@@ -38,6 +38,13 @@ function assertPackageJsonChanges(repoFullName, changes, expectedChanges) {
   }
 }
 
+function assertSubResult(repoFullName, result, kind, status = 'changed') {
+  assert(
+    result.subResults?.some(subResult => subResult.kind === kind && subResult.status === status),
+    `${repoFullName} should include a ${status} ${kind} sub-result`
+  );
+}
+
 async function main() {
   try {
     const octokit = createOctokit();
@@ -75,6 +82,7 @@ async function main() {
         );
         assert(result.success === true, `${repoFullName} result should be successful`);
         assert(result.hasWarnings === false, `${repoFullName} should not have warnings`);
+        assertSubResult(repoFullName, result, 'settings');
       } else if (repoFullName.endsWith('/it-pr-dry-run-update-a')) {
         const branchContent = await getFileContent(
           octokit,
@@ -93,6 +101,7 @@ async function main() {
             result.dependabotSync.filesWouldUpdate[0] === '.github/dependabot.yml',
           `${repoFullName} should report .github/dependabot.yml in filesWouldUpdate`
         );
+        assertSubResult(repoFullName, result, 'dependabot-sync');
       } else if (repoFullName.endsWith('/it-pr-package-json-dry-run-update-a')) {
         const branchContent = await getFileContent(octokit, repoFullName, 'package.json', 'package-json-sync');
         const packageJson = JSON.parse(branchContent);
@@ -108,6 +117,7 @@ async function main() {
           { field: 'scripts', from: 2, to: 2 },
           { field: 'engines', from: JSON.stringify({ node: '>=20' }), to: JSON.stringify({ node: '>=24' }) }
         ]);
+        assertSubResult(repoFullName, result, 'package-json-sync');
       } else {
         throw new Error(`No dry-run assertion scenario configured for ${repoFullName}`);
       }
