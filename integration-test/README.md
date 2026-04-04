@@ -24,14 +24,14 @@ Requirements for that organization:
 - Every repository in it should be considered temporary.
 - Do not store anything important there.
 
-### Token for the Test Org
+### GitHub App for the Test Org
 
-In your own GitHub accounts settings, create a PAT (fine-grained personal access token).
+Create a GitHub App for the test org and install it only on that org.
 
-The token should be created for the test org and have access to all
-repositories in it.
+> When creating the GitHub App, set `Where can this GitHub App be installed?`
+> to `Any account`.
 
-Required token permissions:
+Required app permissions:
 
 - Resource owner:
   - `Test Org` (the name of your test org)
@@ -52,13 +52,16 @@ Required token permissions:
 
 ### Setup in this action repository
 
-In this action repository where the tests are run:
+In this action repository where the tests are run, add:
 
-- Add a repository variable named `LIVE_TEST_ORG`.
-- Add a fine-grained PAT secret named `LIVE_TEST_ORG_GH_TOKEN`.
+| What                       | Name                        | Value                                            |
+| -------------------------- | --------------------------- | ------------------------------------------------ |
+| Action repository variable | `LIVE_TEST_ORG`             | Name of the test organization                    |
+| Action repository variable | `LIVE_TEST_APP_ID`          | Numeric GitHub App ID from the app settings page |
+| Action repository secret   | `LIVE_TEST_APP_PRIVATE_KEY` | Private key of the GitHub App                    |
 
-`LIVE_TEST_ORG` is the repository variable name.
-Its value must be the exact name of that dedicated test organization.
+The workflow generates an installation token automatically for
+`LIVE_TEST_ORG` using that App ID and private key.
 
 ## Usage
 
@@ -159,4 +162,4 @@ These areas are still intentionally not covered live:
 - exhaustive `results` payload-shape assertions for every feature family
 
 Those gaps are either operationally awkward in the current single-org,
-single-token setup or low-signal compared to their maintenance cost.
+single-app setup or low-signal compared to their maintenance cost.

@@ -49,12 +49,23 @@ jobs:
             exit 1;
           }
 
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Generate integration token
+        id: auth
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.LIVE_TEST_APP_ID }}
+          private-key: ${{ secrets.LIVE_TEST_APP_PRIVATE_KEY }}
+          owner: ${{ vars.LIVE_TEST_ORG }}
+
       - name: List repositories that will be deleted
         uses: actions/github-script@v8
         env:
           LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
         with:
-          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-token: ${{ steps.auth.outputs.token }}
           script: |
             const org = process.env.LIVE_TEST_ORG;
             const repos = await github.paginate(github.rest.repos.listForOrg, {
@@ -75,7 +86,7 @@ jobs:
         env:
           LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
         with:
-          github-token: ${{ secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-token: ${{ steps.auth.outputs.token }}
           script: |
             const org = process.env.LIVE_TEST_ORG;
             const repos = await github.paginate(github.rest.repos.listForOrg, {
