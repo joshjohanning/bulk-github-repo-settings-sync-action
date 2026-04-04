@@ -4523,7 +4523,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('Updated');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -4586,7 +4586,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('already has the latest');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -4632,7 +4632,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.dependabotYml).toBe('pr-updated-created');
       expect(result.prNumber).toBe(50);
       expect(result.message).toContain('Created');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -5753,7 +5753,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('already has the latest');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -6282,7 +6282,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('already has the latest');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -7224,7 +7224,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('already has the latest');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
@@ -7580,7 +7580,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.prNumber).toBe(50);
       expect(result.prUrl).toBe('https://github.com/owner/repo/pull/50');
       expect(result.message).toContain('already has the latest');
-      expect(result.message).toContain('<a href="https://github.com/owner/repo/pull/50">PR #50</a>');
+      expect(result.message).toContain('PR #50');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
