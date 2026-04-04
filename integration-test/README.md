@@ -28,13 +28,15 @@ Requirements for that organization:
 
 Create a GitHub App for the test org and install it only on that org.
 
-> When creating the GitHub App, set `Where can this GitHub App be installed?`
-> to `Any account`.
+Steps:
+
+1. In the test org, go to `Settings > Developer Settings > GitHub Apps`
+2. Create a new GitHub App with the permissions below
+3. Install the app to the test org
+4. Create a private key in the GitHub App
 
 Required app permissions:
 
-- Resource owner:
-  - `Test Org` (the name of your test org)
 - Repository access:
   - `All repositories`
 - Repository permissions:
