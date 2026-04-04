@@ -163,7 +163,7 @@ jobs:
         run: node integration-test/scripts/assert-live-test-state.js
 
   prepare-selection:
-    if: ${{ inputs.suite == 'all' || inputs.suite == 'selection' }}
+    if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'selection') }}
     needs:
       - prepare-main
       - test-main
@@ -211,7 +211,7 @@ jobs:
         run: node integration-test/scripts/prepare-live-test-repositories.js
 
   test-selection:
-    if: ${{ !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'selection') }}
+    if: ${{ !cancelled() && !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'selection') }}
     needs: prepare-selection
     runs-on: ubuntu-latest
     permissions:
@@ -367,7 +367,7 @@ jobs:
         run: node integration-test/scripts/assert-live-test-repo-selection.js
 
   prepare-failure:
-    if: ${{ inputs.suite == 'all' || inputs.suite == 'failure' }}
+    if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'failure') }}
     needs:
       - prepare-selection
       - test-selection
@@ -413,7 +413,7 @@ jobs:
         run: node integration-test/scripts/prepare-live-test-repositories.js
 
   test-failure:
-    if: ${{ !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'failure') }}
+    if: ${{ !cancelled() && !inputs['prepare-only'] && (inputs.suite == 'all' || inputs.suite == 'failure') }}
     needs: prepare-failure
     runs-on: ubuntu-latest
     permissions:
