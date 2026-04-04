@@ -3358,6 +3358,10 @@ export async function run() {
       if (repoConfig['rulesets-file'] !== undefined) {
         repoRulesetsFile = repoConfig['rulesets-file'];
       }
+      const repoDeleteUnmanagedRulesets =
+        repoConfig['delete-unmanaged-rulesets'] !== undefined
+          ? repoConfig['delete-unmanaged-rulesets']
+          : deleteUnmanagedRulesets;
 
       // Handle repo-specific pull-request-template
       let repoPullRequestTemplate = pullRequestTemplate;
@@ -3528,7 +3532,7 @@ export async function run() {
           octokit,
           repo,
           repoRulesetsFile,
-          deleteUnmanagedRulesets,
+          repoDeleteUnmanagedRulesets,
           dryRun
         );
 
