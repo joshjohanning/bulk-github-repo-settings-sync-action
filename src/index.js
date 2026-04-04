@@ -735,7 +735,8 @@ export async function updateRepositorySettings(
       success: false,
       hasWarnings: false,
       subResults: [],
-      error: 'Invalid repository format. Expected "owner/repo"'
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
     };
   }
 
