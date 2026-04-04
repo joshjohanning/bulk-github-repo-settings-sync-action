@@ -54,7 +54,6 @@ jobs:
 
       - name: Generate integration token
         id: auth
-        if: vars.LIVE_TEST_APP_ID != ''
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.LIVE_TEST_APP_ID }}
@@ -66,7 +65,7 @@ jobs:
         env:
           LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
         with:
-          github-token: ${{ steps.auth.outputs.token || secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-token: ${{ steps.auth.outputs.token }}
           script: |
             const org = process.env.LIVE_TEST_ORG;
             const repos = await github.paginate(github.rest.repos.listForOrg, {
@@ -87,7 +86,7 @@ jobs:
         env:
           LIVE_TEST_ORG: ${{ vars.LIVE_TEST_ORG }}
         with:
-          github-token: ${{ steps.auth.outputs.token || secrets.LIVE_TEST_ORG_GH_TOKEN }}
+          github-token: ${{ steps.auth.outputs.token }}
           script: |
             const org = process.env.LIVE_TEST_ORG;
             const repos = await github.paginate(github.rest.repos.listForOrg, {
