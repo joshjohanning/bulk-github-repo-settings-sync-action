@@ -371,7 +371,7 @@ export async function parseConfigWithRules(config, octokit) {
             return false;
           });
         })
-        .map(repo => repo.repository_full_name);
+        .map(repo => ({ repo: repo.repository_full_name }));
 
       core.info(`  → Matched ${matchedRepos.length} repositories`);
     }
@@ -389,7 +389,7 @@ export async function parseConfigWithRules(config, octokit) {
       matchedRepos = rule.selector.repos.map(repo => {
         const trimmedRepo = repo.trim();
         // If repo doesn't include owner, prepend it
-        return trimmedRepo.includes('/') ? trimmedRepo : `${owner}/${trimmedRepo}`;
+        return { repo: trimmedRepo.includes('/') ? trimmedRepo : `${owner}/${trimmedRepo}` };
       });
       core.info(`Rule ${i + 1}: Targeting ${matchedRepos.length} explicit repositories`);
     }
@@ -419,11 +419,11 @@ export async function parseConfigWithRules(config, octokit) {
           ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: perPage, page })
           : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
 
+        matchedRepos.push(...data.map(repository => ({ repo: repository.full_name, repository })));
+
         if (data.length === 0 || data.length < perPage) {
-          matchedRepos.push(...data.map(r => r.full_name));
           hasMore = false;
         } else {
-          matchedRepos.push(...data.map(r => r.full_name));
           page++;
         }
       }
@@ -433,13 +433,13 @@ export async function parseConfigWithRules(config, octokit) {
     }
 
     // Merge settings for each matched repo
-    for (const repoName of matchedRepos) {
-      const existingSettings = repoSettingsMap.get(repoName) || { repo: repoName };
+    for (const matchedRepo of matchedRepos) {
+      const existingSettings = repoSettingsMap.get(matchedRepo.repo) || { repo: matchedRepo.repo };
       // Merge settings (later rules override earlier ones)
       // Destructure to exclude 'repo' from rule.settings to prevent accidental overwrites
       // eslint-disable-next-line no-unused-vars
       const { repo: _ignoredRepo, ...safeSettings } = rule.settings;
-      repoSettingsMap.set(repoName, { ...existingSettings, ...safeSettings });
+      repoSettingsMap.set(matchedRepo.repo, { ...existingSettings, ...safeSettings });
     }
   }
 
