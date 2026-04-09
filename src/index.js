@@ -186,6 +186,38 @@ async function getOrgRepositoriesWithProperties(octokit, owner) {
 }
 
 /**
+ * Get repository metadata, using a cache to avoid duplicate API calls.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repoFullName - Repository full name in owner/repo format
+ * @param {Map<string, Object>} repositoryMetadataCache - Cache keyed by repo full name
+ * @returns {Promise<Object>} GitHub repository metadata
+ */
+async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCache) {
+  if (repositoryMetadataCache.has(repoFullName)) {
+    return repositoryMetadataCache.get(repoFullName);
+  }
+
+  const [repoOwner, repoName] = repoFullName.split('/');
+  const { data } = await octokit.rest.repos.get({
+    owner: repoOwner,
+    repo: repoName
+  });
+
+  repositoryMetadataCache.set(repoFullName, data);
+  return data;
+}
+
+async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache) {
+  return Promise.all(
+    matchedRepos.map(async matchedRepo => ({
+      ...matchedRepo,
+      repository:
+        matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
+    }))
+  );
+}
+
+/**
  * Filter repositories by custom property value
  * Uses the efficient org-level API that returns all repos with properties in one call
  * @param {Octokit} octokit - Octokit instance
@@ -271,6 +303,7 @@ export async function parseConfigWithRules(config, octokit) {
   // Cache for org repos with properties (to avoid refetching for each rule)
   // Cache for org verification and repo properties fetch
   let cachedReposWithProperties = null;
+  const repositoryMetadataCache = new Map();
   let orgVerified = false;
 
   // Map to track repositories and their merged settings
@@ -299,6 +332,19 @@ export async function parseConfigWithRules(config, octokit) {
     }
 
     let matchedRepos = [];
+
+    if (rule.selector.fork !== undefined && typeof rule.selector.fork !== 'boolean') {
+      throw new Error(`Rule ${i + 1}: selector "fork" must be a boolean, got ${typeof rule.selector.fork}`);
+    }
+
+    if (
+      rule.selector.visibility !== undefined &&
+      !['public', 'private', 'internal'].includes(rule.selector.visibility)
+    ) {
+      throw new Error(
+        `Rule ${i + 1}: selector "visibility" must be one of: public, private, internal (got ${rule.selector.visibility})`
+      );
+    }
 
     // Handle custom-property selector
     if (rule.selector['custom-property']) {
@@ -420,6 +466,9 @@ export async function parseConfigWithRules(config, octokit) {
           : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
 
         matchedRepos.push(...data.map(repository => ({ repo: repository.full_name, repository })));
+        for (const repository of data) {
+          repositoryMetadataCache.set(repository.full_name, repository);
+        }
 
         if (data.length === 0 || data.length < perPage) {
           hasMore = false;
@@ -430,6 +479,20 @@ export async function parseConfigWithRules(config, octokit) {
       core.info(`  → Matched ${matchedRepos.length} repositories`);
     } else {
       throw new Error(`Rule ${i + 1}: selector must have "custom-property", "repos", or "all" property`);
+    }
+
+    if (rule.selector.fork !== undefined) {
+      matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
+      matchedRepos = matchedRepos.filter(matchedRepo => matchedRepo.repository.fork === rule.selector.fork);
+      core.info(`  → After fork filter (${rule.selector.fork}), ${matchedRepos.length} repositories remain`);
+    }
+
+    if (rule.selector.visibility !== undefined) {
+      matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
+      matchedRepos = matchedRepos.filter(matchedRepo => matchedRepo.repository.visibility === rule.selector.visibility);
+      core.info(
+        `  → After visibility filter (${rule.selector.visibility}), ${matchedRepos.length} repositories remain`
+      );
     }
 
     // Merge settings for each matched repo

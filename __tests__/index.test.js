@@ -1014,6 +1014,31 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should filter explicit repos selector by fork status', async () => {
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({ data: { fork: true } })
+        .mockResolvedValueOnce({ data: { fork: false } });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1', 'my-org/repo2'],
+              fork: true
+            },
+            settings: {
+              'dependabot-alerts': false
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/repo1', 'dependabot-alerts': false }]);
+    });
+
     test('should throw error for invalid repos selector entries', async () => {
       const configWithNumber = {
         owner: 'my-org',
@@ -1195,6 +1220,134 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
         'Rule 1: settings must be an object, got array'
       );
+    });
+
+    test('should throw error when selector fork filter is not a boolean', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1'],
+              fork: 'true'
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        'Rule 1: selector "fork" must be a boolean, got string'
+      );
+    });
+
+    test('should throw error when selector visibility filter is invalid', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/repo1'],
+              visibility: 'secret'
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        'Rule 1: selector "visibility" must be one of: public, private, internal (got secret)'
+      );
+    });
+
+    test('should process visibility filter with all selector', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValue({
+        data: [
+          { full_name: 'my-org/public-repo', visibility: 'public' },
+          { full_name: 'my-org/private-repo', visibility: 'private' },
+          { full_name: 'my-org/internal-repo', visibility: 'internal' }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              all: true,
+              visibility: 'private'
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/private-repo', 'allow-squash-merge': true }]);
+    });
+
+    test('should process visibility filter with repos selector', async () => {
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({ data: { full_name: 'my-org/public-repo', visibility: 'public' } })
+        .mockResolvedValueOnce({ data: { full_name: 'my-org/private-repo', visibility: 'private' } });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              repos: ['my-org/public-repo', 'my-org/private-repo'],
+              visibility: 'private'
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/private-repo', 'allow-squash-merge': true }]);
+    });
+
+    test('should process visibility filter with custom-property selector', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            repository_full_name: 'my-org/public-repo',
+            properties: [{ property_name: 'team', value: 'platform' }]
+          },
+          {
+            repository_full_name: 'my-org/private-repo',
+            properties: [{ property_name: 'team', value: 'platform' }]
+          }
+        ]
+      });
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({ data: { full_name: 'my-org/public-repo', visibility: 'public' } })
+        .mockResolvedValueOnce({ data: { full_name: 'my-org/private-repo', visibility: 'private' } });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              'custom-property': {
+                name: 'team',
+                value: 'platform'
+              },
+              visibility: 'private'
+            },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/private-repo', 'allow-squash-merge': true }]);
     });
   });
 

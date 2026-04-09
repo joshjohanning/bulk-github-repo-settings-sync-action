@@ -141,10 +141,13 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 
 **Selector types:**
 
-| Selector          | Description                                   | Example                                                         |
-| ----------------- | --------------------------------------------- | --------------------------------------------------------------- |
-| `custom-property` | Filter by organization custom property values | `custom-property: { name: team, values: [platform, frontend] }` |
-| `repos`           | Explicit list of repositories                 | `repos: [my-org/repo1, my-org/repo2]`                           |
+| Selector          | Description                                                       | Example                                                         |
+| ----------------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
+| `custom-property` | Filter by organization custom property values                     | `custom-property: { name: team, values: [platform, frontend] }` |
+| `repos`           | Explicit list of repositories                                     | `repos: [my-org/repo1, my-org/repo2]`                           |
+| `all`             | Target every repository for the owner                             | `all: true`                                                     |
+| `fork`            | Filter matched repositories by fork status. Default: no filtering | `fork: true`                                                    |
+| `visibility`      | Filter matched repositories by visibility. Default: no filtering  | `visibility: private`                                           |
 
 > [!NOTE]
 > 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
@@ -187,9 +190,19 @@ rules:
       repos:
         - my-org/special-repo
         - my-org/another-repo
+      fork: false
+      visibility: private
     settings:
       topics: 'special,monitored'
       dependabot-alerts: true
+
+  # Rule 4: All forks get different Dependabot settings
+  - selector:
+      all: true
+      fork: true
+    settings:
+      dependabot-alerts: false
+      dependabot-security-updates: false
 ```
 
 Use in workflow:
