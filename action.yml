@@ -164,9 +164,9 @@ outputs:
   updated-repositories:
     description: 'Number of repositories successfully processed (changed + unchanged)'
   changed-repositories:
-    description: 'Number of repositories that had changes (or would have changes in dry-run mode)'
+    description: 'Number of repositories with reportable changes or pending sync PRs (or would have in dry-run mode)'
   unchanged-repositories:
-    description: 'Number of repositories that required no changes'
+    description: 'Number of repositories with no reportable changes (may include warnings)'
   failed-repositories:
     description: 'Number of repositories that failed to update'
   warning-repositories:
