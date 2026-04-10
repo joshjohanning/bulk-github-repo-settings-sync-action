@@ -53,6 +53,8 @@ rules:
       repos:
         - my-org/critical-service
         - my-org/payment-api
+      fork: false
+      visibility: private
     settings:
       immutable-releases: true
       dependabot-alerts: true
