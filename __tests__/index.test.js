@@ -2679,6 +2679,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '0');
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update'));
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
     });
 
     test('should fail when no token provided', async () => {

@@ -4255,10 +4255,11 @@ export async function run() {
       }
     }
 
-    core.info('✅ Action completed successfully!');
-
     if (failureCount > 0) {
-      core.warning(`${failureCount} repositories failed to update`);
+      const repositoryLabel = failureCount === 1 ? 'repository' : 'repositories';
+      core.setFailed(`${failureCount} ${repositoryLabel} failed to update`);
+    } else {
+      core.info('✅ Action completed successfully!');
     }
   } catch (error) {
     core.setFailed(`Action failed with error: ${error.message}`);
