@@ -2667,11 +2667,24 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
 
     if (existingRuleset) {
       // Fetch full ruleset details to compare
-      const { data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
-        owner,
-        repo: repoName,
-        ruleset_id: existingRuleset.id
-      });
+      let fullRuleset;
+      try {
+        ({ data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
+          owner,
+          repo: repoName,
+          ruleset_id: existingRuleset.id
+        }));
+      } catch (error) {
+        core.warning(`  ⚠️  Failed to fetch ruleset "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`);
+        const warnSub = createSubResult(
+          'ruleset-update',
+          SubResultStatus.WARNING,
+          `Failed to fetch "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`
+        );
+        warnSub.rulesetId = existingRuleset.id;
+        subResults.push(warnSub);
+        continue;
+      }
 
       const existingConfig = {
         name: fullRuleset.name,
@@ -2716,11 +2729,14 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
-            subResults[subResults.length - 1] = createSubResult(
+            const warnSub = createSubResult(
               'ruleset-update',
               SubResultStatus.WARNING,
               `Failed to update "${rulesetName}": ${error.message}`
             );
+            warnSub.rulesetId = existingRuleset.id;
+            warnSub.rulesetName = rulesetName;
+            subResults[subResults.length - 1] = warnSub;
           }
         }
       }
@@ -2741,11 +2757,13 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
           subResults[subResults.length - 1].rulesetId = newRuleset.id;
         } catch (error) {
           core.warning(`  ⚠️  Failed to create ruleset "${rulesetName}": ${error.message}`);
-          subResults[subResults.length - 1] = createSubResult(
+          const warnSub = createSubResult(
             'ruleset-create',
             SubResultStatus.WARNING,
             `Failed to create "${rulesetName}": ${error.message}`
           );
+          warnSub.rulesetName = rulesetName;
+          subResults[subResults.length - 1] = warnSub;
         }
       }
     }
