@@ -5627,7 +5627,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.deletedRulesets).toHaveLength(1);
       expect(result.deletedRulesets[0].name).toBe('ci2');
       expect(result.deletedRulesets[0].deleted).toBe(false);
-      expect(result.deletedRulesets[0].error).toBe('Permission denied');
+      expect(result.deletedRulesets[0].error).toContain('Permission denied');
     });
   });
 
@@ -5717,11 +5717,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.rulesets).toHaveLength(2);
-      expect(result.rulesets[0].ruleset).toBe('created');
-      expect(result.rulesets[0].rulesetName).toBe('branch-protection');
-      expect(result.rulesets[1].ruleset).toBe('created');
-      expect(result.rulesets[1].rulesetName).toBe('tag-protection');
+      expect(result.subResults).toHaveLength(2);
+      expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].message).toContain('branch-protection');
+      expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].message).toContain('tag-protection');
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
     });
 
@@ -5767,10 +5767,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.rulesets).toHaveLength(2);
-      expect(result.rulesets[0].ruleset).toBe('unchanged');
-      expect(result.rulesets[1].ruleset).toBe('unchanged');
-      // Only the unmanaged ruleset should be deleted
+      // Both managed rulesets are unchanged, so no create/update subResults
+      const deleteResults = result.subResults.filter(s => s.kind === 'ruleset-delete');
+      expect(deleteResults).toHaveLength(1);
+      expect(deleteResults[0].message).toContain('old-unmanaged-ruleset');
+      // Backward-compat
       expect(result.deletedRulesets).toHaveLength(1);
       expect(result.deletedRulesets[0].name).toBe('old-unmanaged-ruleset');
       expect(result.deletedRulesets[0].deleted).toBe(true);
@@ -5830,9 +5831,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.rulesets).toHaveLength(2);
-      expect(result.rulesets[0].ruleset).toBe('updated');
-      expect(result.rulesets[1].ruleset).toBe('created');
+      expect(result.subResults).toHaveLength(2);
+      expect(result.subResults[0].kind).toBe('ruleset-update');
+      expect(result.subResults[1].kind).toBe('ruleset-create');
       expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);
     });
@@ -5856,7 +5857,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('created');
       expect(result.rulesetId).toBe(123);
-      expect(result.rulesets).toHaveLength(1);
+      expect(result.subResults).toHaveLength(1);
     });
   });
 
