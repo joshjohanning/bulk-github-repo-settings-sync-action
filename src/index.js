@@ -236,15 +236,11 @@ async function mapWithConcurrencyLimit(items, concurrency, mapper) {
 }
 
 async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache) {
-  return mapWithConcurrencyLimit(
-    matchedRepos,
-    REPOSITORY_METADATA_FETCH_CONCURRENCY,
-    async matchedRepo => ({
-      ...matchedRepo,
-      repository:
-        matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
-    })
-  );
+  return mapWithConcurrencyLimit(matchedRepos, REPOSITORY_METADATA_FETCH_CONCURRENCY, async matchedRepo => ({
+    ...matchedRepo,
+    repository:
+      matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
+  }));
 }
 
 /**
