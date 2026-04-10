@@ -983,6 +983,37 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should process all selector', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', fork: false },
+          { full_name: 'my-org/repo2', fork: true }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              all: true
+            },
+            settings: {
+              'delete-branch-on-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        { repo: 'my-org/repo1', 'delete-branch-on-merge': true },
+        { repo: 'my-org/repo2', 'delete-branch-on-merge': true }
+      ]);
+    });
+
     test('should throw error for invalid repos selector entries', async () => {
       const configWithNumber = {
         owner: 'my-org',
