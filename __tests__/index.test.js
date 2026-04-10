@@ -819,7 +819,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         repos: [{ repo: 'owner/repo1' }]
       });
 
-      await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow('"base-path" must be a string');
+      await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow(`'base-path' must be a string`);
     });
   });
 

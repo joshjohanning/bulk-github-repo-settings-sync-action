@@ -151,9 +151,10 @@ const FILE_PATH_CONFIG_KEYS = [
 /**
  * Resolve a single file path against a base path.
  * Absolute paths are returned unchanged; relative paths are joined with basePath.
+ * Non-string or falsy values are returned as-is.
  * @param {string} basePath - Base path to prepend
- * @param {string} filePath - File path to resolve
- * @returns {string} Resolved file path
+ * @param {*} filePath - File path to resolve (non-string values returned unchanged)
+ * @returns {*} Resolved file path, or original value if not a non-empty string
  */
 export function resolveFilePath(basePath, filePath) {
   if (!filePath || typeof filePath !== 'string') return filePath;
@@ -712,7 +713,7 @@ export async function parseRepositories(
       const basePath = data['base-path'];
       if (basePath) {
         if (typeof basePath !== 'string') {
-          throw new Error(`"base-path" must be a string, got ${typeof basePath}`);
+          throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
         }
         core.info(`Resolving file paths relative to base-path: ${basePath}`);
         repoList = repoList.map(repo => applyBasePathToRepoConfig(repo, basePath));
