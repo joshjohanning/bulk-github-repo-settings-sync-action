@@ -5031,7 +5031,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.paginate).toHaveBeenCalledWith(mockOctokit.rest.repos.getRepoRulesets, {
         owner: 'owner',
         repo: 'repo',
-        per_page: 100
+        per_page: 100,
+        includes_parents: false
       });
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledWith({
         owner: 'owner',
@@ -5342,8 +5343,45 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.paginate).toHaveBeenCalledWith(mockOctokit.rest.repos.getRepoRulesets, {
         owner: 'owner',
         repo: 'repo',
-        per_page: 100
+        per_page: 100,
+        includes_parents: false
       });
+    });
+
+    test('should exclude organization rulesets from delete-unmanaged', async () => {
+      const rulesetConfig = {
+        name: 'repo-ruleset',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      // includes_parents=false means org rulesets won't appear here,
+      // so only repo-level rulesets are returned
+      mockOctokit.paginate.mockResolvedValue([
+        { id: 1, name: 'repo-ruleset' },
+        { id: 2, name: 'unmanaged-repo-ruleset' }
+      ]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: rulesetConfig
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', true, false);
+
+      expect(result.success).toBe(true);
+      // Should only delete the unmanaged repo ruleset, not any org rulesets
+      expect(mockOctokit.rest.repos.deleteRepoRuleset).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.repos.deleteRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ruleset_id: 2
+      });
+      // Verify includes_parents=false was passed
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(
+        mockOctokit.rest.repos.getRepoRulesets,
+        expect.objectContaining({ includes_parents: false })
+      );
     });
 
     test('should delete unmanaged rulesets when updating a ruleset', async () => {
