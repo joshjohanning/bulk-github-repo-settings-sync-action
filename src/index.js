@@ -4256,7 +4256,8 @@ export async function run() {
     }
 
     if (failureCount > 0) {
-      core.setFailed(`${failureCount} repository(ies) failed to update`);
+      const repositoryLabel = failureCount === 1 ? 'repository' : 'repositories';
+      core.setFailed(`${failureCount} ${repositoryLabel} failed to update`);
     } else {
       core.info('✅ Action completed successfully!');
     }
