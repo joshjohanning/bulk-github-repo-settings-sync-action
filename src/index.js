@@ -2640,12 +2640,14 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
   const managedNames = new Set(rulesetConfigs.map(r => r.name));
 
   // Get existing rulesets for the repository (once for all files)
+  // Use includes_parents=false to exclude organization-level rulesets
   let existingRulesets = [];
   try {
     existingRulesets = await octokit.paginate(octokit.rest.repos.getRepoRulesets, {
       owner,
       repo: repoName,
-      per_page: 100
+      per_page: 100,
+      includes_parents: false
     });
   } catch (error) {
     if (error.status === 404) {
