@@ -7,7 +7,12 @@ import { jest } from '@jest/globals';
 // Mock the @actions/core module
 const mockCore = {
   getInput: jest.fn(),
-  getBooleanInput: jest.fn(),
+  getBooleanInput: jest.fn(name => {
+    const val = mockCore.getInput(name);
+    if (val === 'true') return true;
+    if (val === 'false') return false;
+    throw new TypeError(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}`);
+  }),
   setOutput: jest.fn(),
   setFailed: jest.fn(),
   info: jest.fn(),

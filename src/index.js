@@ -135,20 +135,36 @@ export function replaceTemplateVariables(content, vars) {
  * Get optional boolean input - returns null if not set.
  * Unlike core.getBooleanInput (which throws on empty input), this returns null
  * for unset inputs so callers can distinguish "not configured" from "false".
- * Handles case-insensitive true/false per YAML 1.2 Core Schema.
  * @param {string} name - Input name
  * @returns {boolean|null} Boolean value or null if not set
  */
 function getBooleanInput(name) {
-  const raw = core.getInput(name);
-  if (!raw || !raw.trim()) return null;
-  const lower = raw.trim().toLowerCase();
-  if (lower === 'true') return true;
-  if (lower === 'false') return false;
-  throw new TypeError(
-    `Unsupported boolean value for input "${name}": "${raw}". ` +
-      'Supported boolean values: true|false (case-insensitive, YAML 1.2 Core Schema).'
+  const val = core.getInput(name);
+  if (val === '') return null;
+  return core.getBooleanInput(name);
+}
+
+/**
+ * Coerce a repo-specific YAML config value to boolean.
+ * Falls back to the global default when the value is missing or not a proper boolean.
+ * @param {*} value - Raw value from YAML config
+ * @param {string} fieldName - Field name for warning messages
+ * @param {string} repo - Repository name for warning messages
+ * @param {boolean|null} globalDefault - Global input value to fall back to
+ * @returns {boolean|null} Coerced boolean or global default
+ */
+function coerceBooleanConfig(value, fieldName, repo, globalDefault) {
+  if (value === undefined) return globalDefault;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+  }
+  core.warning(
+    `Invalid boolean value for '${fieldName}' in repo '${repo}': ${JSON.stringify(value)}. Using global default.`
   );
+  return globalDefault;
 }
 
 /**
@@ -3388,153 +3404,169 @@ export async function run() {
 
       // Merge global settings with repo-specific overrides
       const repoSettings = {
-        allow_squash_merge:
-          repoConfig['allow-squash-merge'] !== undefined
-            ? repoConfig['allow-squash-merge']
-            : settings.allow_squash_merge,
-        allow_merge_commit:
-          repoConfig['allow-merge-commit'] !== undefined
-            ? repoConfig['allow-merge-commit']
-            : settings.allow_merge_commit,
-        allow_rebase_merge:
-          repoConfig['allow-rebase-merge'] !== undefined
-            ? repoConfig['allow-rebase-merge']
-            : settings.allow_rebase_merge,
-        allow_auto_merge:
-          repoConfig['allow-auto-merge'] !== undefined ? repoConfig['allow-auto-merge'] : settings.allow_auto_merge,
-        delete_branch_on_merge:
-          repoConfig['delete-branch-on-merge'] !== undefined
-            ? repoConfig['delete-branch-on-merge']
-            : settings.delete_branch_on_merge,
-        allow_update_branch:
-          repoConfig['allow-update-branch'] !== undefined
-            ? repoConfig['allow-update-branch']
-            : settings.allow_update_branch
+        allow_squash_merge: coerceBooleanConfig(
+          repoConfig['allow-squash-merge'],
+          'allow-squash-merge',
+          repo,
+          settings.allow_squash_merge
+        ),
+        allow_merge_commit: coerceBooleanConfig(
+          repoConfig['allow-merge-commit'],
+          'allow-merge-commit',
+          repo,
+          settings.allow_merge_commit
+        ),
+        allow_rebase_merge: coerceBooleanConfig(
+          repoConfig['allow-rebase-merge'],
+          'allow-rebase-merge',
+          repo,
+          settings.allow_rebase_merge
+        ),
+        allow_auto_merge: coerceBooleanConfig(
+          repoConfig['allow-auto-merge'],
+          'allow-auto-merge',
+          repo,
+          settings.allow_auto_merge
+        ),
+        delete_branch_on_merge: coerceBooleanConfig(
+          repoConfig['delete-branch-on-merge'],
+          'delete-branch-on-merge',
+          repo,
+          settings.delete_branch_on_merge
+        ),
+        allow_update_branch: coerceBooleanConfig(
+          repoConfig['allow-update-branch'],
+          'allow-update-branch',
+          repo,
+          settings.allow_update_branch
+        )
       };
 
       // Handle repo-specific code scanning (support both new and deprecated input names)
-      let repoEnableCodeScanning = enableCodeScanning;
-      if (repoConfig['code-scanning'] !== undefined) {
-        repoEnableCodeScanning = repoConfig['code-scanning'];
-      } else if (repoConfig['enable-default-code-scanning'] !== undefined) {
-        repoEnableCodeScanning = repoConfig['enable-default-code-scanning'];
-      }
+      const repoEnableCodeScanning =
+        repoConfig['code-scanning'] !== undefined
+          ? coerceBooleanConfig(repoConfig['code-scanning'], 'code-scanning', repo, enableCodeScanning)
+          : repoConfig['enable-default-code-scanning'] !== undefined
+            ? coerceBooleanConfig(
+                repoConfig['enable-default-code-scanning'],
+                'enable-default-code-scanning',
+                repo,
+                enableCodeScanning
+              )
+            : enableCodeScanning;
 
       // Handle repo-specific immutable releases
-      const repoImmutableReleases =
-        repoConfig['immutable-releases'] !== undefined ? repoConfig['immutable-releases'] : immutableReleases;
+      const repoImmutableReleases = coerceBooleanConfig(
+        repoConfig['immutable-releases'],
+        'immutable-releases',
+        repo,
+        immutableReleases
+      );
 
       // Handle repo-specific topics
-      let repoTopics = topics;
-      if (repoConfig.topics !== undefined) {
+      const repoTopics = (() => {
+        if (repoConfig.topics === undefined) return topics;
         if (typeof repoConfig.topics === 'string') {
-          repoTopics = repoConfig.topics
+          return repoConfig.topics
             .split(',')
             .map(t => t.trim())
             .filter(t => t.length > 0);
-        } else if (Array.isArray(repoConfig.topics)) {
-          repoTopics = repoConfig.topics;
-        } else {
-          repoTopics = null;
         }
-      }
+        if (Array.isArray(repoConfig.topics)) return repoConfig.topics;
+        return null;
+      })();
 
       // Handle repo-specific dependabot.yml
-      let repoDependabotYml = dependabotYml;
-      if (repoConfig['dependabot-yml'] !== undefined) {
-        repoDependabotYml = repoConfig['dependabot-yml'];
-      }
+      const repoDependabotYml =
+        repoConfig['dependabot-yml'] !== undefined ? repoConfig['dependabot-yml'] : dependabotYml;
 
       // Handle repo-specific .gitignore
-      let repoGitignore = gitignore;
-      if (repoConfig['gitignore'] !== undefined) {
-        repoGitignore = repoConfig['gitignore'];
-      }
+      const repoGitignore = repoConfig['gitignore'] !== undefined ? repoConfig['gitignore'] : gitignore;
 
       // Handle repo-specific rulesets-file
-      let repoRulesetsFile = rulesetsFile;
-      if (repoConfig['rulesets-file'] !== undefined) {
-        repoRulesetsFile = repoConfig['rulesets-file'];
-      }
-      const repoDeleteUnmanagedRulesets =
-        repoConfig['delete-unmanaged-rulesets'] !== undefined
-          ? repoConfig['delete-unmanaged-rulesets']
-          : deleteUnmanagedRulesets;
+      const repoRulesetsFile = repoConfig['rulesets-file'] !== undefined ? repoConfig['rulesets-file'] : rulesetsFile;
+      const repoDeleteUnmanagedRulesets = coerceBooleanConfig(
+        repoConfig['delete-unmanaged-rulesets'],
+        'delete-unmanaged-rulesets',
+        repo,
+        deleteUnmanagedRulesets
+      );
 
       // Handle repo-specific pull-request-template
-      let repoPullRequestTemplate = pullRequestTemplate;
-      if (repoConfig['pull-request-template'] !== undefined) {
-        repoPullRequestTemplate = repoConfig['pull-request-template'];
-      }
+      const repoPullRequestTemplate =
+        repoConfig['pull-request-template'] !== undefined ? repoConfig['pull-request-template'] : pullRequestTemplate;
 
       // Handle repo-specific workflow-files
-      let repoWorkflowFiles = workflowFiles;
-      if (repoConfig['workflow-files'] !== undefined) {
+      const repoWorkflowFiles = (() => {
+        if (repoConfig['workflow-files'] === undefined) return workflowFiles;
         if (typeof repoConfig['workflow-files'] === 'string') {
-          repoWorkflowFiles = repoConfig['workflow-files']
+          return repoConfig['workflow-files']
             .split(',')
             .map(f => f.trim())
             .filter(f => f.length > 0);
-        } else if (Array.isArray(repoConfig['workflow-files'])) {
-          repoWorkflowFiles = repoConfig['workflow-files'];
-        } else {
-          repoWorkflowFiles = null;
         }
-      }
+        if (Array.isArray(repoConfig['workflow-files'])) return repoConfig['workflow-files'];
+        return null;
+      })();
 
       // Handle repo-specific autolinks-file
-      let repoAutolinksFile = autolinksFile;
-      if (repoConfig['autolinks-file'] !== undefined) {
-        repoAutolinksFile = repoConfig['autolinks-file'];
-      }
+      const repoAutolinksFile =
+        repoConfig['autolinks-file'] !== undefined ? repoConfig['autolinks-file'] : autolinksFile;
 
       // Handle repo-specific copilot-instructions-md
-      let repoCopilotInstructionsMd = copilotInstructionsMd;
-      if (repoConfig['copilot-instructions-md'] !== undefined) {
-        repoCopilotInstructionsMd = repoConfig['copilot-instructions-md'];
-      }
+      const repoCopilotInstructionsMd =
+        repoConfig['copilot-instructions-md'] !== undefined
+          ? repoConfig['copilot-instructions-md']
+          : copilotInstructionsMd;
 
       // Handle repo-specific codeowners
-      let repoCodeowners = codeowners;
-      if (repoConfig['codeowners'] !== undefined) {
-        repoCodeowners = repoConfig['codeowners'];
-      }
-      let repoCodeownersTargetPath = codeownersTargetPath;
-      if (repoConfig['codeowners-target-path'] !== undefined) {
-        repoCodeownersTargetPath = repoConfig['codeowners-target-path'];
-      }
+      const repoCodeowners = repoConfig['codeowners'] !== undefined ? repoConfig['codeowners'] : codeowners;
+      const repoCodeownersTargetPath =
+        repoConfig['codeowners-target-path'] !== undefined
+          ? repoConfig['codeowners-target-path']
+          : codeownersTargetPath;
       // Handle repo-specific codeowners-vars (template variables)
-      let repoCodeownersVars = null;
-      if (repoConfig['codeowners-vars'] !== undefined) {
+      const repoCodeownersVars = (() => {
+        if (repoConfig['codeowners-vars'] === undefined) return null;
         if (
           repoConfig['codeowners-vars'] !== null &&
           typeof repoConfig['codeowners-vars'] === 'object' &&
           !Array.isArray(repoConfig['codeowners-vars'])
         ) {
-          repoCodeownersVars = repoConfig['codeowners-vars'];
-        } else {
-          core.warning(
-            `Invalid 'codeowners-vars' configuration for repo '${repoConfig.repo || repo}'; expected an object. This configuration will be ignored.`
-          );
+          return repoConfig['codeowners-vars'];
         }
-      }
+        core.warning(
+          `Invalid 'codeowners-vars' configuration for repo '${repo}'; expected an object. This configuration will be ignored.`
+        );
+        return null;
+      })();
 
       // Handle repo-specific security settings
       const repoSecuritySettings = {
-        secretScanning:
-          repoConfig['secret-scanning'] !== undefined ? repoConfig['secret-scanning'] : securitySettings.secretScanning,
-        secretScanningPushProtection:
-          repoConfig['secret-scanning-push-protection'] !== undefined
-            ? repoConfig['secret-scanning-push-protection']
-            : securitySettings.secretScanningPushProtection,
-        dependabotAlerts:
-          repoConfig['dependabot-alerts'] !== undefined
-            ? repoConfig['dependabot-alerts']
-            : securitySettings.dependabotAlerts,
-        dependabotSecurityUpdates:
-          repoConfig['dependabot-security-updates'] !== undefined
-            ? repoConfig['dependabot-security-updates']
-            : securitySettings.dependabotSecurityUpdates
+        secretScanning: coerceBooleanConfig(
+          repoConfig['secret-scanning'],
+          'secret-scanning',
+          repo,
+          securitySettings.secretScanning
+        ),
+        secretScanningPushProtection: coerceBooleanConfig(
+          repoConfig['secret-scanning-push-protection'],
+          'secret-scanning-push-protection',
+          repo,
+          securitySettings.secretScanningPushProtection
+        ),
+        dependabotAlerts: coerceBooleanConfig(
+          repoConfig['dependabot-alerts'],
+          'dependabot-alerts',
+          repo,
+          securitySettings.dependabotAlerts
+        ),
+        dependabotSecurityUpdates: coerceBooleanConfig(
+          repoConfig['dependabot-security-updates'],
+          'dependabot-security-updates',
+          repo,
+          securitySettings.dependabotSecurityUpdates
+        )
       };
 
       const result = await updateRepositorySettings(
