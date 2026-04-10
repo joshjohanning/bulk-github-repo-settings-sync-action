@@ -2566,6 +2566,37 @@ export function parseRulesetsFileValue(value, context) {
 }
 
 /**
+ * Read-only fields returned by the GitHub API that must not be sent in
+ * PUT / POST requests.  Uses a blocklist so that any *new* writable fields
+ * GitHub adds are passed through without requiring an action update.
+ */
+export const RULESET_READONLY_FIELDS = new Set([
+  'id',
+  'node_id',
+  'source',
+  'source_type',
+  'created_at',
+  'updated_at',
+  '_links',
+  'current_user_can_bypass'
+]);
+
+/**
+ * Return a shallow copy of `config` with all read-only API fields removed.
+ * @param {Object} config - Ruleset configuration object
+ * @returns {Object} Cleaned configuration object
+ */
+export function stripRulesetReadonlyFields(config) {
+  const result = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!RULESET_READONLY_FIELDS.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
  * and handles delete-unmanaged logic across all managed names.
@@ -2738,7 +2769,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
               owner,
               repo: repoName,
               ruleset_id: existingRuleset.id,
-              ...rulesetConfig
+              ...stripRulesetReadonlyFields(rulesetConfig)
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -2768,7 +2799,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
           const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
             owner,
             repo: repoName,
-            ...rulesetConfig
+            ...stripRulesetReadonlyFields(rulesetConfig)
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
           subResults[subResults.length - 1].rulesetId = newRuleset.id;
