@@ -207,13 +207,43 @@ async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCa
   return data;
 }
 
+const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
+
+/**
+ * Map items with a bounded level of concurrency while preserving result order.
+ * @template TInput, TOutput
+ * @param {Array<TInput>} items - Items to map
+ * @param {number} concurrency - Maximum number of concurrent mapper executions
+ * @param {(item: TInput, index: number) => Promise<TOutput>} mapper - Async mapper function
+ * @returns {Promise<Array<TOutput>>} Mapped results in the original order
+ */
+async function mapWithConcurrencyLimit(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return results;
+}
+
 async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache) {
-  return Promise.all(
-    matchedRepos.map(async matchedRepo => ({
+  return mapWithConcurrencyLimit(
+    matchedRepos,
+    REPOSITORY_METADATA_FETCH_CONCURRENCY,
+    async matchedRepo => ({
       ...matchedRepo,
       repository:
         matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
-    }))
+    })
   );
 }
 

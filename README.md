@@ -150,7 +150,7 @@ Define rules that target repositories using **selectors**. Each rule can use dif
 | `visibility`      | Filter matched repositories by visibility. Default: no filtering  | `visibility: private`                                           |
 
 > [!NOTE]
-> 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, `visibility`, etc.
+> 💡 **Extensibility:** The selector pattern is designed to support future possible selectors like `topics`, `name-prefix`, etc.
 
 > [!NOTE]
 > 🗄 Archived repositories are skipped.
