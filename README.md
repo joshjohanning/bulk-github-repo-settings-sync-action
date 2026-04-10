@@ -65,7 +65,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
     dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
     gitignore: './config/.gitignore'
-    rulesets-file: './config/rulesets/prod-ruleset.json'
+    rulesets-file: './config/rulesets/prod-ruleset.json, ./config/rulesets/tag-protection.json'
     pull-request-template: './config/templates/pull_request_template.md'
     workflow-files: './config/workflows/ci.yml,./config/workflows/release.yml'
     autolinks-file: './config/autolinks/jira-autolinks.json'
@@ -285,7 +285,7 @@ repos:
 
 ### Syncing Repository Rulesets
 
-Sync repository rulesets across multiple repositories:
+Sync repository rulesets across multiple repositories. Each ruleset is defined in its own JSON file, and `rulesets-file` accepts comma-separated paths to sync multiple rulesets:
 
 ```yml
 - name: Sync Repository Rulesets
@@ -293,17 +293,19 @@ Sync repository rulesets across multiple repositories:
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
-    rulesets-file: './config/rulesets/ci-ruleset.json'
+    rulesets-file: './config/rulesets/branch-protection.json, ./config/rulesets/tag-protection.json'
 ```
 
-Or with repo-specific overrides in `repos.yml`:
+Or with repo-specific overrides in `repos.yml` (supports comma-separated strings or YAML arrays):
 
 ```yaml
 repos:
   - repo: owner/repo1
     rulesets-file: './config/rulesets/ci-ruleset.json'
   - repo: owner/repo2
-    rulesets-file: './config/rulesets/prod-ruleset.json'
+    rulesets-file:
+      - './config/rulesets/branch-protection.json'
+      - './config/rulesets/tag-protection.json'
   - repo: owner/repo3
     # Skip ruleset sync for this repo
 ```
@@ -312,8 +314,8 @@ repos:
 
 - Creates the ruleset if it doesn't exist in the repository
 - Updates the ruleset if a ruleset with the same name already exists
-- Ruleset is identified by the `name` field in the JSON configuration
-- The JSON file should contain a valid ruleset configuration matching the [GitHub Rulesets API schema](https://docs.github.com/en/rest/repos/rules)
+- Rulesets are identified by the `name` field in each JSON configuration
+- Each JSON file should contain a valid ruleset configuration matching the [GitHub Rulesets API schema](https://docs.github.com/en/rest/repos/rules)
 
 **Example Ruleset JSON (`ci-ruleset.json`):**
 
@@ -361,7 +363,7 @@ For more information on ruleset configuration, see the [GitHub Rulesets document
 
 ### Delete Unmanaged Rulesets
 
-By default, syncing rulesets will create or update the specified ruleset by name, but will not delete other rulesets that may exist in the repository. To delete all other rulesets besides the one being synced, use the `delete-unmanaged-rulesets` parameter:
+By default, syncing rulesets will create or update the specified rulesets by name, but will not delete other rulesets that may exist in the repository. To delete all other rulesets besides those being synced, use the `delete-unmanaged-rulesets` parameter:
 
 ```yml
 - name: Sync Repository Rulesets (delete unmanaged)
@@ -369,18 +371,18 @@ By default, syncing rulesets will create or update the specified ruleset by name
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
-    rulesets-file: './config/rulesets/ci-ruleset.json'
+    rulesets-file: './config/rulesets/branch-protection.json, ./config/rulesets/tag-protection.json'
     delete-unmanaged-rulesets: true
 ```
 
 **Behavior with `delete-unmanaged-rulesets: true`:**
 
-- Creates the ruleset if it doesn't exist
-- Updates the ruleset if a ruleset with the same name already exists
-- **Deletes all other rulesets that don't match the synced ruleset name**
+- Creates rulesets that don't exist
+- Updates rulesets that differ from the config
+- **Deletes all other rulesets not matching any managed ruleset name**
 - In dry-run mode, shows which rulesets would be deleted without actually deleting them
 
-**Use case:** This is useful when you rename a ruleset and want to ensure only the new ruleset exists, or when you want to enforce that repositories have exactly one specific ruleset configuration.
+**Use case:** This is useful when you rename a ruleset and want to ensure only the configured rulesets exist, or when you want to enforce that repositories have exactly the specified ruleset configurations.
 
 ### Syncing Pull Request Templates
 
@@ -833,8 +835,8 @@ Output shows what would change:
 | `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`          |
 | `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                    | No       | -                                       |
 | `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`              |
-| `rulesets-file`                   | Path to a JSON file containing repository ruleset configuration to sync to target repositories                                             | No       | -                                       |
-| `delete-unmanaged-rulesets`       | Delete all other rulesets besides the one being synced                                                                                     | No       | `false`                                 |
+| `rulesets-file`                   | Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories                     | No       | -                                       |
+| `delete-unmanaged-rulesets`       | Delete all other rulesets besides those being synced                                                                                       | No       | `false`                                 |
 | `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                       |
 | `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template`   |
 | `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                       |
@@ -981,7 +983,9 @@ repos:
   - repo: owner/repo3
     code-scanning: false
     dependabot-yml: './config/dependabot/npm-actions.yml'
-    rulesets-file: './config/rulesets/custom-ruleset.json'
+    rulesets-file:
+      - './config/rulesets/branch-protection.json'
+      - './config/rulesets/custom-ruleset.json'
     pull-request-template: './config/templates/feature-template.md'
     workflow-files:
       - './config/workflows/ci.yml'

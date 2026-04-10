@@ -293,6 +293,8 @@ const {
   syncDependabotYml,
   syncGitignore,
   syncRepositoryRuleset,
+  syncRepositoryRulesets,
+  parseRulesetsFileValue,
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
@@ -5278,7 +5280,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Ruleset configuration must include a "name" field');
+      expect(result.error).toContain('must include a "name" field');
     });
 
     test('should handle API errors', async () => {
@@ -5626,6 +5628,235 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.deletedRulesets[0].name).toBe('ci2');
       expect(result.deletedRulesets[0].deleted).toBe(false);
       expect(result.deletedRulesets[0].error).toBe('Permission denied');
+    });
+  });
+
+  // ─── parseRulesetsFileValue ──────────────────────────────────────────
+
+  describe('parseRulesetsFileValue', () => {
+    test('should parse a single file path string', () => {
+      const result = parseRulesetsFileValue('./rulesets/branch.json');
+      expect(result).toEqual(['./rulesets/branch.json']);
+    });
+
+    test('should parse comma-separated file paths', () => {
+      const result = parseRulesetsFileValue('./rulesets/branch.json, ./rulesets/tag.json');
+      expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
+    });
+
+    test('should parse a YAML array of file paths', () => {
+      const result = parseRulesetsFileValue(['./rulesets/branch.json', './rulesets/tag.json']);
+      expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
+    });
+
+    test('should trim whitespace from paths', () => {
+      const result = parseRulesetsFileValue('  ./rulesets/branch.json  ,  ./rulesets/tag.json  ');
+      expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
+    });
+
+    test('should return empty array for empty string', () => {
+      const result = parseRulesetsFileValue('');
+      expect(result).toEqual([]);
+    });
+
+    test('should return empty array for null/undefined', () => {
+      expect(parseRulesetsFileValue(null)).toEqual([]);
+      expect(parseRulesetsFileValue(undefined)).toEqual([]);
+    });
+
+    test('should throw for invalid type', () => {
+      expect(() => parseRulesetsFileValue(123)).toThrow(
+        'expected a string, comma-separated string, or array of strings'
+      );
+    });
+
+    test('should throw for empty array entries', () => {
+      expect(() => parseRulesetsFileValue(['./rulesets/branch.json', ''])).toThrow('expected non-empty strings');
+    });
+
+    test('should include context in error messages', () => {
+      expect(() => parseRulesetsFileValue(123, 'owner/repo')).toThrow('for repo "owner/repo"');
+    });
+  });
+
+  // ─── syncRepositoryRulesets (multi-file) ──────────────────────────────
+
+  describe('syncRepositoryRulesets', () => {
+    test('should create multiple rulesets when none exist', async () => {
+      const branchRuleset = {
+        name: 'branch-protection',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const tagRuleset = {
+        name: 'tag-protection',
+        target: 'tag',
+        enforcement: 'active',
+        rules: [{ type: 'non_fast_forward' }]
+      };
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === './rulesets/branch.json') return JSON.stringify(branchRuleset);
+        if (filePath === './rulesets/tag.json') return JSON.stringify(tagRuleset);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        return '';
+      });
+
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createRepoRuleset
+        .mockResolvedValueOnce({ data: { id: 100, name: 'branch-protection' } })
+        .mockResolvedValueOnce({ data: { id: 200, name: 'tag-protection' } });
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        'owner/repo',
+        ['./rulesets/branch.json', './rulesets/tag.json'],
+        false,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.rulesets).toHaveLength(2);
+      expect(result.rulesets[0].ruleset).toBe('created');
+      expect(result.rulesets[0].rulesetName).toBe('branch-protection');
+      expect(result.rulesets[1].ruleset).toBe('created');
+      expect(result.rulesets[1].rulesetName).toBe('tag-protection');
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
+    });
+
+    test('should preserve all managed rulesets when deleting unmanaged', async () => {
+      const branchRuleset = {
+        name: 'branch-protection',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const tagRuleset = {
+        name: 'tag-protection',
+        target: 'tag',
+        enforcement: 'active',
+        rules: [{ type: 'non_fast_forward' }]
+      };
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === './rulesets/branch.json') return JSON.stringify(branchRuleset);
+        if (filePath === './rulesets/tag.json') return JSON.stringify(tagRuleset);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        return '';
+      });
+
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [
+          { id: 100, name: 'branch-protection' },
+          { id: 200, name: 'tag-protection' },
+          { id: 300, name: 'old-unmanaged-ruleset' }
+        ]
+      });
+      mockOctokit.rest.repos.getRepoRuleset
+        .mockResolvedValueOnce({ data: { id: 100, ...branchRuleset } })
+        .mockResolvedValueOnce({ data: { id: 200, ...tagRuleset } });
+      mockOctokit.rest.repos.deleteRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        'owner/repo',
+        ['./rulesets/branch.json', './rulesets/tag.json'],
+        true,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.rulesets).toHaveLength(2);
+      expect(result.rulesets[0].ruleset).toBe('unchanged');
+      expect(result.rulesets[1].ruleset).toBe('unchanged');
+      // Only the unmanaged ruleset should be deleted
+      expect(result.deletedRulesets).toHaveLength(1);
+      expect(result.deletedRulesets[0].name).toBe('old-unmanaged-ruleset');
+      expect(result.deletedRulesets[0].deleted).toBe(true);
+      expect(mockOctokit.rest.repos.deleteRepoRuleset).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.repos.deleteRepoRuleset).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ruleset_id: 300
+      });
+    });
+
+    test('should handle mixed create and update across multiple rulesets', async () => {
+      const branchRuleset = {
+        name: 'branch-protection',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const tagRuleset = {
+        name: 'tag-protection',
+        target: 'tag',
+        enforcement: 'active',
+        rules: [{ type: 'non_fast_forward' }]
+      };
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === './rulesets/branch.json') return JSON.stringify(branchRuleset);
+        if (filePath === './rulesets/tag.json') return JSON.stringify(tagRuleset);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        return '';
+      });
+
+      // Only branch-protection exists, tag-protection is new
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
+        data: [{ id: 100, name: 'branch-protection' }]
+      });
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValueOnce({
+        data: {
+          id: 100,
+          name: 'branch-protection',
+          target: 'branch',
+          enforcement: 'disabled',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 200, name: 'tag-protection' }
+      });
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        'owner/repo',
+        ['./rulesets/branch.json', './rulesets/tag.json'],
+        false,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.rulesets).toHaveLength(2);
+      expect(result.rulesets[0].ruleset).toBe('updated');
+      expect(result.rulesets[1].ruleset).toBe('created');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);
+    });
+
+    test('backward-compatible single-file call via syncRepositoryRuleset still works', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 123, name: 'ci' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('created');
+      expect(result.rulesetId).toBe(123);
+      expect(result.rulesets).toHaveLength(1);
     });
   });
 
