@@ -2642,11 +2642,11 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
   // Get existing rulesets for the repository (once for all files)
   let existingRulesets = [];
   try {
-    const { data } = await octokit.rest.repos.getRepoRulesets({
+    existingRulesets = await octokit.paginate(octokit.rest.repos.getRepoRulesets, {
       owner,
-      repo: repoName
+      repo: repoName,
+      per_page: 100
     });
-    existingRulesets = data;
   } catch (error) {
     if (error.status === 404) {
       core.info(`  📋 Repository ${repo} does not have rulesets enabled or accessible`);
