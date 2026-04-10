@@ -26,7 +26,8 @@ import * as yaml from 'js-yaml';
 function getKnownRepoConfigKeys() {
   // 'repo' is always valid as it's the repository identifier in YAML config
   // 'codeowners-vars' is YAML-only config for template variables (no action input)
-  const keys = new Set(['repo', 'codeowners-vars']);
+  // 'base-path' is a top-level YAML-only config for resolving relative file paths
+  const keys = new Set(['repo', 'codeowners-vars', 'base-path']);
 
   try {
     // Get the directory where this script is located
@@ -129,6 +130,71 @@ export function replaceTemplateVariables(content, vars) {
   }
 
   return result;
+}
+
+/**
+ * File-path config keys that should be resolved against base-path.
+ * @type {string[]}
+ */
+const FILE_PATH_CONFIG_KEYS = [
+  'rulesets-file',
+  'dependabot-yml',
+  'gitignore',
+  'workflow-files',
+  'copilot-instructions-md',
+  'codeowners',
+  'package-json-file',
+  'pull-request-template',
+  'autolinks-file'
+];
+
+/**
+ * Resolve a single file path against a base path.
+ * Absolute paths are returned unchanged; relative paths are joined with basePath.
+ * @param {string} basePath - Base path to prepend
+ * @param {string} filePath - File path to resolve
+ * @returns {string} Resolved file path
+ */
+export function resolveFilePath(basePath, filePath) {
+  if (!filePath || typeof filePath !== 'string') return filePath;
+  if (path.isAbsolute(filePath)) return filePath;
+  return path.join(basePath, filePath);
+}
+
+/**
+ * Apply base-path resolution to all file-path config values in a repo config object.
+ * Handles string values, comma-separated strings (for rulesets-file/workflow-files),
+ * and array values.
+ * @param {Object} repoConfig - Repository configuration object
+ * @param {string} basePath - Base path to prepend to relative file paths
+ * @returns {Object} New repo config with resolved file paths
+ */
+export function applyBasePathToRepoConfig(repoConfig, basePath) {
+  if (!basePath) return repoConfig;
+
+  const resolved = { ...repoConfig };
+  for (const key of FILE_PATH_CONFIG_KEYS) {
+    if (resolved[key] === undefined) continue;
+
+    const value = resolved[key];
+    if (typeof value === 'string') {
+      // rulesets-file and workflow-files support comma-separated paths
+      if (key === 'rulesets-file' || key === 'workflow-files') {
+        resolved[key] = value
+          .split(',')
+          .map(p => p.trim())
+          .filter(p => p.length > 0)
+          .map(p => resolveFilePath(basePath, p))
+          .join(',');
+      } else {
+        resolved[key] = resolveFilePath(basePath, value);
+      }
+    } else if (Array.isArray(value)) {
+      resolved[key] = value.map(p => (typeof p === 'string' ? resolveFilePath(basePath, p) : p));
+    }
+  }
+
+  return resolved;
 }
 
 /**
@@ -640,6 +706,16 @@ export async function parseRepositories(
         });
       } else {
         throw new Error('YAML file must contain a "rules" array or "repos" array');
+      }
+
+      // Apply base-path resolution to file path config values
+      const basePath = data['base-path'];
+      if (basePath) {
+        if (typeof basePath !== 'string') {
+          throw new Error(`"base-path" must be a string, got ${typeof basePath}`);
+        }
+        core.info(`Resolving file paths relative to base-path: ${basePath}`);
+        repoList = repoList.map(repo => applyBasePathToRepoConfig(repo, basePath));
       }
     } catch (error) {
       throw new Error(`Failed to parse repositories file: ${error.message}`);
