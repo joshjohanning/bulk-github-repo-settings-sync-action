@@ -733,6 +733,9 @@ const SYNC_KIND_LABELS = Object.freeze({
   'dependabot-sync': 'dependabot.yml',
   'gitignore-sync': '.gitignore',
   'ruleset-sync': 'ruleset',
+  'ruleset-create': 'rulesets',
+  'ruleset-update': 'rulesets',
+  'ruleset-delete': 'rulesets',
   'pr-template-sync': 'PR template',
   'workflow-files-sync': 'workflow files',
   'autolinks-sync': 'autolinks',
@@ -769,7 +772,7 @@ function formatSubResultSummary(subResult, dryRun) {
   if (!label) return subResult.message;
 
   const syncStatus = subResult.syncStatus;
-  if (!syncStatus) return subResult.message;
+  if (!syncStatus) return `${label}: ${subResult.message}`;
 
   const hasPr = subResult.prNumber != null;
   const prRef = hasPr ? formatPrLink(subResult.prNumber, subResult.prUrl) : '';
