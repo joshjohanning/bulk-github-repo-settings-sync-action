@@ -1014,6 +1014,41 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should filter all selector by fork status', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-org/repo1', fork: false, visibility: 'public' },
+          { full_name: 'my-org/repo2', fork: true, visibility: 'public' },
+          { full_name: 'my-org/repo3', fork: false, visibility: 'private' }
+        ]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: {
+              all: true,
+              fork: false
+            },
+            settings: {
+              'dependabot-alerts': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        { repo: 'my-org/repo1', 'dependabot-alerts': true },
+        { repo: 'my-org/repo3', 'dependabot-alerts': true }
+      ]);
+      // Should not call repos.get since metadata comes from listForOrg
+      expect(mockOctokit.rest.repos.get).not.toHaveBeenCalled();
+    });
+
     test('should filter explicit repos selector by fork status', async () => {
       mockOctokit.rest.repos.get
         .mockResolvedValueOnce({ data: { fork: true } })

@@ -198,13 +198,22 @@ async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCa
   }
 
   const [repoOwner, repoName] = repoFullName.split('/');
-  const { data } = await octokit.rest.repos.get({
-    owner: repoOwner,
-    repo: repoName
-  });
 
-  repositoryMetadataCache.set(repoFullName, data);
-  return data;
+  try {
+    const { data } = await octokit.rest.repos.get({
+      owner: repoOwner,
+      repo: repoName
+    });
+
+    repositoryMetadataCache.set(repoFullName, data);
+    return data;
+  } catch (error) {
+    const wrappedError = new Error(`Failed to fetch metadata for repository ${repoFullName}: ${error.message}`);
+    if (error.status) {
+      wrappedError.status = error.status;
+    }
+    throw wrappedError;
+  }
 }
 
 const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
@@ -507,14 +516,16 @@ export async function parseConfigWithRules(config, octokit) {
       throw new Error(`Rule ${i + 1}: selector must have "custom-property", "repos", or "all" property`);
     }
 
-    if (rule.selector.fork !== undefined) {
+    if (rule.selector.fork !== undefined || rule.selector.visibility !== undefined) {
       matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
+    }
+
+    if (rule.selector.fork !== undefined) {
       matchedRepos = matchedRepos.filter(matchedRepo => matchedRepo.repository.fork === rule.selector.fork);
       core.info(`  → After fork filter (${rule.selector.fork}), ${matchedRepos.length} repositories remain`);
     }
 
     if (rule.selector.visibility !== undefined) {
-      matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
       matchedRepos = matchedRepos.filter(matchedRepo => matchedRepo.repository.visibility === rule.selector.visibility);
       core.info(
         `  → After visibility filter (${rule.selector.visibility}), ${matchedRepos.length} repositories remain`
