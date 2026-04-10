@@ -74,7 +74,8 @@ const mockOctokit = {
       update: jest.fn()
     }
   },
-  request: jest.fn()
+  request: jest.fn(),
+  paginate: jest.fn()
 };
 
 // Mock fs module - use a real implementation that tracks test content
@@ -339,6 +340,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.getRepoRulesets.mockClear();
     mockOctokit.rest.repos.getRepoRuleset.mockClear();
     mockOctokit.rest.repos.createRepoRuleset.mockClear();
+    mockOctokit.paginate.mockClear();
     mockOctokit.rest.repos.updateRepoRuleset.mockClear();
     mockOctokit.rest.repos.listAutolinks.mockClear();
     mockOctokit.rest.repos.createAutolink.mockClear();
@@ -2862,12 +2864,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: makeReadableRepoData()
       });
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [
-          { id: 123, name: 'ci' },
-          { id: 456, name: 'obsolete' }
-        ]
-      });
+      mockOctokit.paginate.mockResolvedValue([
+        { id: 123, name: 'ci' },
+        { id: 456, name: 'obsolete' }
+      ]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -4095,7 +4095,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
           allow_update_branch: false
         }
       });
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.paginate.mockResolvedValue([]);
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({ data: { id: 1 } });
 
       await run();
@@ -5018,7 +5018,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.paginate.mockResolvedValue([]);
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
         data: { id: 123, name: 'ci' }
       });
@@ -5028,9 +5028,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('created');
       expect(result.rulesetId).toBe(123);
-      expect(mockOctokit.rest.repos.getRepoRulesets).toHaveBeenCalledWith({
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(mockOctokit.rest.repos.getRepoRulesets, {
         owner: 'owner',
-        repo: 'repo'
+        repo: 'repo',
+        per_page: 100
       });
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledWith({
         owner: 'owner',
@@ -5056,9 +5057,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
-      });
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci', enforcement: 'disabled' }]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: existingRuleset
       });
@@ -5106,9 +5105,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [{ id: 789, name: 'ci' }]
-      });
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: existingRuleset
       });
@@ -5171,9 +5168,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [{ id: 456, name: 'ci' }]
-      });
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci' }]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: existingRuleset
       });
@@ -5198,7 +5193,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.paginate.mockResolvedValue([]);
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, true);
 
@@ -5225,9 +5220,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [{ id: 456, name: 'ci', enforcement: 'disabled' }]
-      });
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci', enforcement: 'disabled' }]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: existingRuleset
       });
@@ -5293,7 +5286,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(new Error('API rate limit exceeded'));
+      mockOctokit.paginate.mockRejectedValue(new Error('API rate limit exceeded'));
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
 
@@ -5312,7 +5305,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       setMockFileContent(JSON.stringify(rulesetConfig));
       const error404 = new Error('Not Found');
       error404.status = 404;
-      mockOctokit.rest.repos.getRepoRulesets.mockRejectedValue(error404);
+      mockOctokit.paginate.mockRejectedValue(error404);
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
         data: { id: 123, name: 'ci' }
       });
@@ -5321,6 +5314,36 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.ruleset).toBe('created');
+    });
+
+    test('should paginate when fetching existing rulesets', async () => {
+      const rulesetConfig = {
+        name: 'new-ruleset',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      // Simulate paginated response with many rulesets
+      const existingRulesets = Array.from({ length: 150 }, (_, i) => ({
+        id: i + 1,
+        name: `ruleset-${i + 1}`
+      }));
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 999, name: 'new-ruleset' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('created');
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(mockOctokit.rest.repos.getRepoRulesets, {
+        owner: 'owner',
+        repo: 'repo',
+        per_page: 100
+      });
     });
 
     test('should delete unmanaged rulesets when updating a ruleset', async () => {
@@ -5337,9 +5360,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5381,9 +5402,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
         data: { id: 999, name: 'new-ruleset' }
       });
@@ -5418,9 +5437,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5468,9 +5485,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5506,9 +5521,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5542,9 +5555,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const existingRulesets = [{ id: 456, name: 'unmanaged-ruleset' }];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
 
       const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', true, true);
 
@@ -5572,9 +5583,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5607,9 +5616,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ];
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: existingRulesets
-      });
+      mockOctokit.paginate.mockResolvedValue(existingRulesets);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
         data: {
           id: 123,
@@ -5704,7 +5711,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return '';
       });
 
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.paginate.mockResolvedValue([]);
       mockOctokit.rest.repos.createRepoRuleset
         .mockResolvedValueOnce({ data: { id: 100, name: 'branch-protection' } })
         .mockResolvedValueOnce({ data: { id: 200, name: 'tag-protection' } });
@@ -5747,13 +5754,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return '';
       });
 
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [
-          { id: 100, name: 'branch-protection' },
-          { id: 200, name: 'tag-protection' },
-          { id: 300, name: 'old-unmanaged-ruleset' }
-        ]
-      });
+      mockOctokit.paginate.mockResolvedValue([
+        { id: 100, name: 'branch-protection' },
+        { id: 200, name: 'tag-protection' },
+        { id: 300, name: 'old-unmanaged-ruleset' }
+      ]);
       mockOctokit.rest.repos.getRepoRuleset
         .mockResolvedValueOnce({ data: { id: 100, ...branchRuleset } })
         .mockResolvedValueOnce({ data: { id: 200, ...tagRuleset } });
@@ -5806,9 +5811,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       // Only branch-protection exists, tag-protection is new
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({
-        data: [{ id: 100, name: 'branch-protection' }]
-      });
+      mockOctokit.paginate.mockResolvedValue([{ id: 100, name: 'branch-protection' }]);
       mockOctokit.rest.repos.getRepoRuleset.mockResolvedValueOnce({
         data: {
           id: 100,
@@ -5848,7 +5851,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       };
 
       setMockFileContent(JSON.stringify(rulesetConfig));
-      mockOctokit.rest.repos.getRepoRulesets.mockResolvedValue({ data: [] });
+      mockOctokit.paginate.mockResolvedValue([]);
       mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
         data: { id: 123, name: 'ci' }
       });
