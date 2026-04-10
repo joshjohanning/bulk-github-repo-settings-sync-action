@@ -2527,7 +2527,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
  * @returns {string[]} Array of trimmed, non-empty file paths
  */
 export function parseRulesetsFileValue(value, context) {
-  if (!value || (typeof value === 'string' && value.trim() === '')) {
+  if (!value || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0)) {
     return [];
   }
 
@@ -2582,6 +2582,17 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
     };
   }
 
+  if (!rulesetFilePaths || rulesetFilePaths.length === 0) {
+    return {
+      repository: repo,
+      success: true,
+      ruleset: 'unchanged',
+      message: 'No ruleset files specified',
+      subResults: [],
+      dryRun
+    };
+  }
+
   // Read and parse all ruleset JSON files upfront
   const rulesetConfigs = [];
   for (const filePath of rulesetFilePaths) {
@@ -2608,6 +2619,21 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
     }
 
     rulesetConfigs.push(rulesetConfig);
+  }
+
+  // Validate no duplicate ruleset names across files
+  const nameCount = new Map();
+  for (const config of rulesetConfigs) {
+    nameCount.set(config.name, (nameCount.get(config.name) || 0) + 1);
+  }
+  const duplicates = [...nameCount.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+  if (duplicates.length > 0) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Duplicate ruleset name(s) found across files: ${duplicates.join(', ')}. Each ruleset file must have a unique name.`,
+      dryRun
+    };
   }
 
   // Collect managed names for delete-unmanaged logic
