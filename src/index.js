@@ -4255,10 +4255,10 @@ export async function run() {
       }
     }
 
-    core.info('✅ Action completed successfully!');
-
     if (failureCount > 0) {
-      core.warning(`${failureCount} repositories failed to update`);
+      core.setFailed(`${failureCount} repository(ies) failed to update`);
+    } else {
+      core.info('✅ Action completed successfully!');
     }
   } catch (error) {
     core.setFailed(`Action failed with error: ${error.message}`);
