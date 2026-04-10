@@ -97,10 +97,10 @@ inputs:
     required: false
     default: 'chore: update .gitignore'
   rulesets-file:
-    description: 'Path to a JSON file containing repository ruleset configuration to sync to target repositories'
+    description: 'Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories'
     required: false
   delete-unmanaged-rulesets:
-    description: 'Delete all other rulesets besides the one being synced'
+    description: 'Delete all other rulesets besides those being synced'
     required: false
     default: 'false'
   pull-request-template:

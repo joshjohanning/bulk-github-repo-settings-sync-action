@@ -2519,69 +2519,59 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
 }
 
 /**
- * Delete rulesets that are not in the managed list
- * @param {Octokit} octokit - Octokit instance
- * @param {string} owner - Repository owner
- * @param {string} repoName - Repository name
- * @param {Array} existingRulesets - List of existing rulesets in the repository
- * @param {string} managedRulesetName - Name of the ruleset being managed (to exclude from deletion)
- * @param {boolean} dryRun - Preview mode without making actual changes
- * @returns {Promise<Array>} Array of deletion results
+ * Parse a rulesets-file value into an array of file paths.
+ * Accepts a single string (comma-separated), a YAML array of strings,
+ * or an empty/falsy value (returns empty array).
+ * @param {string|string[]} value - The rulesets-file value from config
+ * @param {string} [context] - Context for error messages (e.g., repo name)
+ * @returns {string[]} Array of trimmed, non-empty file paths
  */
-async function deleteUnmanagedRulesetsHelper(octokit, owner, repoName, existingRulesets, managedRulesetName, dryRun) {
-  const rulesetsToDelete = existingRulesets.filter(r => r.name !== managedRulesetName);
-  const deletedRulesets = [];
-
-  for (const rulesetToDelete of rulesetsToDelete) {
-    if (dryRun) {
-      core.info(`  🗑️  Would delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
-      deletedRulesets.push({
-        name: rulesetToDelete.name,
-        id: rulesetToDelete.id,
-        deleted: false,
-        wouldDelete: true
-      });
-    } else {
-      try {
-        await octokit.rest.repos.deleteRepoRuleset({
-          owner,
-          repo: repoName,
-          ruleset_id: rulesetToDelete.id
-        });
-        core.info(`  🗑️  Deleted ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id})`);
-        deletedRulesets.push({
-          name: rulesetToDelete.name,
-          id: rulesetToDelete.id,
-          deleted: true
-        });
-      } catch (deleteError) {
-        core.warning(
-          `  ⚠️  Failed to delete ruleset "${rulesetToDelete.name}" (ID: ${rulesetToDelete.id}): ${deleteError.message}`
-        );
-        deletedRulesets.push({
-          name: rulesetToDelete.name,
-          id: rulesetToDelete.id,
-          deleted: false,
-          error: deleteError.message
-        });
-      }
-    }
+export function parseRulesetsFileValue(value, context) {
+  if (!value || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0)) {
+    return [];
   }
 
-  return deletedRulesets;
+  const label = context ? ` for repo "${context}"` : '';
+  let paths;
+  if (Array.isArray(value)) {
+    paths = value.map(v => {
+      if (typeof v !== 'string' || v.trim() === '') {
+        throw new Error(`Invalid entry in "rulesets-file" array${label}: expected non-empty strings`);
+      }
+      return v.trim();
+    });
+  } else if (typeof value === 'string') {
+    paths = value
+      .split(',')
+      .map(p => p.trim())
+      .filter(p => p.length > 0);
+  } else {
+    throw new Error(`Invalid "rulesets-file"${label}: expected a string, comma-separated string, or array of strings`);
+  }
+
+  if (paths.length === 0) {
+    throw new Error(`Invalid "rulesets-file"${label}: no file paths provided`);
+  }
+
+  return paths;
 }
 
 /**
- * Sync repository ruleset to target repository
+ * Sync repository rulesets to target repository.
+ * Accepts an array of ruleset JSON file paths, processes each one,
+ * and handles delete-unmanaged logic across all managed names.
+ * Continues processing on individual ruleset failures (warns instead of aborting).
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
- * @param {string} rulesetFilePath - Path to local ruleset JSON file
- * @param {boolean} deleteUnmanaged - Delete all other rulesets besides the one being synced
+ * @param {string[]} rulesetFilePaths - Paths to local ruleset JSON files
+ * @param {boolean} deleteUnmanaged - Delete all other rulesets besides those being synced
  * @param {boolean} dryRun - Preview mode without making actual changes
- * @returns {Promise<Object>} Result object
+ * @returns {Promise<Object>} Result object with subResults array
  */
-export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, deleteUnmanaged, dryRun) {
+export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, deleteUnmanaged, dryRun) {
   const [owner, repoName] = repo.split('/');
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
 
   if (!owner || !repoName) {
     return {
@@ -2592,63 +2582,110 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
     };
   }
 
-  try {
-    // Read the source ruleset JSON file
+  if (!rulesetFilePaths || rulesetFilePaths.length === 0) {
+    return {
+      repository: repo,
+      success: true,
+      ruleset: 'unchanged',
+      message: 'No ruleset files specified',
+      subResults: [],
+      dryRun
+    };
+  }
+
+  // Read and parse all ruleset JSON files upfront
+  const rulesetConfigs = [];
+  for (const filePath of rulesetFilePaths) {
     let rulesetConfig;
     try {
-      const fileContent = fs.readFileSync(rulesetFilePath, 'utf8');
+      const fileContent = fs.readFileSync(filePath, 'utf8');
       rulesetConfig = JSON.parse(fileContent);
     } catch (error) {
       return {
         repository: repo,
         success: false,
-        error: `Failed to read or parse ruleset file at ${rulesetFilePath}: ${error.message}`,
+        error: `Failed to read or parse ruleset file at ${filePath}: ${error.message}`,
         dryRun
       };
     }
 
-    // Validate that the ruleset has a name
     if (!rulesetConfig.name) {
       return {
         repository: repo,
         success: false,
-        error: 'Ruleset configuration must include a "name" field.',
+        error: `Ruleset configuration in "${filePath}" must include a "name" field.`,
         dryRun
       };
     }
 
-    const rulesetName = rulesetConfig.name;
+    rulesetConfigs.push(rulesetConfig);
+  }
 
-    // Get existing rulesets for the repository
-    let existingRulesets = [];
-    try {
-      const { data } = await octokit.rest.repos.getRepoRulesets({
-        owner,
-        repo: repoName
-      });
-      existingRulesets = data;
-    } catch (error) {
-      // If we get a 404, the repository might not have rulesets enabled
-      if (error.status === 404) {
-        core.info(`  📋 Repository ${repo} does not have rulesets enabled or accessible`);
-      } else {
-        throw error;
-      }
+  // Validate no duplicate ruleset names across files
+  const nameCount = new Map();
+  for (const config of rulesetConfigs) {
+    nameCount.set(config.name, (nameCount.get(config.name) || 0) + 1);
+  }
+  const duplicates = [...nameCount.entries()].filter(([, count]) => count > 1).map(([name]) => name);
+  if (duplicates.length > 0) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Duplicate ruleset name(s) found across files: ${duplicates.join(', ')}. Each ruleset file must have a unique name.`,
+      dryRun
+    };
+  }
+
+  // Collect managed names for delete-unmanaged logic
+  const managedNames = new Set(rulesetConfigs.map(r => r.name));
+
+  // Get existing rulesets for the repository (once for all files)
+  let existingRulesets = [];
+  try {
+    const { data } = await octokit.rest.repos.getRepoRulesets({
+      owner,
+      repo: repoName
+    });
+    existingRulesets = data;
+  } catch (error) {
+    if (error.status === 404) {
+      core.info(`  📋 Repository ${repo} does not have rulesets enabled or accessible`);
+    } else {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to sync ruleset: ${error.message}`,
+        dryRun
+      };
     }
+  }
 
-    // Check if a ruleset with the same name already exists
+  // Process each desired ruleset
+  for (const rulesetConfig of rulesetConfigs) {
+    const rulesetName = rulesetConfig.name;
     const existingRuleset = existingRulesets.find(r => r.name === rulesetName);
 
     if (existingRuleset) {
       // Fetch full ruleset details to compare
-      const { data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
-        owner,
-        repo: repoName,
-        ruleset_id: existingRuleset.id
-      });
+      let fullRuleset;
+      try {
+        ({ data: fullRuleset } = await octokit.rest.repos.getRepoRuleset({
+          owner,
+          repo: repoName,
+          ruleset_id: existingRuleset.id
+        }));
+      } catch (error) {
+        core.warning(`  ⚠️  Failed to fetch ruleset "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`);
+        const warnSub = createSubResult(
+          'ruleset-update',
+          SubResultStatus.WARNING,
+          `Failed to fetch "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`
+        );
+        warnSub.rulesetId = existingRuleset.id;
+        subResults.push(warnSub);
+        continue;
+      }
 
-      // Compare the existing ruleset with the new configuration
-      // Remove fields that are returned by the API but not part of the input config
       const existingConfig = {
         name: fullRuleset.name,
         target: fullRuleset.target,
@@ -2658,8 +2695,6 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
         rules: fullRuleset.rules
       };
 
-      // Normalize the source config by removing API-only fields that shouldn't be compared
-      // This allows users to use raw API response JSON as their source config
       const normalizedSourceConfig = {
         name: rulesetConfig.name,
         target: rulesetConfig.target,
@@ -2669,173 +2704,186 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
         rules: rulesetConfig.rules
       };
 
-      // Deep comparison of the configurations
       const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
+      } else {
+        core.info(`  📋 ${wouldPrefix}Update ruleset: ${rulesetName} (ID: ${existingRuleset.id})`);
+        subResults.push(
+          createSubResult(
+            'ruleset-update',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}update "${rulesetName}" (ID: ${existingRuleset.id})`
+          )
+        );
+        subResults[subResults.length - 1].rulesetId = existingRuleset.id;
 
-        const result = {
-          repository: repo,
-          success: true,
-          ruleset: 'unchanged',
-          rulesetId: existingRuleset.id,
-          message: `Ruleset "${rulesetName}" is already up to date`,
-          dryRun
-        };
-
-        // Handle delete unmanaged rulesets
-        if (deleteUnmanaged) {
-          const deletedRulesets = await deleteUnmanagedRulesetsHelper(
-            octokit,
-            owner,
-            repoName,
-            existingRulesets,
-            rulesetName,
-            dryRun
-          );
-          if (deletedRulesets.length > 0) {
-            result.deletedRulesets = deletedRulesets;
+        if (!dryRun) {
+          try {
+            await octokit.rest.repos.updateRepoRuleset({
+              owner,
+              repo: repoName,
+              ruleset_id: existingRuleset.id,
+              ...rulesetConfig
+            });
+          } catch (error) {
+            core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
+            const warnSub = createSubResult(
+              'ruleset-update',
+              SubResultStatus.WARNING,
+              `Failed to update "${rulesetName}": ${error.message}`
+            );
+            warnSub.rulesetId = existingRuleset.id;
+            warnSub.rulesetName = rulesetName;
+            subResults[subResults.length - 1] = warnSub;
           }
         }
-
-        return result;
       }
-
-      if (dryRun) {
-        const result = {
-          repository: repo,
-          success: true,
-          ruleset: 'would-update',
-          rulesetId: existingRuleset.id,
-          message: `Would update ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
-          dryRun
-        };
-
-        // Handle delete unmanaged rulesets in dry-run mode
-        if (deleteUnmanaged) {
-          const deletedRulesets = await deleteUnmanagedRulesetsHelper(
-            octokit,
-            owner,
-            repoName,
-            existingRulesets,
-            rulesetName,
-            dryRun
-          );
-          if (deletedRulesets.length > 0) {
-            result.deletedRulesets = deletedRulesets;
-          }
-        }
-
-        return result;
-      }
-
-      // Update existing ruleset
-      await octokit.rest.repos.updateRepoRuleset({
-        owner,
-        repo: repoName,
-        ruleset_id: existingRuleset.id,
-        ...rulesetConfig
-      });
-
-      core.info(`  📋 Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`);
-
-      const result = {
-        repository: repo,
-        success: true,
-        ruleset: 'updated',
-        rulesetId: existingRuleset.id,
-        message: `Updated ruleset "${rulesetName}" (ID: ${existingRuleset.id})`,
-        dryRun
-      };
-
-      // Handle delete unmanaged rulesets
-      if (deleteUnmanaged) {
-        const deletedRulesets = await deleteUnmanagedRulesetsHelper(
-          octokit,
-          owner,
-          repoName,
-          existingRulesets,
-          rulesetName,
-          dryRun
-        );
-        if (deletedRulesets.length > 0) {
-          result.deletedRulesets = deletedRulesets;
-        }
-      }
-
-      return result;
-    }
-
-    if (dryRun) {
-      const result = {
-        repository: repo,
-        success: true,
-        ruleset: 'would-create',
-        message: `Would create ruleset "${rulesetName}"`,
-        dryRun
-      };
-
-      // Handle delete unmanaged rulesets in dry-run mode
-      if (deleteUnmanaged) {
-        const deletedRulesets = await deleteUnmanagedRulesetsHelper(
-          octokit,
-          owner,
-          repoName,
-          existingRulesets,
-          rulesetName,
-          dryRun
-        );
-        if (deletedRulesets.length > 0) {
-          result.deletedRulesets = deletedRulesets;
-        }
-      }
-
-      return result;
-    }
-
-    // Create new ruleset
-    const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
-      owner,
-      repo: repoName,
-      ...rulesetConfig
-    });
-
-    core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
-
-    const result = {
-      repository: repo,
-      success: true,
-      ruleset: 'created',
-      rulesetId: newRuleset.id,
-      message: `Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`,
-      dryRun
-    };
-
-    // Handle delete unmanaged rulesets
-    if (deleteUnmanaged) {
-      const deletedRulesets = await deleteUnmanagedRulesetsHelper(
-        octokit,
-        owner,
-        repoName,
-        existingRulesets,
-        rulesetName,
-        dryRun
+    } else {
+      core.info(`  🆕 ${wouldPrefix}Create ruleset: ${rulesetName}`);
+      subResults.push(
+        createSubResult('ruleset-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${rulesetName}"`)
       );
-      if (deletedRulesets.length > 0) {
-        result.deletedRulesets = deletedRulesets;
+
+      if (!dryRun) {
+        try {
+          const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+            owner,
+            repo: repoName,
+            ...rulesetConfig
+          });
+          core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
+          subResults[subResults.length - 1].rulesetId = newRuleset.id;
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to create ruleset "${rulesetName}": ${error.message}`);
+          const warnSub = createSubResult(
+            'ruleset-create',
+            SubResultStatus.WARNING,
+            `Failed to create "${rulesetName}": ${error.message}`
+          );
+          warnSub.rulesetName = rulesetName;
+          subResults[subResults.length - 1] = warnSub;
+        }
       }
     }
-
-    return result;
-  } catch (error) {
-    return {
-      repository: repo,
-      success: false,
-      error: `Failed to sync ruleset: ${error.message}`,
-      dryRun
-    };
   }
+
+  // Delete unmanaged rulesets (those not in the managed set)
+  if (deleteUnmanaged) {
+    for (const existing of existingRulesets) {
+      if (!managedNames.has(existing.name)) {
+        core.info(`  🗑️ ${wouldPrefix}Delete ruleset: ${existing.name} (ID: ${existing.id})`);
+        const deleteSub = createSubResult(
+          'ruleset-delete',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}delete "${existing.name}" (ID: ${existing.id})`
+        );
+        deleteSub.rulesetName = existing.name;
+        deleteSub.rulesetId = existing.id;
+        subResults.push(deleteSub);
+
+        if (!dryRun) {
+          try {
+            await octokit.rest.repos.deleteRepoRuleset({
+              owner,
+              repo: repoName,
+              ruleset_id: existing.id
+            });
+          } catch (error) {
+            core.warning(`  ⚠️  Failed to delete ruleset "${existing.name}": ${error.message}`);
+            const warnSub = createSubResult(
+              'ruleset-delete',
+              SubResultStatus.WARNING,
+              `Failed to delete "${existing.name}": ${error.message}`
+            );
+            warnSub.rulesetName = existing.name;
+            warnSub.rulesetId = existing.id;
+            subResults[subResults.length - 1] = warnSub;
+          }
+        }
+      }
+    }
+  }
+
+  // Build backward-compatible result
+  const hasChanges = subResults.some(s => s.status === SubResultStatus.CHANGED);
+  const hasWarnings = subResults.some(s => s.status === SubResultStatus.WARNING);
+
+  // Determine aggregate status from non-delete operations
+  const syncSubResults = subResults.filter(s => s.kind !== 'ruleset-delete');
+  const hasSyncChanges = syncSubResults.some(s => s.status === SubResultStatus.CHANGED);
+
+  let ruleset = 'unchanged';
+  let message = `All ${rulesetConfigs.length} ruleset(s) are already up to date`;
+
+  if (hasSyncChanges) {
+    const firstChanged = syncSubResults.find(s => s.status === SubResultStatus.CHANGED);
+    if (firstChanged.kind === 'ruleset-create') {
+      ruleset = dryRun ? 'would-create' : 'created';
+    } else {
+      ruleset = dryRun ? 'would-update' : 'updated';
+    }
+  }
+
+  if (hasChanges || hasWarnings) {
+    const messages = subResults.map(s => s.message);
+    message = messages.join('; ');
+  }
+
+  const result = {
+    repository: repo,
+    success: true,
+    ruleset,
+    message,
+    subResults,
+    dryRun
+  };
+
+  // Preserve rulesetId for backward compat
+  const firstCreateOrUpdate = subResults.find(
+    s => (s.kind === 'ruleset-create' || s.kind === 'ruleset-update') && s.rulesetId
+  );
+  if (firstCreateOrUpdate) {
+    result.rulesetId = firstCreateOrUpdate.rulesetId;
+  } else if (rulesetConfigs.length > 0) {
+    // For unchanged rulesets, find the existing ID
+    const firstExisting = existingRulesets.find(r => managedNames.has(r.name));
+    if (firstExisting) {
+      result.rulesetId = firstExisting.id;
+    }
+  }
+
+  // Preserve deletedRulesets for backward compat
+  const deleteSubResults = subResults.filter(s => s.kind === 'ruleset-delete');
+  if (deleteSubResults.length > 0) {
+    result.deletedRulesets = deleteSubResults.map(s => {
+      const isWarning = s.status === SubResultStatus.WARNING;
+      const isDryRun = s.message.startsWith('Would');
+      return {
+        name: s.rulesetName,
+        id: s.rulesetId,
+        deleted: !isWarning && !isDryRun,
+        ...(isDryRun && { wouldDelete: true }),
+        ...(isWarning && { error: s.message })
+      };
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Sync a single repository ruleset to target repository (backward-compatible wrapper).
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} rulesetFilePath - Path to local ruleset JSON file
+ * @param {boolean} deleteUnmanaged - Delete all other rulesets besides the one being synced
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, deleteUnmanaged, dryRun) {
+  return syncRepositoryRulesets(octokit, repo, [rulesetFilePath], deleteUnmanaged, dryRun);
 }
 
 /**
@@ -3251,7 +3299,8 @@ export async function run() {
     const gitignorePrTitle = core.getInput('gitignore-pr-title') || 'chore: update .gitignore';
 
     // Get rulesets settings
-    const rulesetsFile = core.getInput('rulesets-file');
+    const rulesetsFileInput = core.getInput('rulesets-file');
+    const rulesetsFiles = rulesetsFileInput ? parseRulesetsFileValue(rulesetsFileInput) : [];
     const deleteUnmanagedRulesets = getBooleanInput('delete-unmanaged-rulesets');
 
     // Get pull request template settings
@@ -3310,7 +3359,7 @@ export async function run() {
       topics !== null ||
       dependabotYml ||
       gitignore ||
-      rulesetsFile ||
+      rulesetsFiles.length > 0 ||
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
@@ -3356,8 +3405,8 @@ export async function run() {
     if (gitignore) {
       core.info(`.gitignore will be synced from: ${gitignore}`);
     }
-    if (rulesetsFile) {
-      core.info(`Repository ruleset will be synced from: ${rulesetsFile}`);
+    if (rulesetsFiles.length > 0) {
+      core.info(`Repository rulesets will be synced from: ${rulesetsFiles.join(', ')}`);
     }
     if (pullRequestTemplate) {
       core.info(`Pull request template will be synced from: ${pullRequestTemplate}`);
@@ -3483,8 +3532,11 @@ export async function run() {
       // Handle repo-specific .gitignore
       const repoGitignore = repoConfig['gitignore'] !== undefined ? repoConfig['gitignore'] : gitignore;
 
-      // Handle repo-specific rulesets-file
-      const repoRulesetsFile = repoConfig['rulesets-file'] !== undefined ? repoConfig['rulesets-file'] : rulesetsFile;
+      // Handle repo-specific rulesets-file (supports comma-separated string or YAML array)
+      const repoRulesetsFiles = (() => {
+        if (repoConfig['rulesets-file'] === undefined) return rulesetsFiles;
+        return parseRulesetsFileValue(repoConfig['rulesets-file'], repo);
+      })();
       const repoDeleteUnmanagedRulesets = coerceBooleanConfig(
         repoConfig['delete-unmanaged-rulesets'],
         'delete-unmanaged-rulesets',
@@ -3655,13 +3707,13 @@ export async function run() {
         }
       }
 
-      // Sync repository ruleset if specified
-      if (repoRulesetsFile) {
-        core.info(`  📋 Checking repository ruleset...`);
-        const rulesetResult = await syncRepositoryRuleset(
+      // Sync repository rulesets if specified
+      if (repoRulesetsFiles.length > 0) {
+        core.info(`  📋 Checking repository rulesets...`);
+        const rulesetResult = await syncRepositoryRulesets(
           octokit,
           repo,
-          repoRulesetsFile,
+          repoRulesetsFiles,
           repoDeleteUnmanagedRulesets,
           dryRun
         );
@@ -3671,12 +3723,9 @@ export async function run() {
 
         if (rulesetResult.success) {
           core.info(`  📋 ${rulesetResult.message}`);
-          if (rulesetResult.ruleset && rulesetResult.ruleset !== 'unchanged') {
-            result.subResults.push(
-              createSubResult('ruleset-sync', SubResultStatus.CHANGED, rulesetResult.message, {
-                syncStatus: rulesetResult.ruleset
-              })
-            );
+          // Propagate per-operation subResults from rulesets
+          if (rulesetResult.subResults) {
+            result.subResults.push(...rulesetResult.subResults);
           }
         } else {
           result.hasWarnings = true;

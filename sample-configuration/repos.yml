@@ -23,6 +23,12 @@ repos:
     copilot-instructions-md: './config/copilot/copilot-instructions.md'
     codeowners: './config/CODEOWNERS'
     package-json-file: './config/package.json'
+  # example with multiple rulesets per repo
+  - repo: joshjohanning/critical-service
+    rulesets-file:
+      - './config/rulesets/branch-protection.json'
+      - './config/rulesets/tag-protection.json'
+    delete-unmanaged-rulesets: true
   # example with CODEOWNERS template variables
   - repo: joshjohanning/frontend-app
     codeowners: './config/CODEOWNERS.template'
