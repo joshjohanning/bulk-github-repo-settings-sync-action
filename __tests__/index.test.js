@@ -1212,21 +1212,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toContainEqual({ repo: 'my-org/repo3', 'allow-squash-merge': true });
     });
 
-    test('should skip rules without settings with warning', async () => {
+    test('should include repos from rules without settings (applies default workflow settings)', async () => {
       const config = {
         owner: 'my-org',
         rules: [
           {
             selector: { repos: ['my-org/repo1'] }
-            // No settings
+            // No settings - should still include the repo for default workflow settings
           }
         ]
       };
 
       const result = await parseConfigWithRules(config, mockOctokit);
 
-      expect(result).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('Rule 1 has no settings, skipping');
+      expect(result).toEqual([{ repo: 'my-org/repo1' }]);
     });
 
     test('should throw error when settings is not an object', async () => {
@@ -1257,6 +1256,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
         'Rule 1: settings must be an object, got array'
       );
+    });
+
+    test('should throw error when settings is explicitly null', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: null
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow('Rule 1: settings must be an object');
     });
 
     test('should throw error when selector fork filter is not a boolean', async () => {
