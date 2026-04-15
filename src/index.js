@@ -1110,7 +1110,7 @@ export async function updateRepositorySettings(
     }
 
     // Handle CodeQL scanning
-    if (enableCodeScanning) {
+    if (enableCodeScanning !== null) {
       try {
         // Try to get current code scanning setup
         let currentCodeScanning = null;
@@ -1120,33 +1120,47 @@ export async function updateRepositorySettings(
             repo: repoName
           });
           currentCodeScanning = codeScanningData.state;
-        } catch {
-          // Default setup might not exist yet
-          currentCodeScanning = 'not-configured';
+        } catch (error) {
+          if (error.status === 404) {
+            currentCodeScanning = 'not-configured';
+          } else {
+            throw error;
+          }
         }
 
         result.currentCodeScanning = currentCodeScanning;
 
-        if (currentCodeScanning !== 'configured') {
+        const desiredState = enableCodeScanning ? 'configured' : 'not-configured';
+
+        if (currentCodeScanning !== desiredState) {
           result.codeScanningChange = {
             from: currentCodeScanning,
-            to: 'configured'
+            to: desiredState
           };
 
           if (!dryRun) {
             await octokit.rest.codeScanning.updateDefaultSetup({
               owner,
               repo: repoName,
-              state: 'configured',
+              state: desiredState,
               query_suite: 'default'
             });
-            result.codeScanningEnabled = true;
+            if (enableCodeScanning) {
+              result.codeScanningEnabled = true;
+            } else {
+              result.codeScanningDisabled = true;
+            }
           } else {
-            result.codeScanningWouldEnable = true;
+            if (enableCodeScanning) {
+              result.codeScanningWouldEnable = true;
+            } else {
+              result.codeScanningWouldDisable = true;
+            }
           }
-          const wouldPrefix = dryRun ? 'Would update ' : '';
+          const action = enableCodeScanning ? 'enable' : 'disable';
+          const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
           result.subResults.push(
-            createSubResult('code-scanning', SubResultStatus.CHANGED, `${wouldPrefix}CodeQL scanning`)
+            createSubResult('code-scanning', SubResultStatus.CHANGED, `${actionText} CodeQL scanning`)
           );
         } else {
           result.codeScanningUnchanged = true;
@@ -4067,17 +4081,18 @@ export async function run() {
 
         // Log code scanning changes
         if (result.codeScanningChange) {
+          const enabling = result.codeScanningChange.to === 'configured';
           if (dryRun) {
             core.info(
-              `  📊 Would enable CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+              `  📊 Would ${enabling ? 'enable' : 'disable'} CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
             );
           } else {
             core.info(
-              `  📊 CodeQL scanning enabled: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+              `  📊 CodeQL scanning ${enabling ? 'enabled' : 'disabled'}: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
             );
           }
         } else if (result.codeScanningUnchanged) {
-          core.info(`  📊 CodeQL scanning unchanged: already configured`);
+          core.info(`  📊 CodeQL scanning unchanged: ${result.currentCodeScanning}`);
         }
 
         if (result.codeScanningWarning) {
