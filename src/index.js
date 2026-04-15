@@ -3403,6 +3403,7 @@ export async function run() {
     };
 
     const dryRun = getBooleanInput('dry-run');
+    const writeJobSummary = getBooleanInput('write-job-summary') !== false;
 
     // Parse topics if provided
     const topicsInput = core.getInput('topics');
@@ -4290,93 +4291,97 @@ export async function run() {
     core.setOutput('results', JSON.stringify(results));
 
     // Create summary
-    const summaryTable = [
-      [
-        { data: 'Repository', header: true },
-        { data: 'Status', header: true },
-        { data: 'Details', header: true }
-      ],
-      ...results.map(r => {
-        if (!r.success) {
-          return [r.repository, '❌ Failed', r.error];
+    if (writeJobSummary) {
+      const summaryTable = [
+        [
+          { data: 'Repository', header: true },
+          { data: 'Status', header: true },
+          { data: 'Details', header: true }
+        ],
+        ...results.map(r => {
+          if (!r.success) {
+            return [r.repository, '❌ Failed', r.error];
+          }
+
+          const hasChanges = hasRepositoryChanges(r);
+          let status;
+          let details;
+
+          if (r.archived) {
+            status = '⏭️ Skipped';
+          } else if (r.hasWarnings) {
+            status = '⚠️ Warning';
+          } else if (hasChanges) {
+            status = '✅ Changed';
+          } else {
+            status = '➖ No changes';
+          }
+
+          if (r.archived) {
+            details = 'Repository is archived';
+          } else if (r.subResults && r.subResults.length > 0) {
+            const messages = r.subResults
+              .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
+              .map(s => formatSubResultSummary(s, dryRun));
+            details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
+          } else {
+            details = 'No changes needed';
+          }
+
+          return [r.repository, status, details];
+        })
+      ];
+
+      try {
+        const heading = dryRun
+          ? 'Bulk Repository Settings Update Results (DRY-RUN)'
+          : 'Bulk Repository Settings Update Results';
+
+        let summaryBuilder = core.summary.addHeading(heading);
+
+        if (dryRun) {
+          summaryBuilder = summaryBuilder.addRaw('\n**🔍 DRY-RUN MODE:** No changes were applied\n');
         }
 
-        const hasChanges = hasRepositoryChanges(r);
-        let status;
-        let details;
-
-        if (r.archived) {
-          status = '⏭️ Skipped';
-        } else if (r.hasWarnings) {
-          status = '⚠️ Warning';
-        } else if (hasChanges) {
-          status = '✅ Changed';
-        } else {
-          status = '➖ No changes';
+        summaryBuilder
+          .addRaw(`\n**Total Repositories:** ${repoList.length}`)
+          .addRaw(`\n**Changed:** ${changedCount}`)
+          .addRaw(`\n**Unchanged:** ${unchangedCount}`)
+          .addRaw(`\n**Warnings:** ${warningCount}`)
+          .addRaw(`\n**Failed:** ${failureCount}\n\n`)
+          .addTable(summaryTable);
+        await summaryBuilder.write();
+      } catch {
+        // Fallback for local development
+        const heading = dryRun
+          ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
+          : '📊 Bulk Repository Settings Update Results';
+        core.info(heading);
+        core.info(`Total Repositories: ${repoList.length}`);
+        core.info(`Changed: ${changedCount}`);
+        core.info(`Unchanged: ${unchangedCount}`);
+        core.info(`Warnings: ${warningCount}`);
+        core.info(`Failed: ${failureCount}`);
+        for (const result of results) {
+          if (!result.success) {
+            core.info(`  ${result.repository}: ❌ ${result.error}`);
+          } else if (result.hasWarnings) {
+            core.info(`  ${result.repository}: ⚠️ Warning`);
+          } else {
+            const hasChanges = hasRepositoryChanges(result);
+            const details = dryRun
+              ? hasChanges
+                ? 'Would update'
+                : 'No changes needed'
+              : hasChanges
+                ? 'Updated'
+                : 'No changes needed';
+            core.info(`  ${result.repository}: ${hasChanges ? '✅' : '➖'} ${details}`);
+          }
         }
-
-        if (r.archived) {
-          details = 'Repository is archived';
-        } else if (r.subResults && r.subResults.length > 0) {
-          const messages = r.subResults
-            .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
-            .map(s => formatSubResultSummary(s, dryRun));
-          details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
-        } else {
-          details = 'No changes needed';
-        }
-
-        return [r.repository, status, details];
-      })
-    ];
-
-    try {
-      const heading = dryRun
-        ? 'Bulk Repository Settings Update Results (DRY-RUN)'
-        : 'Bulk Repository Settings Update Results';
-
-      let summaryBuilder = core.summary.addHeading(heading);
-
-      if (dryRun) {
-        summaryBuilder = summaryBuilder.addRaw('\n**🔍 DRY-RUN MODE:** No changes were applied\n');
       }
-
-      summaryBuilder
-        .addRaw(`\n**Total Repositories:** ${repoList.length}`)
-        .addRaw(`\n**Changed:** ${changedCount}`)
-        .addRaw(`\n**Unchanged:** ${unchangedCount}`)
-        .addRaw(`\n**Warnings:** ${warningCount}`)
-        .addRaw(`\n**Failed:** ${failureCount}\n\n`)
-        .addTable(summaryTable)
-        .write();
-    } catch {
-      // Fallback for local development
-      const heading = dryRun
-        ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
-        : '📊 Bulk Repository Settings Update Results';
-      core.info(heading);
-      core.info(`Total Repositories: ${repoList.length}`);
-      core.info(`Changed: ${changedCount}`);
-      core.info(`Unchanged: ${unchangedCount}`);
-      core.info(`Warnings: ${warningCount}`);
-      core.info(`Failed: ${failureCount}`);
-      for (const result of results) {
-        if (!result.success) {
-          core.info(`  ${result.repository}: ❌ ${result.error}`);
-        } else if (result.hasWarnings) {
-          core.info(`  ${result.repository}: ⚠️ Warning`);
-        } else {
-          const hasChanges = hasRepositoryChanges(result);
-          const details = dryRun
-            ? hasChanges
-              ? 'Would update'
-              : 'No changes needed'
-            : hasChanges
-              ? 'Updated'
-              : 'No changes needed';
-          core.info(`  ${result.repository}: ${hasChanges ? '✅' : '➖'} ${details}`);
-        }
-      }
+    } else {
+      core.info('Job summary writing is disabled (write-job-summary: false)');
     }
 
     if (failureCount > 0) {
