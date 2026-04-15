@@ -338,7 +338,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.createAutolink.mockClear();
     mockOctokit.rest.repos.deleteAutolink.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
-    mockOctokit.rest.codeScanning.getDefaultSetup.mockClear();
+    mockOctokit.rest.codeScanning.getDefaultSetup.mockReset();
+    const error404 = new Error('Not found');
+    error404.status = 404;
+    mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(error404);
     mockOctokit.rest.orgs.get.mockClear();
     mockOctokit.rest.git.getRef.mockClear();
     mockOctokit.rest.git.createRef.mockClear();
@@ -1447,7 +1450,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       const settings = { allow_squash_merge: true };
@@ -1508,7 +1513,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
 
       const settings = { allow_squash_merge: true };
 
@@ -1561,7 +1568,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(new Error('Language not supported'));
 
       const settings = { allow_squash_merge: true };
@@ -2616,7 +2625,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
         data: { names: [] }
       });
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       // Mock immutable releases GET request (404 = not enabled)
       mockOctokit.request.mockImplementation(method => {
         if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
@@ -3396,7 +3407,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
       // getDefaultSetup throws = not-configured, desired = not-configured, so no change
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
 
       await run();
 
@@ -3468,7 +3481,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       await run();
@@ -3497,7 +3512,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
       // New input takes precedence (false), and repo is not configured, so no change
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
 
       await run();
 

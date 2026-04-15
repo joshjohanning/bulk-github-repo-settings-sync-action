@@ -1120,9 +1120,12 @@ export async function updateRepositorySettings(
             repo: repoName
           });
           currentCodeScanning = codeScanningData.state;
-        } catch {
-          // Default setup might not exist yet
-          currentCodeScanning = 'not-configured';
+        } catch (error) {
+          if (error.status === 404) {
+            currentCodeScanning = 'not-configured';
+          } else {
+            throw error;
+          }
         }
 
         result.currentCodeScanning = currentCodeScanning;
@@ -1139,7 +1142,7 @@ export async function updateRepositorySettings(
             await octokit.rest.codeScanning.updateDefaultSetup({
               owner,
               repo: repoName,
-              state: enableCodeScanning ? 'configured' : 'not-configured',
+              state: desiredState,
               query_suite: 'default'
             });
             if (enableCodeScanning) {
