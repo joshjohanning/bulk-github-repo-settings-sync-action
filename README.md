@@ -533,6 +533,88 @@ repos:
 
 For more information on autolinks, see the [GitHub documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources).
 
+### Syncing Environments
+
+Sync deployment environments across multiple repositories to standardize environment configurations (e.g., production, staging):
+
+```yml
+- name: Sync Environments
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    environments-file: './config/environments.json'
+    delete-unmanaged-environments: false
+```
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    environments-file: './config/environments/web-environments.json'
+  - repo: owner/repo2
+    environments-file: './config/environments/api-environments.json'
+  - repo: owner/repo3
+    # Skip environments sync for this repo
+```
+
+**Behavior:**
+
+- Creates environments that don't exist in the repository
+- Updates environments that exist but have different settings (wait timer, reviewers, branch policy, etc.)
+- Optionally deletes environments not defined in the configuration file (`delete-unmanaged-environments: true`)
+- If all environments match, no changes are made
+- Environments are applied directly via the GitHub API (not via pull request)
+
+**Example Environments JSON (`environments.json`):**
+
+```json
+{
+  "environments": [
+    {
+      "name": "production",
+      "wait_timer": 10,
+      "prevent_self_review": true,
+      "reviewers": [
+        {
+          "type": "User",
+          "id": 12345
+        },
+        {
+          "type": "Team",
+          "id": 67890
+        }
+      ],
+      "deployment_branch_policy": {
+        "protected_branches": true,
+        "custom_branch_policies": false
+      }
+    },
+    {
+      "name": "staging",
+      "wait_timer": 0,
+      "deployment_branch_policy": null
+    },
+    {
+      "name": "development"
+    }
+  ]
+}
+```
+
+| Field                      | Description                                                         | Required |
+| -------------------------- | ------------------------------------------------------------------- | -------- |
+| `name`                     | The name of the environment                                         | Yes      |
+| `wait_timer`               | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
+| `prevent_self_review`      | Whether to prevent the deployer from approving their own deployment | No       |
+| `reviewers`                | Array of users or teams that must review deployments                | No       |
+| `reviewers[].type`         | `"User"` or `"Team"`                                                | Yes      |
+| `reviewers[].id`           | The user or team ID                                                 | Yes      |
+| `deployment_branch_policy` | Branch restrictions for deployments (`null` for no restrictions)    | No       |
+
+For more information on environments, see the [GitHub documentation](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment).
+
 ### Syncing Copilot Instructions
 
 Sync a `copilot-instructions.md` file to `.github/copilot-instructions.md` in target repositories via pull requests:
@@ -855,6 +937,8 @@ Output shows what would change:
 | `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                       |
 | `workflow-files-pr-title`         | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`    |
 | `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                       |
+| `environments-file`               | Path to a JSON file containing environment configurations to sync to target repositories                                                   | No       | -                                       |
+| `delete-unmanaged-environments`   | Delete environments not defined in the environments configuration file                                                                     | No       | `false`                                 |
 | `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                       |
 | `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md` |
 | `codeowners`                      | Path to a CODEOWNERS file to sync to target repositories                                                                                   | No       | -                                       |

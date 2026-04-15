@@ -816,6 +816,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'pr-template-sync': 'PR template',
   'workflow-files-sync': 'workflow files',
   'autolinks-sync': 'autolinks',
+  'environments-sync': 'environments',
   'copilot-instructions-sync': 'copilot-instructions.md',
   'codeowners-sync': 'CODEOWNERS',
   'package-json-sync': 'package.json'
@@ -3270,6 +3271,296 @@ export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
 }
 
 /**
+ * Normalize an existing environment from the API response into a comparable format.
+ * Extracts wait_timer and reviewers from protection_rules.
+ * @param {Object} env - Environment object from the API
+ * @returns {Object} Normalized environment settings
+ */
+export function normalizeExistingEnvironment(env) {
+  const normalized = {
+    name: env.name,
+    wait_timer: 0,
+    prevent_self_review: env.prevent_self_review ?? false,
+    reviewers: [],
+    deployment_branch_policy: env.deployment_branch_policy ?? null
+  };
+
+  if (Array.isArray(env.protection_rules)) {
+    for (const rule of env.protection_rules) {
+      if (rule.type === 'wait_timer') {
+        normalized.wait_timer = rule.wait_timer ?? 0;
+      } else if (rule.type === 'required_reviewers' && Array.isArray(rule.reviewers)) {
+        normalized.reviewers = rule.reviewers.map(r => ({
+          type: r.type,
+          id: r.reviewer?.id
+        }));
+      }
+    }
+  }
+
+  // Sort reviewers by type and id for consistent comparison
+  normalized.reviewers.sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+
+  return normalized;
+}
+
+/**
+ * Normalize a desired environment from the config file into a comparable format.
+ * @param {Object} env - Environment object from the config
+ * @returns {Object} Normalized environment settings
+ */
+export function normalizeDesiredEnvironment(env) {
+  const normalized = {
+    name: env.name,
+    wait_timer: env.wait_timer ?? 0,
+    prevent_self_review: env.prevent_self_review ?? false,
+    reviewers: (env.reviewers ?? []).map(r => ({ type: r.type, id: r.id })),
+    deployment_branch_policy: env.deployment_branch_policy ?? null
+  };
+
+  // Sort reviewers by type and id for consistent comparison
+  normalized.reviewers.sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+
+  return normalized;
+}
+
+/**
+ * Compare two normalized environments for equality.
+ * @param {Object} a - First normalized environment
+ * @param {Object} b - Second normalized environment
+ * @returns {boolean} True if environments have the same settings
+ */
+export function environmentsEqual(a, b) {
+  if (a.wait_timer !== b.wait_timer) return false;
+  if (a.prevent_self_review !== b.prevent_self_review) return false;
+  if (JSON.stringify(a.reviewers) !== JSON.stringify(b.reviewers)) return false;
+  if (JSON.stringify(a.deployment_branch_policy) !== JSON.stringify(b.deployment_branch_policy)) return false;
+  return true;
+}
+
+/**
+ * Sync environments to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} environmentsFilePath - Path to local environments JSON file
+ * @param {boolean} deleteUnmanaged - Delete environments not in the config
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncEnvironments(octokit, repo, environmentsFilePath, deleteUnmanaged, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Read the source environments JSON file
+    let environmentsConfig;
+    try {
+      const fileContent = fs.readFileSync(environmentsFilePath, 'utf8');
+      environmentsConfig = JSON.parse(fileContent);
+    } catch (error) {
+      return {
+        repository: repo,
+        success: false,
+        error: `Failed to read or parse environments file at ${environmentsFilePath}: ${error.message}`,
+        dryRun
+      };
+    }
+
+    // Validate that the config has an environments array
+    if (!Array.isArray(environmentsConfig.environments)) {
+      return {
+        repository: repo,
+        success: false,
+        error: 'Environments configuration must contain an "environments" array.',
+        dryRun
+      };
+    }
+
+    // Validate each environment entry has a name
+    for (const env of environmentsConfig.environments) {
+      if (!env.name || typeof env.name !== 'string') {
+        return {
+          repository: repo,
+          success: false,
+          error: 'Each environment must have a "name" field.',
+          dryRun
+        };
+      }
+    }
+
+    // Get existing environments for the repository
+    let existingEnvironments = [];
+    try {
+      const response = await octokit.request('GET /repos/{owner}/{repo}/environments', {
+        owner,
+        repo: repoName
+      });
+      existingEnvironments = response.data.environments ?? [];
+    } catch (error) {
+      if (error.status === 404) {
+        core.info(`  🌍 Repository ${repo} does not have environments accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Normalize environments for comparison
+    const normalizedExisting = new Map(existingEnvironments.map(env => [env.name, normalizeExistingEnvironment(env)]));
+
+    const environmentsToCreate = [];
+    const environmentsToUpdate = [];
+    const environmentsUnchanged = [];
+    const environmentsToDelete = [];
+
+    // Compare desired with existing
+    for (const desiredEnv of environmentsConfig.environments) {
+      const normalizedDesired = normalizeDesiredEnvironment(desiredEnv);
+      const existing = normalizedExisting.get(desiredEnv.name);
+
+      if (!existing) {
+        environmentsToCreate.push(desiredEnv);
+      } else if (!environmentsEqual(normalizedDesired, existing)) {
+        environmentsToUpdate.push(desiredEnv);
+      } else {
+        environmentsUnchanged.push(desiredEnv);
+      }
+    }
+
+    // Find environments to delete (exist in repo but not in config)
+    if (deleteUnmanaged) {
+      const desiredNames = new Set(environmentsConfig.environments.map(e => e.name));
+      for (const existingEnv of existingEnvironments) {
+        if (!desiredNames.has(existingEnv.name)) {
+          environmentsToDelete.push(existingEnv);
+        }
+      }
+    }
+
+    // If no changes needed, return early
+    if (environmentsToCreate.length === 0 && environmentsToUpdate.length === 0 && environmentsToDelete.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        environments: 'unchanged',
+        message: `All ${environmentsUnchanged.length} environment(s) are already up to date`,
+        environmentsUnchanged: environmentsUnchanged.length,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      const message = [];
+      if (environmentsToCreate.length > 0) {
+        message.push(`Would create ${environmentsToCreate.length} environment(s)`);
+      }
+      if (environmentsToUpdate.length > 0) {
+        message.push(`Would update ${environmentsToUpdate.length} environment(s)`);
+      }
+      if (environmentsToDelete.length > 0) {
+        message.push(`Would delete ${environmentsToDelete.length} environment(s)`);
+      }
+      return {
+        repository: repo,
+        success: true,
+        environments: 'would-update',
+        message: message.join(', '),
+        environmentsWouldCreate: environmentsToCreate.map(e => e.name),
+        environmentsWouldUpdate: environmentsToUpdate.map(e => e.name),
+        environmentsWouldDelete: environmentsToDelete.map(e => e.name),
+        environmentsUnchanged: environmentsUnchanged.length,
+        dryRun
+      };
+    }
+
+    // Create new environments
+    for (const env of environmentsToCreate) {
+      const params = {
+        owner,
+        repo: repoName,
+        environment_name: env.name
+      };
+      if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
+      if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
+      if (env.reviewers !== undefined) params.reviewers = env.reviewers;
+      if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
+
+      await octokit.request('PUT /repos/{owner}/{repo}/environments/{environment_name}', params);
+      core.info(`  🌍 Created environment: ${env.name}`);
+    }
+
+    // Update existing environments
+    for (const env of environmentsToUpdate) {
+      const params = {
+        owner,
+        repo: repoName,
+        environment_name: env.name
+      };
+      if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
+      if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
+      if (env.reviewers !== undefined) params.reviewers = env.reviewers;
+      if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
+
+      await octokit.request('PUT /repos/{owner}/{repo}/environments/{environment_name}', params);
+      core.info(`  🌍 Updated environment: ${env.name}`);
+    }
+
+    // Delete unmanaged environments
+    for (const env of environmentsToDelete) {
+      await octokit.request('DELETE /repos/{owner}/{repo}/environments/{environment_name}', {
+        owner,
+        repo: repoName,
+        environment_name: env.name
+      });
+      core.info(`  🌍 Deleted environment: ${env.name}`);
+    }
+
+    const message = [];
+    if (environmentsToCreate.length > 0) {
+      message.push(`Created ${environmentsToCreate.length} environment(s)`);
+    }
+    if (environmentsToUpdate.length > 0) {
+      message.push(`Updated ${environmentsToUpdate.length} environment(s)`);
+    }
+    if (environmentsToDelete.length > 0) {
+      message.push(`Deleted ${environmentsToDelete.length} environment(s)`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      environments: 'updated',
+      message: message.join(', '),
+      environmentsCreated: environmentsToCreate.map(e => e.name),
+      environmentsUpdated: environmentsToUpdate.map(e => e.name),
+      environmentsDeleted: environmentsToDelete.map(e => e.name),
+      environmentsUnchanged: environmentsUnchanged.length,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync environments: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Sync copilot-instructions.md file to target repository
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
@@ -3445,6 +3736,10 @@ export async function run() {
     // Get autolinks settings
     const autolinksFile = core.getInput('autolinks-file');
 
+    // Get environments settings
+    const environmentsFile = core.getInput('environments-file');
+    const deleteUnmanagedEnvironments = getBooleanInput('delete-unmanaged-environments') === true;
+
     // Get copilot instructions settings
     const copilotInstructionsMd = core.getInput('copilot-instructions-md');
     const copilotInstructionsPrTitle =
@@ -3487,12 +3782,13 @@ export async function run() {
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
+      environmentsFile ||
       copilotInstructionsMd ||
       codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -3540,6 +3836,9 @@ export async function run() {
     }
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
+    }
+    if (environmentsFile) {
+      core.info(`Environments will be synced from: ${environmentsFile}`);
     }
     if (copilotInstructionsMd) {
       core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
@@ -3688,6 +3987,14 @@ export async function run() {
       // Handle repo-specific autolinks-file
       const repoAutolinksFile =
         repoConfig['autolinks-file'] !== undefined ? repoConfig['autolinks-file'] : autolinksFile;
+
+      // Handle repo-specific environments-file
+      const repoEnvironmentsFile =
+        repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : environmentsFile;
+      const repoDeleteUnmanagedEnvironments =
+        repoConfig['delete-unmanaged-environments'] !== undefined
+          ? repoConfig['delete-unmanaged-environments'] === true
+          : deleteUnmanagedEnvironments;
 
       // Handle repo-specific copilot-instructions-md
       const repoCopilotInstructionsMd =
@@ -3954,6 +4261,39 @@ export async function run() {
           core.warning(`  ⚠️  ${autolinksResult.error}`);
           result.subResults.push(
             createSubResult('autolinks-sync', SubResultStatus.WARNING, 'Autolinks sync produced a warning')
+          );
+        }
+      }
+
+      // Sync environments if specified
+      if (repoEnvironmentsFile) {
+        core.info(`  🌍 Checking environments...`);
+        const environmentsResult = await syncEnvironments(
+          octokit,
+          repo,
+          repoEnvironmentsFile,
+          repoDeleteUnmanagedEnvironments,
+          dryRun
+        );
+
+        // Add environments result to the main result
+        result.environmentsSync = environmentsResult;
+
+        if (environmentsResult.success) {
+          core.info(`  🌍 ${environmentsResult.message}`);
+          if (environmentsResult.environments && environmentsResult.environments !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('environments-sync', SubResultStatus.CHANGED, environmentsResult.message, {
+                syncStatus: environmentsResult.environments
+              })
+            );
+          }
+        } else {
+          result.hasWarnings = true;
+          result.environmentsSyncWarning = environmentsResult.error;
+          core.warning(`  ⚠️  ${environmentsResult.error}`);
+          result.subResults.push(
+            createSubResult('environments-sync', SubResultStatus.WARNING, 'Environments sync produced a warning')
           );
         }
       }

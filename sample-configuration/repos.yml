@@ -22,6 +22,7 @@ repos:
       - './config/workflows/ci.yml'
       - './config/workflows/release.yml'
     autolinks-file: './config/autolinks/jira-autolinks.json'
+    environments-file: './config/environments/environments.json'
     copilot-instructions-md: './config/copilot/copilot-instructions.md'
     codeowners: './config/CODEOWNERS'
     package-json-file: './config/package.json'

@@ -145,6 +145,10 @@ inputs:
     description: 'Workflow files PR title'
   autolinks-file:
     description: 'Autolinks file'
+  environments-file:
+    description: 'Environments file'
+  delete-unmanaged-environments:
+    description: 'Delete unmanaged environments'
   copilot-instructions-md:
     description: 'Copilot instructions md'
   copilot-instructions-pr-title:
@@ -200,6 +204,8 @@ const mockActionYmlParsed = {
     'workflow-files': { description: 'Workflow files' },
     'workflow-files-pr-title': { description: 'Workflow files PR title' },
     'autolinks-file': { description: 'Autolinks file' },
+    'environments-file': { description: 'Environments file' },
+    'delete-unmanaged-environments': { description: 'Delete unmanaged environments' },
     'copilot-instructions-md': { description: 'Copilot instructions md' },
     'copilot-instructions-pr-title': { description: 'Copilot instructions PR title' },
     codeowners: { description: 'Codeowners file' },
@@ -293,6 +299,10 @@ const {
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
+  syncEnvironments,
+  normalizeExistingEnvironment,
+  normalizeDesiredEnvironment,
+  environmentsEqual,
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
@@ -3044,7 +3054,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -8090,6 +8100,529 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.autolinks).toBe('unchanged');
       expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('normalizeExistingEnvironment', () => {
+    test('should extract wait_timer from protection_rules', () => {
+      const env = {
+        name: 'production',
+        protection_rules: [{ type: 'wait_timer', wait_timer: 15 }],
+        deployment_branch_policy: null
+      };
+      const result = normalizeExistingEnvironment(env);
+      expect(result.wait_timer).toBe(15);
+      expect(result.name).toBe('production');
+    });
+
+    test('should extract reviewers from protection_rules', () => {
+      const env = {
+        name: 'production',
+        protection_rules: [
+          {
+            type: 'required_reviewers',
+            reviewers: [{ type: 'User', reviewer: { id: 123, login: 'user1' } }]
+          }
+        ],
+        deployment_branch_policy: null
+      };
+      const result = normalizeExistingEnvironment(env);
+      expect(result.reviewers).toEqual([{ type: 'User', id: 123 }]);
+    });
+
+    test('should handle missing protection_rules', () => {
+      const env = { name: 'staging', deployment_branch_policy: null };
+      const result = normalizeExistingEnvironment(env);
+      expect(result.wait_timer).toBe(0);
+      expect(result.reviewers).toEqual([]);
+      expect(result.prevent_self_review).toBe(false);
+    });
+
+    test('should preserve deployment_branch_policy', () => {
+      const env = {
+        name: 'production',
+        protection_rules: [],
+        deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
+      };
+      const result = normalizeExistingEnvironment(env);
+      expect(result.deployment_branch_policy).toEqual({
+        protected_branches: true,
+        custom_branch_policies: false
+      });
+    });
+  });
+
+  describe('normalizeDesiredEnvironment', () => {
+    test('should normalize a fully specified environment', () => {
+      const env = {
+        name: 'production',
+        wait_timer: 10,
+        prevent_self_review: true,
+        reviewers: [{ type: 'User', id: 123 }],
+        deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
+      };
+      const result = normalizeDesiredEnvironment(env);
+      expect(result).toEqual(env);
+    });
+
+    test('should default missing fields', () => {
+      const env = { name: 'staging' };
+      const result = normalizeDesiredEnvironment(env);
+      expect(result.wait_timer).toBe(0);
+      expect(result.prevent_self_review).toBe(false);
+      expect(result.reviewers).toEqual([]);
+      expect(result.deployment_branch_policy).toBeNull();
+    });
+  });
+
+  describe('environmentsEqual', () => {
+    test('should return true for equal environments', () => {
+      const a = {
+        wait_timer: 10,
+        prevent_self_review: true,
+        reviewers: [{ type: 'User', id: 123 }],
+        deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
+      };
+      expect(environmentsEqual(a, { ...a })).toBe(true);
+    });
+
+    test('should return false when wait_timer differs', () => {
+      const a = { wait_timer: 10, prevent_self_review: false, reviewers: [], deployment_branch_policy: null };
+      const b = { wait_timer: 20, prevent_self_review: false, reviewers: [], deployment_branch_policy: null };
+      expect(environmentsEqual(a, b)).toBe(false);
+    });
+
+    test('should return false when reviewers differ', () => {
+      const a = {
+        wait_timer: 0,
+        prevent_self_review: false,
+        reviewers: [{ type: 'User', id: 123 }],
+        deployment_branch_policy: null
+      };
+      const b = {
+        wait_timer: 0,
+        prevent_self_review: false,
+        reviewers: [{ type: 'Team', id: 456 }],
+        deployment_branch_policy: null
+      };
+      expect(environmentsEqual(a, b)).toBe(false);
+    });
+  });
+
+  describe('syncEnvironments', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.request.mockClear();
+    });
+
+    test('should create environments when none exist', async () => {
+      const envConfig = {
+        environments: [{ name: 'production', wait_timer: 10 }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return { data: { environments: [] } };
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('updated');
+      expect(result.environmentsCreated).toContain('production');
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          environment_name: 'production',
+          wait_timer: 10
+        })
+      );
+    });
+
+    test('should update environments with different settings', async () => {
+      const envConfig = {
+        environments: [{ name: 'production', wait_timer: 20 }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [{ type: 'wait_timer', wait_timer: 10 }],
+                  deployment_branch_policy: null
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('updated');
+      expect(result.environmentsUpdated).toContain('production');
+    });
+
+    test('should report unchanged when environments match', async () => {
+      const envConfig = {
+        environments: [{ name: 'staging' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('unchanged');
+      expect(result.environmentsUnchanged).toBe(1);
+    });
+
+    test('should delete unmanaged environments when flag is set', async () => {
+      const envConfig = {
+        environments: [{ name: 'production' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                },
+                {
+                  name: 'old-env',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        if (route === 'DELETE /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('updated');
+      expect(result.environmentsDeleted).toContain('old-env');
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.objectContaining({ environment_name: 'old-env' })
+      );
+    });
+
+    test('should not delete unmanaged environments when flag is false', async () => {
+      const envConfig = {
+        environments: [{ name: 'production' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                },
+                {
+                  name: 'old-env',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('unchanged');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.anything()
+      );
+    });
+
+    test('should handle dry-run mode', async () => {
+      const envConfig = {
+        environments: [{ name: 'production', wait_timer: 10 }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return { data: { environments: [] } };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, true);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('would-update');
+      expect(result.environmentsWouldCreate).toContain('production');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.anything()
+      );
+    });
+
+    test('should return error for invalid repository format', async () => {
+      const result = await syncEnvironments(mockOctokit, 'invalid', './environments.json', false, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
+    });
+
+    test('should return error for file read failure', async () => {
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
+        throw new Error('File not found');
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to read or parse environments file');
+    });
+
+    test('should return error for missing environments array', async () => {
+      setMockFileContent(JSON.stringify({ invalid: true }));
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('must contain an "environments" array');
+    });
+
+    test('should return error for environment missing name', async () => {
+      setMockFileContent(JSON.stringify({ environments: [{ wait_timer: 10 }] }));
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('must have a "name" field');
+    });
+
+    test('should handle API 404 for listing environments', async () => {
+      const envConfig = {
+        environments: [{ name: 'production' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          const error = new Error('Not Found');
+          error.status = 404;
+          throw error;
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      expect(result.success).toBe(true);
+      expect(result.environmentsCreated).toContain('production');
+    });
+
+    test('should handle API errors', async () => {
+      const envConfig = {
+        environments: [{ name: 'production' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          const error = new Error('Rate limit exceeded');
+          error.status = 429;
+          throw error;
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to sync environments');
+    });
+
+    test('should pass reviewers and deployment_branch_policy to API', async () => {
+      const envConfig = {
+        environments: [
+          {
+            name: 'production',
+            wait_timer: 5,
+            prevent_self_review: true,
+            reviewers: [{ type: 'User', id: 123 }],
+            deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
+          }
+        ]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return { data: { environments: [] } };
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.objectContaining({
+          environment_name: 'production',
+          wait_timer: 5,
+          prevent_self_review: true,
+          reviewers: [{ type: 'User', id: 123 }],
+          deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
+        })
+      );
+    });
+
+    test('should handle multiple environments with mixed create/update/delete', async () => {
+      const envConfig = {
+        environments: [{ name: 'production', wait_timer: 10 }, { name: 'staging' }, { name: 'new-env' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [{ type: 'wait_timer', wait_timer: 5 }],
+                  deployment_branch_policy: null
+                },
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                },
+                {
+                  name: 'old-env',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('updated');
+      expect(result.environmentsUpdated).toContain('production');
+      expect(result.environmentsCreated).toContain('new-env');
+      expect(result.environmentsDeleted).toContain('old-env');
+      expect(result.environmentsUnchanged).toBe(1);
+    });
+
+    test('should handle dry-run with delete-unmanaged', async () => {
+      const envConfig = {
+        environments: [{ name: 'production' }]
+      };
+
+      setMockFileContent(JSON.stringify(envConfig));
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                },
+                {
+                  name: 'old-env',
+                  protection_rules: [],
+                  deployment_branch_policy: null,
+                  prevent_self_review: false
+                }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, true);
+
+      expect(result.success).toBe(true);
+      expect(result.environments).toBe('would-update');
+      expect(result.environmentsWouldDelete).toContain('old-env');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}',
+        expect.anything()
+      );
     });
   });
 

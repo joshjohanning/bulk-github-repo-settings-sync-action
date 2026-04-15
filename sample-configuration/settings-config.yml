@@ -60,6 +60,7 @@ rules:
       dependabot-alerts: true
       dependabot-security-updates: true
       autolinks-file: './config/autolinks/jira.json'
+      environments-file: './config/environments/environments.json'
       codeowners: './config/CODEOWNERS.template'
       codeowners-vars:
         default_team: '@my-org/security-team'

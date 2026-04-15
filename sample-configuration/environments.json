@@ -1,0 +1,31 @@
+{
+  "environments": [
+    {
+      "name": "production",
+      "wait_timer": 10,
+      "prevent_self_review": true,
+      "reviewers": [
+        {
+          "type": "User",
+          "id": 12345
+        },
+        {
+          "type": "Team",
+          "id": 67890
+        }
+      ],
+      "deployment_branch_policy": {
+        "protected_branches": true,
+        "custom_branch_policies": false
+      }
+    },
+    {
+      "name": "staging",
+      "wait_timer": 0,
+      "deployment_branch_policy": null
+    },
+    {
+      "name": "development"
+    }
+  ]
+}
