@@ -772,7 +772,13 @@ function formatSubResultSummary(subResult, dryRun) {
   if (!label) return subResult.message;
 
   const syncStatus = subResult.syncStatus;
-  if (!syncStatus) return `${label}: ${subResult.message}`;
+  if (!syncStatus) {
+    // Only prefix with label for per-operation ruleset subResults
+    if (subResult.kind.startsWith('ruleset-')) {
+      return `${label}: ${subResult.message}`;
+    }
+    return subResult.message;
+  }
 
   const hasPr = subResult.prNumber != null;
   const prRef = hasPr ? formatPrLink(subResult.prNumber, subResult.prUrl) : '';
