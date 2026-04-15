@@ -298,7 +298,9 @@ const {
   escapeHtmlAttribute,
   formatPrLink,
   resetKnownRepoConfigKeysCache,
-  replaceTemplateVariables
+  replaceTemplateVariables,
+  resolveFilePath,
+  applyBasePathToRepoConfig
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -666,6 +668,230 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', ' , , ')).rejects.toThrow(
         'custom-property-value must contain at least one non-empty value after trimming'
       );
+    });
+
+    test('should resolve file paths with base-path in repos array', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './settings-sync/repos/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': 'dependabot/npm-actions.yml',
+            'rulesets-file': 'rulesets/branch-protection.json'
+          },
+          { repo: 'owner/repo2' }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': 'settings-sync/repos/dependabot/npm-actions.yml',
+          'rulesets-file': 'settings-sync/repos/rulesets/branch-protection.json'
+        },
+        { repo: 'owner/repo2' }
+      ]);
+    });
+
+    test('should not modify absolute paths when base-path is set', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './settings-sync/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': '/absolute/path/dependabot.yml',
+            gitignore: 'relative/gitignore'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': '/absolute/path/dependabot.yml',
+          gitignore: 'settings-sync/relative/gitignore'
+        }
+      ]);
+    });
+
+    test('should not modify paths when base-path is not set', async () => {
+      setMockFileContent('repos...');
+      setMockYamlContent({
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': 'dependabot/npm-actions.yml'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': 'dependabot/npm-actions.yml'
+        }
+      ]);
+    });
+
+    test('should resolve base-path with comma-separated rulesets-file', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'rulesets-file': 'rulesets/a.json, rulesets/b.json'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'rulesets-file': 'config/rulesets/a.json,config/rulesets/b.json'
+        }
+      ]);
+    });
+
+    test('should resolve base-path with array-format workflow-files', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'workflow-files': ['workflows/ci.yml', 'workflows/release.yml']
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'workflow-files': ['config/workflows/ci.yml', 'config/workflows/release.yml']
+        }
+      ]);
+    });
+
+    test('should resolve base-path with all file-path fields', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './base/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'rulesets-file': 'rulesets/r.json',
+            'dependabot-yml': 'dependabot.yml',
+            gitignore: 'gitignore-template',
+            'workflow-files': 'wf/ci.yml',
+            'copilot-instructions-md': 'copilot/instructions.md',
+            codeowners: 'CODEOWNERS',
+            'package-json-file': 'package.json',
+            'pull-request-template': 'pr-template.md',
+            'autolinks-file': 'autolinks.json'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'rulesets-file': 'base/rulesets/r.json',
+          'dependabot-yml': 'base/dependabot.yml',
+          gitignore: 'base/gitignore-template',
+          'workflow-files': 'base/wf/ci.yml',
+          'copilot-instructions-md': 'base/copilot/instructions.md',
+          codeowners: 'base/CODEOWNERS',
+          'package-json-file': 'base/package.json',
+          'pull-request-template': 'base/pr-template.md',
+          'autolinks-file': 'base/autolinks.json'
+        }
+      ]);
+    });
+
+    test('should reject non-string base-path', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': 123,
+        repos: [{ repo: 'owner/repo1' }]
+      });
+
+      await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow(`'base-path' must be a string`);
+    });
+
+    test('should resolve base-path with rules-based config', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: {
+              'dependabot-yml': 'dependabot.yml',
+              'rulesets-file': 'rulesets/ci.json'
+            }
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('config/dependabot.yml');
+      expect(result[0]['rulesets-file']).toBe('config/rulesets/ci.json');
+    });
+
+    test('should treat whitespace-only base-path as no-op', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': '   ',
+        repos: [{ repo: 'owner/repo1', 'dependabot-yml': './dep.yml' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('./dep.yml');
+    });
+  });
+
+  describe('resolveFilePath', () => {
+    test('should join base path with relative file path', () => {
+      expect(resolveFilePath('./base/', 'file.txt')).toBe('base/file.txt');
+    });
+
+    test('should not modify absolute paths', () => {
+      expect(resolveFilePath('./base/', '/absolute/file.txt')).toBe('/absolute/file.txt');
+    });
+
+    test('should return non-string values unchanged', () => {
+      expect(resolveFilePath('./base/', null)).toBeNull();
+      expect(resolveFilePath('./base/', undefined)).toBeUndefined();
+      expect(resolveFilePath('./base/', '')).toBe('');
+    });
+  });
+
+  describe('applyBasePathToRepoConfig', () => {
+    test('should return config unchanged when basePath is empty', () => {
+      const config = { repo: 'owner/repo1', gitignore: 'file.txt' };
+      expect(applyBasePathToRepoConfig(config, '')).toEqual(config);
+    });
+
+    test('should not modify non-file-path keys', () => {
+      const config = { repo: 'owner/repo1', 'allow-squash-merge': false };
+      const result = applyBasePathToRepoConfig(config, './base/');
+      expect(result).toEqual({ repo: 'owner/repo1', 'allow-squash-merge': false });
+    });
+
+    test('should resolve array values for rulesets-file', () => {
+      const config = { repo: 'owner/repo1', 'rulesets-file': ['a.json', 'b.json'] };
+      const result = applyBasePathToRepoConfig(config, './base/');
+      expect(result['rulesets-file']).toEqual(['base/a.json', 'base/b.json']);
     });
   });
 
