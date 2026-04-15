@@ -3331,6 +3331,33 @@ export function normalizeDesiredEnvironment(env) {
 }
 
 /**
+ * Compare two arrays of reviewer objects for equality.
+ * Assumes both arrays are already sorted by type and id.
+ * @param {Array} a - First reviewers array
+ * @param {Array} b - Second reviewers array
+ * @returns {boolean} True if reviewers are equal
+ */
+function reviewersEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].type !== b[i].type || a[i].id !== b[i].id) return false;
+  }
+  return true;
+}
+
+/**
+ * Compare two deployment branch policy objects for equality.
+ * @param {Object|null} a - First branch policy
+ * @param {Object|null} b - Second branch policy
+ * @returns {boolean} True if branch policies are equal
+ */
+function branchPoliciesEqual(a, b) {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return a.protected_branches === b.protected_branches && a.custom_branch_policies === b.custom_branch_policies;
+}
+
+/**
  * Compare two normalized environments for equality.
  * @param {Object} a - First normalized environment
  * @param {Object} b - Second normalized environment
@@ -3339,9 +3366,29 @@ export function normalizeDesiredEnvironment(env) {
 export function environmentsEqual(a, b) {
   if (a.wait_timer !== b.wait_timer) return false;
   if (a.prevent_self_review !== b.prevent_self_review) return false;
-  if (JSON.stringify(a.reviewers) !== JSON.stringify(b.reviewers)) return false;
-  if (JSON.stringify(a.deployment_branch_policy) !== JSON.stringify(b.deployment_branch_policy)) return false;
+  if (!reviewersEqual(a.reviewers, b.reviewers)) return false;
+  if (!branchPoliciesEqual(a.deployment_branch_policy, b.deployment_branch_policy)) return false;
   return true;
+}
+
+/**
+ * Build PUT request parameters for creating or updating an environment.
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {Object} env - Environment config object
+ * @returns {Object} Request parameters
+ */
+function buildEnvironmentParams(owner, repoName, env) {
+  const params = {
+    owner,
+    repo: repoName,
+    environment_name: env.name
+  };
+  if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
+  if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
+  if (env.reviewers !== undefined) params.reviewers = env.reviewers;
+  if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
+  return params;
 }
 
 /**
@@ -3488,33 +3535,19 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
 
     // Create new environments
     for (const env of environmentsToCreate) {
-      const params = {
-        owner,
-        repo: repoName,
-        environment_name: env.name
-      };
-      if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
-      if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
-      if (env.reviewers !== undefined) params.reviewers = env.reviewers;
-      if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
-
-      await octokit.request('PUT /repos/{owner}/{repo}/environments/{environment_name}', params);
+      await octokit.request(
+        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+        buildEnvironmentParams(owner, repoName, env)
+      );
       core.info(`  🌍 Created environment: ${env.name}`);
     }
 
     // Update existing environments
     for (const env of environmentsToUpdate) {
-      const params = {
-        owner,
-        repo: repoName,
-        environment_name: env.name
-      };
-      if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
-      if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
-      if (env.reviewers !== undefined) params.reviewers = env.reviewers;
-      if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
-
-      await octokit.request('PUT /repos/{owner}/{repo}/environments/{environment_name}', params);
+      await octokit.request(
+        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+        buildEnvironmentParams(owner, repoName, env)
+      );
       core.info(`  🌍 Updated environment: ${env.name}`);
     }
 
