@@ -1098,6 +1098,10 @@ export async function updateRepositorySettings(
     }
     if (settings.squash_merge_commit_message !== null) {
       updateParams.squash_merge_commit_message = settings.squash_merge_commit_message;
+      // GitHub API requires squash_merge_commit_title when squash_merge_commit_message is set
+      if (!updateParams.squash_merge_commit_title) {
+        updateParams.squash_merge_commit_title = currentRepo.squash_merge_commit_title;
+      }
       currentSettings.squash_merge_commit_message = currentRepo.squash_merge_commit_message;
       if (currentRepo.squash_merge_commit_message !== settings.squash_merge_commit_message) {
         changes.push({
@@ -1131,6 +1135,10 @@ export async function updateRepositorySettings(
     }
     if (settings.merge_commit_message !== null) {
       updateParams.merge_commit_message = settings.merge_commit_message;
+      // GitHub API requires merge_commit_title when merge_commit_message is set
+      if (!updateParams.merge_commit_title) {
+        updateParams.merge_commit_title = currentRepo.merge_commit_title;
+      }
       currentSettings.merge_commit_message = currentRepo.merge_commit_message;
       if (currentRepo.merge_commit_message !== settings.merge_commit_message) {
         changes.push({
