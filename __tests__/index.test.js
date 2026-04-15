@@ -3134,6 +3134,26 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setFailed).toHaveBeenCalledWith('Action failed with error: github-token is required');
     });
 
+    test('should fail when invalid enum value is provided for squash-merge-commit-title', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'squash-merge-commit-title': 'INVALID_VALUE'
+        };
+        return inputs[name] || '';
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Invalid value for 'squash-merge-commit-title': 'INVALID_VALUE'. Allowed values: PR_TITLE, COMMIT_OR_PR_TITLE`
+        )
+      );
+    });
+
     test('should fail when no settings specified', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -4319,6 +4339,51 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // repo1 should use override (false), repo2 should use global (true)
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+    });
+
+    test('should warn and use global default for invalid enum config in YAML', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'allow-squash-merge': 'true',
+          'squash-merge-commit-title': 'PR_TITLE'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    squash-merge-commit-title: INVALID_VALUE');
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', 'squash-merge-commit-title': 'INVALID_VALUE' }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // Should warn about invalid enum value
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(`Invalid value for 'squash-merge-commit-title'`)
+      );
+      // Should still process the repo using global default (PR_TITLE)
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          squash_merge_commit_title: 'PR_TITLE'
+        })
+      );
     });
 
     test('should process repo-specific topics as string', async () => {
