@@ -2684,6 +2684,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
           `Failed to fetch "${rulesetName}" (ID: ${existingRuleset.id}): ${error.message}`
         );
         warnSub.rulesetId = existingRuleset.id;
+        warnSub.rulesetName = rulesetName;
         subResults.push(warnSub);
         continue;
       }
