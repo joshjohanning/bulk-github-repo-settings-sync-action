@@ -338,6 +338,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.createAutolink.mockClear();
     mockOctokit.rest.repos.deleteAutolink.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
+    mockOctokit.rest.codeScanning.getDefaultSetup.mockClear();
     mockOctokit.rest.orgs.get.mockClear();
     mockOctokit.rest.git.getRef.mockClear();
     mockOctokit.rest.git.createRef.mockClear();
@@ -1461,6 +1462,95 @@ describe('Bulk GitHub Repository Settings Action', () => {
         state: 'configured',
         query_suite: 'default'
       });
+    });
+
+    test('should disable CodeQL scanning when requested and currently configured', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningDisabled).toBe(true);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        state: 'not-configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should not disable CodeQL scanning when already not configured', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningUnchanged).toBe(true);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should detect CodeQL disable change in dry-run mode', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, true);
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningWouldDisable).toBe(true);
+      expect(result.codeScanningChange).toEqual({
+        from: 'configured',
+        to: 'not-configured'
+      });
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
     test('should handle CodeQL setup failures gracefully', async () => {
@@ -3294,7 +3384,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     }
 
-    test('should allow code-scanning false as a valid setting (no API call made)', async () => {
+    test('should allow code-scanning false as a valid setting (no change when already not configured)', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
           'github-token': 'test-token',
@@ -3305,13 +3395,65 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      // getDefaultSetup throws = not-configured, desired = not-configured, so no change
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
 
       await run();
 
       // code-scanning: false is a valid setting (doesn't fail with "no settings specified")
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
-      // But the current implementation only supports enabling, so no API call is made
+      // Already not configured, so no update API call needed
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should disable CodeQL scanning when code-scanning is false and currently configured', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'not-configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should detect code-scanning change in dry-run when changing from true to false', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+
+      await run();
+
+      // Should detect the change in dry-run mode
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Would disable CodeQL scanning'));
+      // Should NOT actually call the update API in dry-run
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
@@ -3326,6 +3468,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       await run();
@@ -3353,6 +3496,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      // New input takes precedence (false), and repo is not configured, so no change
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
 
       await run();
 
@@ -3360,7 +3505,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(
         'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
       );
-      // New input takes precedence (false means no action, only true enables)
+      // New input takes precedence (false means disable), but repo is already not-configured so no update needed
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
