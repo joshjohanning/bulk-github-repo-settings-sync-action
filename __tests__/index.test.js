@@ -288,6 +288,7 @@ const {
   syncRepositoryRuleset,
   syncRepositoryRulesets,
   parseRulesetsFileValue,
+  stripRulesetReadonlyFields,
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
@@ -5177,6 +5178,94 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
+    test('should strip read-only fields from update API call', async () => {
+      // Source config that looks like a raw API response export (has read-only fields)
+      const rulesetConfig = {
+        id: 9620349,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        node_id: 'RRS_abc123',
+        created_at: '2025-11-08T08:49:56.048-06:00',
+        updated_at: '2025-11-08T08:49:56.128-06:00',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9620349' } }
+      };
+
+      // Existing ruleset has different enforcement → triggers update
+      const existingRuleset = {
+        id: 456,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'disabled',
+        rules: [{ type: 'deletion' }]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({ data: existingRuleset });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('updated');
+      const updateCall = mockOctokit.rest.repos.updateRepoRuleset.mock.calls[0][0];
+      expect(updateCall).not.toHaveProperty('id');
+      expect(updateCall).not.toHaveProperty('node_id');
+      expect(updateCall).not.toHaveProperty('source');
+      expect(updateCall).not.toHaveProperty('source_type');
+      expect(updateCall).not.toHaveProperty('created_at');
+      expect(updateCall).not.toHaveProperty('updated_at');
+      expect(updateCall).not.toHaveProperty('_links');
+      expect(updateCall).not.toHaveProperty('current_user_can_bypass');
+      expect(updateCall.name).toBe('ci');
+      expect(updateCall.enforcement).toBe('active');
+    });
+
+    test('should strip read-only fields from create API call', async () => {
+      // Source config that looks like a raw API response export (has read-only fields)
+      const rulesetConfig = {
+        id: 9620349,
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        node_id: 'RRS_abc123',
+        created_at: '2025-11-08T08:49:56.048-06:00',
+        updated_at: '2025-11-08T08:49:56.128-06:00',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9620349' } }
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([]); // No existing rulesets → triggers create
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 100, name: 'ci' }
+      });
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('created');
+      const createCall = mockOctokit.rest.repos.createRepoRuleset.mock.calls[0][0];
+      expect(createCall).not.toHaveProperty('id');
+      expect(createCall).not.toHaveProperty('node_id');
+      expect(createCall).not.toHaveProperty('source');
+      expect(createCall).not.toHaveProperty('source_type');
+      expect(createCall).not.toHaveProperty('created_at');
+      expect(createCall).not.toHaveProperty('updated_at');
+      expect(createCall).not.toHaveProperty('_links');
+      expect(createCall).not.toHaveProperty('current_user_can_bypass');
+      expect(createCall.name).toBe('ci');
+      expect(createCall.enforcement).toBe('active');
+    });
+
     test('should handle dry-run mode for creation', async () => {
       const rulesetConfig = {
         name: 'ci',
@@ -5666,6 +5755,81 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.deletedRulesets[0].name).toBe('ci2');
       expect(result.deletedRulesets[0].deleted).toBe(false);
       expect(result.deletedRulesets[0].error).toContain('Permission denied');
+    });
+  });
+
+  // ─── stripRulesetReadonlyFields ──────────────────────────────────────
+
+  describe('stripRulesetReadonlyFields', () => {
+    test('should strip all known read-only fields', () => {
+      const config = {
+        id: 123,
+        node_id: 'abc',
+        source: 'owner/repo',
+        source_type: 'Repository',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+        _links: { self: { href: 'https://example.com' } },
+        current_user_can_bypass: 'always',
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      const result = stripRulesetReadonlyFields(config);
+
+      expect(result).toEqual({
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      });
+
+      expect(result).not.toHaveProperty('id');
+      expect(result).not.toHaveProperty('node_id');
+      expect(result).not.toHaveProperty('source');
+      expect(result).not.toHaveProperty('source_type');
+      expect(result).not.toHaveProperty('created_at');
+      expect(result).not.toHaveProperty('updated_at');
+      expect(result).not.toHaveProperty('_links');
+      expect(result).not.toHaveProperty('current_user_can_bypass');
+    });
+
+    test('should preserve writable fields', () => {
+      const config = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+        conditions: { ref_name: { exclude: [], include: ['~DEFAULT_BRANCH'] } },
+        rules: [{ type: 'deletion' }]
+      };
+
+      const result = stripRulesetReadonlyFields(config);
+      expect(result).toEqual(config);
+    });
+
+    test('should pass through unknown/new fields', () => {
+      const config = {
+        name: 'ci',
+        some_new_field: 'value',
+        another_future_field: [1, 2, 3]
+      };
+
+      const result = stripRulesetReadonlyFields(config);
+      expect(result).toEqual(config);
+    });
+
+    test('should return empty object for config with only read-only fields', () => {
+      const config = {
+        id: 123,
+        node_id: 'abc',
+        source: 'owner/repo'
+      };
+
+      const result = stripRulesetReadonlyFields(config);
+      expect(result).toEqual({});
     });
   });
 

@@ -2565,6 +2565,32 @@ export function parseRulesetsFileValue(value, context) {
   return paths;
 }
 
+const RULESET_READONLY_FIELDS = new Set([
+  'id',
+  'node_id',
+  'source',
+  'source_type',
+  'created_at',
+  'updated_at',
+  '_links',
+  'current_user_can_bypass'
+]);
+
+/**
+ * Strip read-only fields from a ruleset config for create/update requests.
+ * @param {Object} config - Full ruleset configuration (possibly exported from API)
+ * @returns {Object} Config with read-only fields removed
+ */
+export function stripRulesetReadonlyFields(config) {
+  const result = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!RULESET_READONLY_FIELDS.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 /**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
@@ -2698,25 +2724,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         continue;
       }
 
-      const existingConfig = {
-        name: fullRuleset.name,
-        target: fullRuleset.target,
-        enforcement: fullRuleset.enforcement,
-        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
-        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
-        rules: fullRuleset.rules
-      };
-
-      const normalizedSourceConfig = {
-        name: rulesetConfig.name,
-        target: rulesetConfig.target,
-        enforcement: rulesetConfig.enforcement,
-        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
-        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
-        rules: rulesetConfig.rules
-      };
-
-      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+      const existingConfig = stripRulesetReadonlyFields(fullRuleset);
+      const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
+      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
@@ -2738,7 +2748,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
               owner,
               repo: repoName,
               ruleset_id: existingRuleset.id,
-              ...rulesetConfig
+              ...stripRulesetReadonlyFields(rulesetConfig)
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -2768,7 +2778,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
           const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
             owner,
             repo: repoName,
-            ...rulesetConfig
+            ...stripRulesetReadonlyFields(rulesetConfig)
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
           subResults[subResults.length - 1].rulesetId = newRuleset.id;
