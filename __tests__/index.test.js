@@ -821,6 +821,38 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow(`'base-path' must be a string`);
     });
+
+    test('should resolve base-path with rules-based config', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: {
+              'dependabot-yml': 'dependabot.yml',
+              'rulesets-file': 'rulesets/ci.json'
+            }
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('config/dependabot.yml');
+      expect(result[0]['rulesets-file']).toBe('config/rulesets/ci.json');
+    });
+
+    test('should treat whitespace-only base-path as no-op', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': '   ',
+        repos: [{ repo: 'owner/repo1', 'dependabot-yml': './dep.yml' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('./dep.yml');
+    });
   });
 
   describe('resolveFilePath', () => {

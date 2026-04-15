@@ -26,8 +26,7 @@ import * as yaml from 'js-yaml';
 function getKnownRepoConfigKeys() {
   // 'repo' is always valid as it's the repository identifier in YAML config
   // 'codeowners-vars' is YAML-only config for template variables (no action input)
-  // 'base-path' is a top-level YAML-only config for resolving relative file paths
-  const keys = new Set(['repo', 'codeowners-vars', 'base-path']);
+  const keys = new Set(['repo', 'codeowners-vars']);
 
   try {
     // Get the directory where this script is located
@@ -710,7 +709,8 @@ export async function parseRepositories(
       }
 
       // Apply base-path resolution to file path config values
-      const basePath = data['base-path'];
+      const rawBasePath = data['base-path'];
+      const basePath = typeof rawBasePath === 'string' ? rawBasePath.trim() : rawBasePath;
       if (basePath) {
         if (typeof basePath !== 'string') {
           throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
