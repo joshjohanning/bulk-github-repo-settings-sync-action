@@ -2720,6 +2720,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
           )
         );
         subResults[subResults.length - 1].rulesetId = existingRuleset.id;
+        subResults[subResults.length - 1].rulesetName = rulesetName;
 
         if (!dryRun) {
           try {
@@ -2744,9 +2745,13 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
       }
     } else {
       core.info(`  🆕 ${wouldPrefix}Create ruleset: ${rulesetName}`);
-      subResults.push(
-        createSubResult('ruleset-create', SubResultStatus.CHANGED, `${wouldPrefix}create "${rulesetName}"`)
+      const createSub = createSubResult(
+        'ruleset-create',
+        SubResultStatus.CHANGED,
+        `${wouldPrefix}create "${rulesetName}"`
       );
+      createSub.rulesetName = rulesetName;
+      subResults.push(createSub);
 
       if (!dryRun) {
         try {
