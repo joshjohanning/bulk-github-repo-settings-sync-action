@@ -370,15 +370,15 @@ export async function parseConfigWithRules(config, octokit) {
       throw new Error(`Rule ${i + 1} must have a "selector" property`);
     }
 
-    if (!rule.settings) {
-      core.warning(`Rule ${i + 1} has no settings, skipping`);
-      continue;
+    // Default to empty settings object if not provided (rule applies default workflow settings)
+    if (rule.settings === undefined) {
+      rule.settings = {};
     }
 
     // Validate settings is a plain object
-    if (typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
+    if (rule.settings === null || typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
       throw new Error(
-        `Rule ${i + 1}: settings must be an object, got ${Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
+        `Rule ${i + 1}: settings must be an object, got ${rule.settings === null ? 'null' : Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
       );
     }
 
@@ -2580,6 +2580,37 @@ export function parseRulesetsFileValue(value, context) {
 }
 
 /**
+ * Read-only fields returned by the GitHub API that must not be sent in
+ * PUT / POST requests.  Uses a blocklist so that any *new* writable fields
+ * GitHub adds are passed through without requiring an action update.
+ */
+export const RULESET_READONLY_FIELDS = new Set([
+  'id',
+  'node_id',
+  'source',
+  'source_type',
+  'created_at',
+  'updated_at',
+  '_links',
+  'current_user_can_bypass'
+]);
+
+/**
+ * Return a shallow copy of `config` with all read-only API fields removed.
+ * @param {Object} config - Ruleset configuration object
+ * @returns {Object} Cleaned configuration object
+ */
+export function stripRulesetReadonlyFields(config) {
+  const result = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!RULESET_READONLY_FIELDS.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
  * and handles delete-unmanaged logic across all managed names.
@@ -2712,25 +2743,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         continue;
       }
 
-      const existingConfig = {
-        name: fullRuleset.name,
-        target: fullRuleset.target,
-        enforcement: fullRuleset.enforcement,
-        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
-        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
-        rules: fullRuleset.rules
-      };
-
-      const normalizedSourceConfig = {
-        name: rulesetConfig.name,
-        target: rulesetConfig.target,
-        enforcement: rulesetConfig.enforcement,
-        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
-        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
-        rules: rulesetConfig.rules
-      };
-
-      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+      const existingConfig = stripRulesetReadonlyFields(fullRuleset);
+      const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
+      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
@@ -2749,10 +2764,10 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         if (!dryRun) {
           try {
             await octokit.rest.repos.updateRepoRuleset({
+              ...stripRulesetReadonlyFields(rulesetConfig),
               owner,
               repo: repoName,
-              ruleset_id: existingRuleset.id,
-              ...rulesetConfig
+              ruleset_id: existingRuleset.id
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -2780,9 +2795,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
       if (!dryRun) {
         try {
           const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+            ...stripRulesetReadonlyFields(rulesetConfig),
             owner,
-            repo: repoName,
-            ...rulesetConfig
+            repo: repoName
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
           subResults[subResults.length - 1].rulesetId = newRuleset.id;

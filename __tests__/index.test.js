@@ -288,6 +288,7 @@ const {
   syncRepositoryRuleset,
   syncRepositoryRulesets,
   parseRulesetsFileValue,
+  stripRulesetReadonlyFields,
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
@@ -1216,21 +1217,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toContainEqual({ repo: 'my-org/repo3', 'allow-squash-merge': true });
     });
 
-    test('should skip rules without settings with warning', async () => {
+    test('should include repos from rules without settings (applies default workflow settings)', async () => {
       const config = {
         owner: 'my-org',
         rules: [
           {
             selector: { repos: ['my-org/repo1'] }
-            // No settings
+            // No settings - should still include the repo for default workflow settings
           }
         ]
       };
 
       const result = await parseConfigWithRules(config, mockOctokit);
 
-      expect(result).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('Rule 1 has no settings, skipping');
+      expect(result).toEqual([{ repo: 'my-org/repo1' }]);
     });
 
     test('should throw error when settings is not an object', async () => {
@@ -1261,6 +1261,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
         'Rule 1: settings must be an object, got array'
       );
+    });
+
+    test('should throw error when settings is explicitly null', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: null
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow('Rule 1: settings must be an object');
     });
 
     test('should throw error when selector fork filter is not a boolean', async () => {
@@ -5339,6 +5353,41 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
+    test('should detect changes in non-blocklisted fields during comparison', async () => {
+      // Source config has an unknown writable field that differs from API
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        some_future_field: 'new-value'
+      };
+
+      const existingRuleset = {
+        id: 789,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        source_type: 'Repository',
+        source: 'owner/repo',
+        some_future_field: 'old-value'
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+    });
+
     test('should handle dry-run mode for creation', async () => {
       const rulesetConfig = {
         name: 'ci',
@@ -5879,6 +5928,52 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
   });
 
+  describe('stripRulesetReadonlyFields', () => {
+    test('should strip all known read-only fields', () => {
+      const input = {
+        id: 123,
+        node_id: 'RRS_abc',
+        source: 'owner/repo',
+        source_type: 'Repository',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        _links: { self: { href: 'https://example.com' } },
+        current_user_can_bypass: 'always',
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      const result = stripRulesetReadonlyFields(input);
+
+      expect(result).toEqual({
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      });
+    });
+
+    test('should pass through unknown fields', () => {
+      const input = {
+        name: 'ci',
+        enforcement: 'active',
+        some_new_field: 'value'
+      };
+
+      const result = stripRulesetReadonlyFields(input);
+
+      expect(result).toEqual(input);
+    });
+
+    test('should return empty object for config with only read-only fields', () => {
+      const input = { id: 1, node_id: 'abc' };
+      const result = stripRulesetReadonlyFields(input);
+      expect(result).toEqual({});
+    });
+  });
+
   // ─── syncRepositoryRulesets (multi-file) ──────────────────────────────
 
   describe('syncRepositoryRulesets', () => {
@@ -6058,6 +6153,137 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.ruleset).toBe('created');
       expect(result.rulesetId).toBe(123);
       expect(result.subResults).toHaveLength(1);
+    });
+
+    test('should fail fast when duplicate ruleset names are found across files', async () => {
+      const rulesetA = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const rulesetB = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'disabled',
+        rules: [{ type: 'non_fast_forward' }]
+      };
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === './rulesets/a.json') return JSON.stringify(rulesetA);
+        if (filePath === './rulesets/b.json') return JSON.stringify(rulesetB);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        return '';
+      });
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        'owner/repo',
+        ['./rulesets/a.json', './rulesets/b.json'],
+        false,
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Duplicate ruleset name');
+      expect(result.error).toContain('ci');
+      // Should not have tried to fetch or create anything
+      expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should strip read-only fields when creating a ruleset', async () => {
+      const rulesetConfig = {
+        id: 9999,
+        node_id: 'RRS_abc123',
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9999' } }
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 100, name: 'ci' }
+      });
+
+      await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);
+      const callArgs = mockOctokit.rest.repos.createRepoRuleset.mock.calls[0][0];
+      // Read-only fields must not be present
+      expect(callArgs).not.toHaveProperty('id');
+      expect(callArgs).not.toHaveProperty('node_id');
+      expect(callArgs).not.toHaveProperty('source');
+      expect(callArgs).not.toHaveProperty('source_type');
+      expect(callArgs).not.toHaveProperty('created_at');
+      expect(callArgs).not.toHaveProperty('updated_at');
+      expect(callArgs).not.toHaveProperty('current_user_can_bypass');
+      expect(callArgs).not.toHaveProperty('_links');
+      // Writable fields must still be present
+      expect(callArgs).toHaveProperty('name', 'ci');
+      expect(callArgs).toHaveProperty('target', 'branch');
+      expect(callArgs).toHaveProperty('enforcement', 'active');
+      expect(callArgs).toHaveProperty('rules');
+    });
+
+    test('should strip read-only fields when updating a ruleset', async () => {
+      const rulesetConfig = {
+        id: 9999,
+        node_id: 'RRS_abc123',
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9999' } }
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: {
+          id: 456,
+          name: 'ci',
+          target: 'branch',
+          enforcement: 'disabled',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+      const callArgs = mockOctokit.rest.repos.updateRepoRuleset.mock.calls[0][0];
+      // Read-only fields must not be present
+      expect(callArgs).not.toHaveProperty('id');
+      expect(callArgs).not.toHaveProperty('node_id');
+      expect(callArgs).not.toHaveProperty('source');
+      expect(callArgs).not.toHaveProperty('source_type');
+      expect(callArgs).not.toHaveProperty('created_at');
+      expect(callArgs).not.toHaveProperty('updated_at');
+      expect(callArgs).not.toHaveProperty('current_user_can_bypass');
+      expect(callArgs).not.toHaveProperty('_links');
+      // Writable fields must still be present
+      expect(callArgs).toHaveProperty('name', 'ci');
+      expect(callArgs).toHaveProperty('target', 'branch');
+      expect(callArgs).toHaveProperty('enforcement', 'active');
+      expect(callArgs).toHaveProperty('rules');
+      // Must include the ruleset_id for the update
+      expect(callArgs).toHaveProperty('ruleset_id', 456);
     });
   });
 
