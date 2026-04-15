@@ -4242,8 +4242,8 @@ export async function run() {
           .addRaw(`\n**Unchanged:** ${unchangedCount}`)
           .addRaw(`\n**Warnings:** ${warningCount}`)
           .addRaw(`\n**Failed:** ${failureCount}\n\n`)
-          .addTable(summaryTable)
-          .write();
+          .addTable(summaryTable);
+        await summaryBuilder.write();
       } catch {
         // Fallback for local development
         const heading = dryRun
