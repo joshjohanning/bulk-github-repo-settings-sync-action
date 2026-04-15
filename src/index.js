@@ -2750,10 +2750,10 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         if (!dryRun) {
           try {
             await octokit.rest.repos.updateRepoRuleset({
+              ...stripRulesetReadonlyFields(rulesetConfig),
               owner,
               repo: repoName,
-              ruleset_id: existingRuleset.id,
-              ...stripRulesetReadonlyFields(rulesetConfig)
+              ruleset_id: existingRuleset.id
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -2781,9 +2781,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
       if (!dryRun) {
         try {
           const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+            ...stripRulesetReadonlyFields(rulesetConfig),
             owner,
-            repo: repoName,
-            ...stripRulesetReadonlyFields(rulesetConfig)
+            repo: repoName
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
           subResults[subResults.length - 1].rulesetId = newRuleset.id;
