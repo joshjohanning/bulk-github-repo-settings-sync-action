@@ -852,6 +852,7 @@ Output shows what would change:
 | `package-json-sync-engines`       | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                  |
 | `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`            |
 | `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                 |
+| `write-job-summary`               | Write a summary table to the GitHub Actions job summary                                                                                    | No       | `true`                                  |
 
 \* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
 

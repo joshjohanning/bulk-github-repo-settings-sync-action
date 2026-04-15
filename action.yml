@@ -159,6 +159,10 @@ inputs:
     description: 'Preview changes without applying them (logs what would be changed)'
     required: false
     default: 'false'
+  write-job-summary:
+    description: 'Write a summary table to the GitHub Actions job summary'
+    required: false
+    default: 'true'
 
 outputs:
   updated-repositories:

@@ -209,7 +209,8 @@ const mockActionYmlParsed = {
     'package-json-sync-scripts': { description: 'Sync scripts' },
     'package-json-sync-engines': { description: 'Sync engines' },
     'package-json-pr-title': { description: 'Package json PR title' },
-    'dry-run': { description: 'Dry run' }
+    'dry-run': { description: 'Dry run' },
+    'write-job-summary': { description: 'Write job summary' }
   }
 };
 
@@ -3429,6 +3430,27 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Bulk Repository Settings Update Results');
       expect(mockCore.summary.addTable).toHaveBeenCalled();
       expect(mockCore.summary.write).toHaveBeenCalled();
+    });
+
+    test('should skip job summary when write-job-summary is false', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'write-job-summary': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addHeading).not.toHaveBeenCalled();
+      expect(mockCore.summary.addTable).not.toHaveBeenCalled();
+      expect(mockCore.summary.write).not.toHaveBeenCalled();
+      expect(mockCore.info).toHaveBeenCalledWith('Job summary writing is disabled (write-job-summary: false)');
     });
 
     test('should include specific changes in summary table when settings change', async () => {
