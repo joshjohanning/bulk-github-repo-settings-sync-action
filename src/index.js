@@ -371,14 +371,14 @@ export async function parseConfigWithRules(config, octokit) {
     }
 
     // Default to empty settings object if not provided (rule applies default workflow settings)
-    if (!rule.settings) {
+    if (rule.settings === undefined) {
       rule.settings = {};
     }
 
     // Validate settings is a plain object
-    if (typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
+    if (rule.settings === null || typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
       throw new Error(
-        `Rule ${i + 1}: settings must be an object, got ${Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
+        `Rule ${i + 1}: settings must be an object, got ${rule.settings === null ? 'null' : Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
       );
     }
 
