@@ -370,9 +370,9 @@ export async function parseConfigWithRules(config, octokit) {
       throw new Error(`Rule ${i + 1} must have a "selector" property`);
     }
 
+    // Default to empty settings object if not provided (rule applies default workflow settings)
     if (!rule.settings) {
-      core.warning(`Rule ${i + 1} has no settings, skipping`);
-      continue;
+      rule.settings = {};
     }
 
     // Validate settings is a plain object
