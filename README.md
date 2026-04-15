@@ -876,6 +876,7 @@ For better security and rate limits, use a GitHub App:
    - **Repository Administration**: Read and write (required for updating repository settings and rulesets)
    - **Contents**: Read and write (required if syncing `dependabot.yml`)
    - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
+   - **Organization Custom Properties**: Read (required when using organization custom property filtering, including `custom-property` selectors in `settings-config.yml` or the `custom-property-name` / `custom-property-value` action inputs)
 2. Install it to your organization/repositories
 3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
 
