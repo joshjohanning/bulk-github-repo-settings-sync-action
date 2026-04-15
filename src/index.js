@@ -132,6 +132,72 @@ export function replaceTemplateVariables(content, vars) {
 }
 
 /**
+ * File-path config keys that should be resolved against base-path.
+ * @type {string[]}
+ */
+const FILE_PATH_CONFIG_KEYS = [
+  'rulesets-file',
+  'dependabot-yml',
+  'gitignore',
+  'workflow-files',
+  'copilot-instructions-md',
+  'codeowners',
+  'package-json-file',
+  'pull-request-template',
+  'autolinks-file'
+];
+
+/**
+ * Resolve a single file path against a base path.
+ * Absolute paths are returned unchanged; relative paths are joined with basePath.
+ * Non-string or falsy values are returned as-is.
+ * @param {string} basePath - Base path to prepend
+ * @param {*} filePath - File path to resolve (non-string values returned unchanged)
+ * @returns {*} Resolved file path, or original value if not a non-empty string
+ */
+export function resolveFilePath(basePath, filePath) {
+  if (!filePath || typeof filePath !== 'string') return filePath;
+  if (path.isAbsolute(filePath)) return filePath;
+  return path.join(basePath, filePath);
+}
+
+/**
+ * Apply base-path resolution to all file-path config values in a repo config object.
+ * Handles string values, comma-separated strings (for rulesets-file/workflow-files),
+ * and array values.
+ * @param {Object} repoConfig - Repository configuration object
+ * @param {string} basePath - Base path to prepend to relative file paths
+ * @returns {Object} New repo config with resolved file paths
+ */
+export function applyBasePathToRepoConfig(repoConfig, basePath) {
+  if (!basePath) return repoConfig;
+
+  const resolved = { ...repoConfig };
+  for (const key of FILE_PATH_CONFIG_KEYS) {
+    if (resolved[key] === undefined) continue;
+
+    const value = resolved[key];
+    if (typeof value === 'string') {
+      // rulesets-file and workflow-files support comma-separated paths
+      if (key === 'rulesets-file' || key === 'workflow-files') {
+        resolved[key] = value
+          .split(',')
+          .map(p => p.trim())
+          .filter(p => p.length > 0)
+          .map(p => resolveFilePath(basePath, p))
+          .join(',');
+      } else {
+        resolved[key] = resolveFilePath(basePath, value);
+      }
+    } else if (Array.isArray(value)) {
+      resolved[key] = value.map(p => (typeof p === 'string' ? resolveFilePath(basePath, p) : p));
+    }
+  }
+
+  return resolved;
+}
+
+/**
  * Get optional boolean input - returns null if not set.
  * Unlike core.getBooleanInput (which throws on empty input), this returns null
  * for unset inputs so callers can distinguish "not configured" from "false".
@@ -370,15 +436,15 @@ export async function parseConfigWithRules(config, octokit) {
       throw new Error(`Rule ${i + 1} must have a "selector" property`);
     }
 
-    if (!rule.settings) {
-      core.warning(`Rule ${i + 1} has no settings, skipping`);
-      continue;
+    // Default to empty settings object if not provided (rule applies default workflow settings)
+    if (rule.settings === undefined) {
+      rule.settings = {};
     }
 
     // Validate settings is a plain object
-    if (typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
+    if (rule.settings === null || typeof rule.settings !== 'object' || Array.isArray(rule.settings)) {
       throw new Error(
-        `Rule ${i + 1}: settings must be an object, got ${Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
+        `Rule ${i + 1}: settings must be an object, got ${rule.settings === null ? 'null' : Array.isArray(rule.settings) ? 'array' : typeof rule.settings}`
       );
     }
 
@@ -640,6 +706,17 @@ export async function parseRepositories(
         });
       } else {
         throw new Error('YAML file must contain a "rules" array or "repos" array');
+      }
+
+      // Apply base-path resolution to file path config values
+      const rawBasePath = data['base-path'];
+      const basePath = typeof rawBasePath === 'string' ? rawBasePath.trim() : rawBasePath;
+      if (basePath) {
+        if (typeof basePath !== 'string') {
+          throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
+        }
+        core.info(`Resolving file paths relative to base-path: ${basePath}`);
+        repoList = repoList.map(repo => applyBasePathToRepoConfig(repo, basePath));
       }
     } catch (error) {
       throw new Error(`Failed to parse repositories file: ${error.message}`);
@@ -1110,7 +1187,7 @@ export async function updateRepositorySettings(
     }
 
     // Handle CodeQL scanning
-    if (enableCodeScanning) {
+    if (enableCodeScanning !== null) {
       try {
         // Try to get current code scanning setup
         let currentCodeScanning = null;
@@ -1120,33 +1197,47 @@ export async function updateRepositorySettings(
             repo: repoName
           });
           currentCodeScanning = codeScanningData.state;
-        } catch {
-          // Default setup might not exist yet
-          currentCodeScanning = 'not-configured';
+        } catch (error) {
+          if (error.status === 404) {
+            currentCodeScanning = 'not-configured';
+          } else {
+            throw error;
+          }
         }
 
         result.currentCodeScanning = currentCodeScanning;
 
-        if (currentCodeScanning !== 'configured') {
+        const desiredState = enableCodeScanning ? 'configured' : 'not-configured';
+
+        if (currentCodeScanning !== desiredState) {
           result.codeScanningChange = {
             from: currentCodeScanning,
-            to: 'configured'
+            to: desiredState
           };
 
           if (!dryRun) {
             await octokit.rest.codeScanning.updateDefaultSetup({
               owner,
               repo: repoName,
-              state: 'configured',
+              state: desiredState,
               query_suite: 'default'
             });
-            result.codeScanningEnabled = true;
+            if (enableCodeScanning) {
+              result.codeScanningEnabled = true;
+            } else {
+              result.codeScanningDisabled = true;
+            }
           } else {
-            result.codeScanningWouldEnable = true;
+            if (enableCodeScanning) {
+              result.codeScanningWouldEnable = true;
+            } else {
+              result.codeScanningWouldDisable = true;
+            }
           }
-          const wouldPrefix = dryRun ? 'Would update ' : '';
+          const action = enableCodeScanning ? 'enable' : 'disable';
+          const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
           result.subResults.push(
-            createSubResult('code-scanning', SubResultStatus.CHANGED, `${wouldPrefix}CodeQL scanning`)
+            createSubResult('code-scanning', SubResultStatus.CHANGED, `${actionText} CodeQL scanning`)
           );
         } else {
           result.codeScanningUnchanged = true;
@@ -2566,6 +2657,37 @@ export function parseRulesetsFileValue(value, context) {
 }
 
 /**
+ * Read-only fields returned by the GitHub API that must not be sent in
+ * PUT / POST requests.  Uses a blocklist so that any *new* writable fields
+ * GitHub adds are passed through without requiring an action update.
+ */
+export const RULESET_READONLY_FIELDS = new Set([
+  'id',
+  'node_id',
+  'source',
+  'source_type',
+  'created_at',
+  'updated_at',
+  '_links',
+  'current_user_can_bypass'
+]);
+
+/**
+ * Return a shallow copy of `config` with all read-only API fields removed.
+ * @param {Object} config - Ruleset configuration object
+ * @returns {Object} Cleaned configuration object
+ */
+export function stripRulesetReadonlyFields(config) {
+  const result = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!RULESET_READONLY_FIELDS.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
  * and handles delete-unmanaged logic across all managed names.
@@ -2698,25 +2820,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         continue;
       }
 
-      const existingConfig = {
-        name: fullRuleset.name,
-        target: fullRuleset.target,
-        enforcement: fullRuleset.enforcement,
-        ...(fullRuleset.bypass_actors && { bypass_actors: fullRuleset.bypass_actors }),
-        ...(fullRuleset.conditions && { conditions: fullRuleset.conditions }),
-        rules: fullRuleset.rules
-      };
-
-      const normalizedSourceConfig = {
-        name: rulesetConfig.name,
-        target: rulesetConfig.target,
-        enforcement: rulesetConfig.enforcement,
-        ...(rulesetConfig.bypass_actors && { bypass_actors: rulesetConfig.bypass_actors }),
-        ...(rulesetConfig.conditions && { conditions: rulesetConfig.conditions }),
-        rules: rulesetConfig.rules
-      };
-
-      const configsMatch = JSON.stringify(existingConfig) === JSON.stringify(normalizedSourceConfig);
+      const existingConfig = stripRulesetReadonlyFields(fullRuleset);
+      const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
+      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
@@ -2735,10 +2841,10 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         if (!dryRun) {
           try {
             await octokit.rest.repos.updateRepoRuleset({
+              ...stripRulesetReadonlyFields(rulesetConfig),
               owner,
               repo: repoName,
-              ruleset_id: existingRuleset.id,
-              ...rulesetConfig
+              ruleset_id: existingRuleset.id
             });
           } catch (error) {
             core.warning(`  ⚠️  Failed to update ruleset "${rulesetName}": ${error.message}`);
@@ -2766,9 +2872,9 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
       if (!dryRun) {
         try {
           const { data: newRuleset } = await octokit.rest.repos.createRepoRuleset({
+            ...stripRulesetReadonlyFields(rulesetConfig),
             owner,
-            repo: repoName,
-            ...rulesetConfig
+            repo: repoName
           });
           core.info(`  📋 Created ruleset "${rulesetName}" (ID: ${newRuleset.id})`);
           subResults[subResults.length - 1].rulesetId = newRuleset.id;
@@ -4053,17 +4159,18 @@ export async function run() {
 
         // Log code scanning changes
         if (result.codeScanningChange) {
+          const enabling = result.codeScanningChange.to === 'configured';
           if (dryRun) {
             core.info(
-              `  📊 Would enable CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+              `  📊 Would ${enabling ? 'enable' : 'disable'} CodeQL scanning: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
             );
           } else {
             core.info(
-              `  📊 CodeQL scanning enabled: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
+              `  📊 CodeQL scanning ${enabling ? 'enabled' : 'disabled'}: ${result.codeScanningChange.from} → ${result.codeScanningChange.to}`
             );
           }
         } else if (result.codeScanningUnchanged) {
-          core.info(`  📊 CodeQL scanning unchanged: already configured`);
+          core.info(`  📊 CodeQL scanning unchanged: ${result.currentCodeScanning}`);
         }
 
         if (result.codeScanningWarning) {

@@ -110,6 +110,19 @@ repos:
     code-scanning: false
 ```
 
+**Optional: `base-path`**
+
+Use the `base-path` top-level property to avoid repeating a common directory prefix for all file-path settings (e.g., `rulesets-file`, `dependabot-yml`, `gitignore`, `workflow-files`, `copilot-instructions-md`, `codeowners`, `package-json-file`, `pull-request-template`, `autolinks-file`). Relative paths in per-repo overrides are resolved relative to `base-path`. Absolute paths are left unchanged.
+
+```yaml
+base-path: './settings-sync/repos/'
+repos:
+  - repo: owner/repo1
+    dependabot-yml: 'dependabot/npm-actions.yml' # resolved to ./settings-sync/repos/dependabot/npm-actions.yml
+  - repo: owner/repo2
+    rulesets-file: 'rulesets/branch-protection.json' # resolved to ./settings-sync/repos/rulesets/branch-protection.json
+```
+
 Use in workflow:
 
 ```yml

@@ -1,3 +1,5 @@
+# Optional: set a base path for all file-path settings (paths are resolved relative to this)
+# base-path: './config/'
 repos:
   # keep the defaults from the action
   - repo: joshjohanning/repo-1

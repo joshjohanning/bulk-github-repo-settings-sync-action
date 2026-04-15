@@ -289,6 +289,7 @@ const {
   syncRepositoryRuleset,
   syncRepositoryRulesets,
   parseRulesetsFileValue,
+  stripRulesetReadonlyFields,
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
@@ -298,7 +299,9 @@ const {
   escapeHtmlAttribute,
   formatPrLink,
   resetKnownRepoConfigKeysCache,
-  replaceTemplateVariables
+  replaceTemplateVariables,
+  resolveFilePath,
+  applyBasePathToRepoConfig
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -339,6 +342,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.createAutolink.mockClear();
     mockOctokit.rest.repos.deleteAutolink.mockClear();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
+    mockOctokit.rest.codeScanning.getDefaultSetup.mockReset();
+    const error404 = new Error('Not found');
+    error404.status = 404;
+    mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(error404);
     mockOctokit.rest.orgs.get.mockClear();
     mockOctokit.rest.git.getRef.mockClear();
     mockOctokit.rest.git.createRef.mockClear();
@@ -662,6 +669,230 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseRepositories('', '', 'my-org', mockOctokit, 'environment', ' , , ')).rejects.toThrow(
         'custom-property-value must contain at least one non-empty value after trimming'
       );
+    });
+
+    test('should resolve file paths with base-path in repos array', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './settings-sync/repos/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': 'dependabot/npm-actions.yml',
+            'rulesets-file': 'rulesets/branch-protection.json'
+          },
+          { repo: 'owner/repo2' }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': 'settings-sync/repos/dependabot/npm-actions.yml',
+          'rulesets-file': 'settings-sync/repos/rulesets/branch-protection.json'
+        },
+        { repo: 'owner/repo2' }
+      ]);
+    });
+
+    test('should not modify absolute paths when base-path is set', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './settings-sync/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': '/absolute/path/dependabot.yml',
+            gitignore: 'relative/gitignore'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': '/absolute/path/dependabot.yml',
+          gitignore: 'settings-sync/relative/gitignore'
+        }
+      ]);
+    });
+
+    test('should not modify paths when base-path is not set', async () => {
+      setMockFileContent('repos...');
+      setMockYamlContent({
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'dependabot-yml': 'dependabot/npm-actions.yml'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'dependabot-yml': 'dependabot/npm-actions.yml'
+        }
+      ]);
+    });
+
+    test('should resolve base-path with comma-separated rulesets-file', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'rulesets-file': 'rulesets/a.json, rulesets/b.json'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'rulesets-file': 'config/rulesets/a.json,config/rulesets/b.json'
+        }
+      ]);
+    });
+
+    test('should resolve base-path with array-format workflow-files', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'workflow-files': ['workflows/ci.yml', 'workflows/release.yml']
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'workflow-files': ['config/workflows/ci.yml', 'config/workflows/release.yml']
+        }
+      ]);
+    });
+
+    test('should resolve base-path with all file-path fields', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './base/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'rulesets-file': 'rulesets/r.json',
+            'dependabot-yml': 'dependabot.yml',
+            gitignore: 'gitignore-template',
+            'workflow-files': 'wf/ci.yml',
+            'copilot-instructions-md': 'copilot/instructions.md',
+            codeowners: 'CODEOWNERS',
+            'package-json-file': 'package.json',
+            'pull-request-template': 'pr-template.md',
+            'autolinks-file': 'autolinks.json'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'rulesets-file': 'base/rulesets/r.json',
+          'dependabot-yml': 'base/dependabot.yml',
+          gitignore: 'base/gitignore-template',
+          'workflow-files': 'base/wf/ci.yml',
+          'copilot-instructions-md': 'base/copilot/instructions.md',
+          codeowners: 'base/CODEOWNERS',
+          'package-json-file': 'base/package.json',
+          'pull-request-template': 'base/pr-template.md',
+          'autolinks-file': 'base/autolinks.json'
+        }
+      ]);
+    });
+
+    test('should reject non-string base-path', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': 123,
+        repos: [{ repo: 'owner/repo1' }]
+      });
+
+      await expect(parseRepositories('', 'repos.yml', '', mockOctokit)).rejects.toThrow(`'base-path' must be a string`);
+    });
+
+    test('should resolve base-path with rules-based config', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: {
+              'dependabot-yml': 'dependabot.yml',
+              'rulesets-file': 'rulesets/ci.json'
+            }
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('config/dependabot.yml');
+      expect(result[0]['rulesets-file']).toBe('config/rulesets/ci.json');
+    });
+
+    test('should treat whitespace-only base-path as no-op', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': '   ',
+        repos: [{ repo: 'owner/repo1', 'dependabot-yml': './dep.yml' }]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result[0]['dependabot-yml']).toBe('./dep.yml');
+    });
+  });
+
+  describe('resolveFilePath', () => {
+    test('should join base path with relative file path', () => {
+      expect(resolveFilePath('./base/', 'file.txt')).toBe('base/file.txt');
+    });
+
+    test('should not modify absolute paths', () => {
+      expect(resolveFilePath('./base/', '/absolute/file.txt')).toBe('/absolute/file.txt');
+    });
+
+    test('should return non-string values unchanged', () => {
+      expect(resolveFilePath('./base/', null)).toBeNull();
+      expect(resolveFilePath('./base/', undefined)).toBeUndefined();
+      expect(resolveFilePath('./base/', '')).toBe('');
+    });
+  });
+
+  describe('applyBasePathToRepoConfig', () => {
+    test('should return config unchanged when basePath is empty', () => {
+      const config = { repo: 'owner/repo1', gitignore: 'file.txt' };
+      expect(applyBasePathToRepoConfig(config, '')).toEqual(config);
+    });
+
+    test('should not modify non-file-path keys', () => {
+      const config = { repo: 'owner/repo1', 'allow-squash-merge': false };
+      const result = applyBasePathToRepoConfig(config, './base/');
+      expect(result).toEqual({ repo: 'owner/repo1', 'allow-squash-merge': false });
+    });
+
+    test('should resolve array values for rulesets-file', () => {
+      const config = { repo: 'owner/repo1', 'rulesets-file': ['a.json', 'b.json'] };
+      const result = applyBasePathToRepoConfig(config, './base/');
+      expect(result['rulesets-file']).toEqual(['base/a.json', 'base/b.json']);
     });
   });
 
@@ -1213,21 +1444,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toContainEqual({ repo: 'my-org/repo3', 'allow-squash-merge': true });
     });
 
-    test('should skip rules without settings with warning', async () => {
+    test('should include repos from rules without settings (applies default workflow settings)', async () => {
       const config = {
         owner: 'my-org',
         rules: [
           {
             selector: { repos: ['my-org/repo1'] }
-            // No settings
+            // No settings - should still include the repo for default workflow settings
           }
         ]
       };
 
       const result = await parseConfigWithRules(config, mockOctokit);
 
-      expect(result).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('Rule 1 has no settings, skipping');
+      expect(result).toEqual([{ repo: 'my-org/repo1' }]);
     });
 
     test('should throw error when settings is not an object', async () => {
@@ -1258,6 +1488,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await expect(parseConfigWithRules(configWithArray, mockOctokit)).rejects.toThrow(
         'Rule 1: settings must be an object, got array'
       );
+    });
+
+    test('should throw error when settings is explicitly null', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: null
+          }
+        ]
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow('Rule 1: settings must be an object');
     });
 
     test('should throw error when selector fork filter is not a boolean', async () => {
@@ -1447,7 +1691,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       const settings = { allow_squash_merge: true };
@@ -1464,6 +1710,97 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
+    test('should disable CodeQL scanning when requested and currently configured', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningDisabled).toBe(true);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        state: 'not-configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should not disable CodeQL scanning when already not configured', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningUnchanged).toBe(true);
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should detect CodeQL disable change in dry-run mode', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, true);
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningWouldDisable).toBe(true);
+      expect(result.codeScanningChange).toEqual({
+        from: 'configured',
+        to: 'not-configured'
+      });
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
     test('should handle CodeQL setup failures gracefully', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
@@ -1472,7 +1809,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
       mockOctokit.rest.repos.update.mockResolvedValue({});
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockRejectedValue(new Error('Language not supported'));
 
       const settings = { allow_squash_merge: true };
@@ -2527,7 +2866,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.repos.getAllTopics.mockResolvedValue({
         data: { names: [] }
       });
-      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(new Error('Not found'));
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       // Mock immutable releases GET request (404 = not enabled)
       mockOctokit.request.mockImplementation(method => {
         if (method.includes('GET /repos/{owner}/{repo}/immutable-releases')) {
@@ -3295,7 +3636,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     }
 
-    test('should allow code-scanning false as a valid setting (no API call made)', async () => {
+    test('should allow code-scanning false as a valid setting (no change when already not configured)', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
           'github-token': 'test-token',
@@ -3306,13 +3647,67 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      // getDefaultSetup throws = not-configured, desired = not-configured, so no change
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
 
       await run();
 
       // code-scanning: false is a valid setting (doesn't fail with "no settings specified")
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
-      // But the current implementation only supports enabling, so no API call is made
+      // Already not configured, so no update API call needed
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should disable CodeQL scanning when code-scanning is false and currently configured', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+      mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        state: 'not-configured',
+        query_suite: 'default'
+      });
+    });
+
+    test('should detect code-scanning change in dry-run when changing from true to false', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'code-scanning': 'false',
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockResolvedValue({
+        data: { state: 'configured' }
+      });
+
+      await run();
+
+      // Should detect the change in dry-run mode
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining('Would disable CodeQL scanning'));
+      // Should NOT actually call the update API in dry-run
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
@@ -3327,6 +3722,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
       mockOctokit.rest.codeScanning.updateDefaultSetup.mockResolvedValue({});
 
       await run();
@@ -3354,6 +3752,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      // New input takes precedence (false), and repo is not configured, so no change
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Not found'), { status: 404 })
+      );
 
       await run();
 
@@ -3361,7 +3763,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(
         'The "enable-default-code-scanning" input is deprecated. Please use "code-scanning" instead.'
       );
-      // New input takes precedence (false means no action, only true enables)
+      // New input takes precedence (false means disable), but repo is already not-configured so no update needed
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
@@ -5199,6 +5601,41 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
     });
 
+    test('should detect changes in non-blocklisted fields during comparison', async () => {
+      // Source config has an unknown writable field that differs from API
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        some_future_field: 'new-value'
+      };
+
+      const existingRuleset = {
+        id: 789,
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        source_type: 'Repository',
+        source: 'owner/repo',
+        some_future_field: 'old-value'
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: existingRuleset
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+    });
+
     test('should handle dry-run mode for creation', async () => {
       const rulesetConfig = {
         name: 'ci',
@@ -5739,6 +6176,52 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
   });
 
+  describe('stripRulesetReadonlyFields', () => {
+    test('should strip all known read-only fields', () => {
+      const input = {
+        id: 123,
+        node_id: 'RRS_abc',
+        source: 'owner/repo',
+        source_type: 'Repository',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        _links: { self: { href: 'https://example.com' } },
+        current_user_can_bypass: 'always',
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+
+      const result = stripRulesetReadonlyFields(input);
+
+      expect(result).toEqual({
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      });
+    });
+
+    test('should pass through unknown fields', () => {
+      const input = {
+        name: 'ci',
+        enforcement: 'active',
+        some_new_field: 'value'
+      };
+
+      const result = stripRulesetReadonlyFields(input);
+
+      expect(result).toEqual(input);
+    });
+
+    test('should return empty object for config with only read-only fields', () => {
+      const input = { id: 1, node_id: 'abc' };
+      const result = stripRulesetReadonlyFields(input);
+      expect(result).toEqual({});
+    });
+  });
+
   // ─── syncRepositoryRulesets (multi-file) ──────────────────────────────
 
   describe('syncRepositoryRulesets', () => {
@@ -5918,6 +6401,137 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.ruleset).toBe('created');
       expect(result.rulesetId).toBe(123);
       expect(result.subResults).toHaveLength(1);
+    });
+
+    test('should fail fast when duplicate ruleset names are found across files', async () => {
+      const rulesetA = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const rulesetB = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'disabled',
+        rules: [{ type: 'non_fast_forward' }]
+      };
+
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === './rulesets/a.json') return JSON.stringify(rulesetA);
+        if (filePath === './rulesets/b.json') return JSON.stringify(rulesetB);
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) return mockActionYmlContent;
+        return '';
+      });
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        'owner/repo',
+        ['./rulesets/a.json', './rulesets/b.json'],
+        false,
+        false
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Duplicate ruleset name');
+      expect(result.error).toContain('ci');
+      // Should not have tried to fetch or create anything
+      expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should strip read-only fields when creating a ruleset', async () => {
+      const rulesetConfig = {
+        id: 9999,
+        node_id: 'RRS_abc123',
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9999' } }
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockOctokit.rest.repos.createRepoRuleset.mockResolvedValue({
+        data: { id: 100, name: 'ci' }
+      });
+
+      await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);
+      const callArgs = mockOctokit.rest.repos.createRepoRuleset.mock.calls[0][0];
+      // Read-only fields must not be present
+      expect(callArgs).not.toHaveProperty('id');
+      expect(callArgs).not.toHaveProperty('node_id');
+      expect(callArgs).not.toHaveProperty('source');
+      expect(callArgs).not.toHaveProperty('source_type');
+      expect(callArgs).not.toHaveProperty('created_at');
+      expect(callArgs).not.toHaveProperty('updated_at');
+      expect(callArgs).not.toHaveProperty('current_user_can_bypass');
+      expect(callArgs).not.toHaveProperty('_links');
+      // Writable fields must still be present
+      expect(callArgs).toHaveProperty('name', 'ci');
+      expect(callArgs).toHaveProperty('target', 'branch');
+      expect(callArgs).toHaveProperty('enforcement', 'active');
+      expect(callArgs).toHaveProperty('rules');
+    });
+
+    test('should strip read-only fields when updating a ruleset', async () => {
+      const rulesetConfig = {
+        id: 9999,
+        node_id: 'RRS_abc123',
+        name: 'ci',
+        target: 'branch',
+        source_type: 'Repository',
+        source: 'some-owner/some-repo',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }],
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+        current_user_can_bypass: 'always',
+        _links: { self: { href: 'https://api.github.com/repos/some-owner/some-repo/rulesets/9999' } }
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 456, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({
+        data: {
+          id: 456,
+          name: 'ci',
+          target: 'branch',
+          enforcement: 'disabled',
+          rules: [{ type: 'deletion' }]
+        }
+      });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+      const callArgs = mockOctokit.rest.repos.updateRepoRuleset.mock.calls[0][0];
+      // Read-only fields must not be present
+      expect(callArgs).not.toHaveProperty('id');
+      expect(callArgs).not.toHaveProperty('node_id');
+      expect(callArgs).not.toHaveProperty('source');
+      expect(callArgs).not.toHaveProperty('source_type');
+      expect(callArgs).not.toHaveProperty('created_at');
+      expect(callArgs).not.toHaveProperty('updated_at');
+      expect(callArgs).not.toHaveProperty('current_user_can_bypass');
+      expect(callArgs).not.toHaveProperty('_links');
+      // Writable fields must still be present
+      expect(callArgs).toHaveProperty('name', 'ci');
+      expect(callArgs).toHaveProperty('target', 'branch');
+      expect(callArgs).toHaveProperty('enforcement', 'active');
+      expect(callArgs).toHaveProperty('rules');
+      // Must include the ruleset_id for the update
+      expect(callArgs).toHaveProperty('ruleset_id', 456);
     });
   });
 
