@@ -28,13 +28,6 @@ const mockCore = {
   }
 };
 
-// Mock the @actions/github module
-const mockGithub = {
-  context: {
-    repo: { owner: 'test-owner', repo: 'test-repo' }
-  }
-};
-
 // Mock octokit instance
 const mockOctokit = {
   rest: {
@@ -274,7 +267,6 @@ function setMockYamlContent(result, forContent = '__default__') {
 
 // Mock the modules before importing the main module
 jest.unstable_mockModule('@actions/core', () => mockCore);
-jest.unstable_mockModule('@actions/github', () => mockGithub);
 jest.unstable_mockModule('@octokit/rest', () => ({
   Octokit: jest.fn(() => mockOctokit)
 }));
@@ -4104,7 +4096,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('ruleset');
+      expect(repoRow[2]).toContain('rulesets:');
     });
 
     test('should handle summary table with workflow files sync changes', async () => {
