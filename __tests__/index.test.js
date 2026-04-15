@@ -4096,7 +4096,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const tableCall = mockCore.summary.addTable.mock.calls[0][0];
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
-      expect(repoRow[2]).toContain('ruleset');
+      expect(repoRow[2]).toContain('rulesets:');
     });
 
     test('should handle summary table with workflow files sync changes', async () => {
