@@ -5757,9 +5757,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.subResults).toHaveLength(2);
       expect(result.subResults[0].kind).toBe('ruleset-create');
+      expect(result.subResults[0].status).toBe('created');
       expect(result.subResults[0].message).toContain('branch-protection');
       expect(result.subResults[0].rulesetName).toBe('branch-protection');
       expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].status).toBe('created');
       expect(result.subResults[1].message).toContain('tag-protection');
       expect(result.subResults[1].rulesetName).toBe('tag-protection');
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
@@ -5808,6 +5810,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // Both managed rulesets are unchanged, so no create/update subResults
       const deleteResults = result.subResults.filter(s => s.kind === 'ruleset-delete');
       expect(deleteResults).toHaveLength(1);
+      expect(deleteResults[0].status).toBe('deleted');
       expect(deleteResults[0].message).toContain('old-unmanaged-ruleset');
       // Backward-compat
       expect(result.deletedRulesets).toHaveLength(1);
@@ -5869,8 +5872,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.subResults).toHaveLength(2);
       expect(result.subResults[0].kind).toBe('ruleset-update');
+      expect(result.subResults[0].status).toBe('changed');
       expect(result.subResults[0].rulesetName).toBe('branch-protection');
       expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].status).toBe('created');
       expect(result.subResults[1].rulesetName).toBe('tag-protection');
       expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);

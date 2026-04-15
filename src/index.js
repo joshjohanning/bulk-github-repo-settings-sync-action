@@ -723,8 +723,19 @@ export async function parseRepositories(
  */
 const SubResultStatus = Object.freeze({
   CHANGED: 'changed',
+  CREATED: 'created',
+  DELETED: 'deleted',
   WARNING: 'warning'
 });
+
+/**
+ * Check if a sub-result status represents an actionable change (not a warning).
+ * @param {string} status - One of SubResultStatus values
+ * @returns {boolean}
+ */
+function isActionableStatus(status) {
+  return status === SubResultStatus.CHANGED || status === SubResultStatus.CREATED || status === SubResultStatus.DELETED;
+}
 
 /**
  * Human-readable labels for sync operation kinds in the summary table.
@@ -2757,7 +2768,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
       core.info(`  🆕 ${wouldPrefix}Create ruleset: ${rulesetName}`);
       const createSub = createSubResult(
         'ruleset-create',
-        SubResultStatus.CHANGED,
+        SubResultStatus.CREATED,
         `${wouldPrefix}create "${rulesetName}"`
       );
       createSub.rulesetName = rulesetName;
@@ -2793,7 +2804,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
         core.info(`  🗑️ ${wouldPrefix}Delete ruleset: ${existing.name} (ID: ${existing.id})`);
         const deleteSub = createSubResult(
           'ruleset-delete',
-          SubResultStatus.CHANGED,
+          SubResultStatus.DELETED,
           `${wouldPrefix}delete "${existing.name}" (ID: ${existing.id})`
         );
         deleteSub.rulesetName = existing.name;
@@ -2824,19 +2835,19 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
   }
 
   // Build backward-compatible result
-  const hasChanges = subResults.some(s => s.status === SubResultStatus.CHANGED);
+  const hasChanges = subResults.some(s => isActionableStatus(s.status));
   const hasWarnings = subResults.some(s => s.status === SubResultStatus.WARNING);
 
   // Determine aggregate status from non-delete operations
   const syncSubResults = subResults.filter(s => s.kind !== 'ruleset-delete');
-  const hasSyncChanges = syncSubResults.some(s => s.status === SubResultStatus.CHANGED);
+  const hasSyncChanges = syncSubResults.some(s => isActionableStatus(s.status));
 
   let ruleset = 'unchanged';
   let message = `All ${rulesetConfigs.length} ruleset(s) are already up to date`;
 
   if (hasSyncChanges) {
-    const firstChanged = syncSubResults.find(s => s.status === SubResultStatus.CHANGED);
-    if (firstChanged.kind === 'ruleset-create') {
+    const firstChanged = syncSubResults.find(s => isActionableStatus(s.status));
+    if (firstChanged.status === SubResultStatus.CREATED) {
       ruleset = dryRun ? 'would-create' : 'created';
     } else {
       ruleset = dryRun ? 'would-update' : 'updated';
@@ -3247,7 +3258,7 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
  */
 function hasRepositoryChanges(result) {
   if (result.subResults && result.subResults.length > 0) {
-    return result.subResults.some(s => s.status === SubResultStatus.CHANGED);
+    return result.subResults.some(s => isActionableStatus(s.status));
   }
   return false;
 }
@@ -4212,7 +4223,7 @@ export async function run() {
           details = 'Repository is archived';
         } else if (r.subResults && r.subResults.length > 0) {
           const messages = r.subResults
-            .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
+            .filter(s => s.status === SubResultStatus.WARNING || isActionableStatus(s.status))
             .map(s => formatSubResultSummary(s, dryRun));
           details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
         } else {
