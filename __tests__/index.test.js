@@ -5758,8 +5758,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.subResults).toHaveLength(2);
       expect(result.subResults[0].kind).toBe('ruleset-create');
       expect(result.subResults[0].message).toContain('branch-protection');
+      expect(result.subResults[0].rulesetName).toBe('branch-protection');
       expect(result.subResults[1].kind).toBe('ruleset-create');
       expect(result.subResults[1].message).toContain('tag-protection');
+      expect(result.subResults[1].rulesetName).toBe('tag-protection');
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
     });
 
@@ -5867,7 +5869,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.success).toBe(true);
       expect(result.subResults).toHaveLength(2);
       expect(result.subResults[0].kind).toBe('ruleset-update');
+      expect(result.subResults[0].rulesetName).toBe('branch-protection');
       expect(result.subResults[1].kind).toBe('ruleset-create');
+      expect(result.subResults[1].rulesetName).toBe('tag-protection');
       expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
       expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(1);
     });
