@@ -3280,7 +3280,7 @@ export function normalizeExistingEnvironment(env) {
   const normalized = {
     name: env.name,
     wait_timer: 0,
-    prevent_self_review: env.prevent_self_review ?? false,
+    prevent_self_review: false,
     reviewers: [],
     deployment_branch_policy: env.deployment_branch_policy ?? null
   };
@@ -3289,11 +3289,14 @@ export function normalizeExistingEnvironment(env) {
     for (const rule of env.protection_rules) {
       if (rule.type === 'wait_timer') {
         normalized.wait_timer = rule.wait_timer ?? 0;
-      } else if (rule.type === 'required_reviewers' && Array.isArray(rule.reviewers)) {
-        normalized.reviewers = rule.reviewers.map(r => ({
-          type: r.type,
-          id: r.reviewer?.id
-        }));
+      } else if (rule.type === 'required_reviewers') {
+        if (Array.isArray(rule.reviewers)) {
+          normalized.reviewers = rule.reviewers.map(r => ({
+            type: r.type,
+            id: r.reviewer?.id
+          }));
+        }
+        normalized.prevent_self_review = rule.prevent_self_review ?? false;
       }
     }
   }
@@ -3382,12 +3385,12 @@ function buildEnvironmentParams(owner, repoName, env) {
   const params = {
     owner,
     repo: repoName,
-    environment_name: env.name
+    environment_name: env.name,
+    wait_timer: env.wait_timer ?? 0,
+    prevent_self_review: env.prevent_self_review ?? false,
+    reviewers: env.reviewers ?? [],
+    deployment_branch_policy: env.deployment_branch_policy ?? null
   };
-  if (env.wait_timer !== undefined) params.wait_timer = env.wait_timer;
-  if (env.prevent_self_review !== undefined) params.prevent_self_review = env.prevent_self_review;
-  if (env.reviewers !== undefined) params.reviewers = env.reviewers;
-  if (env.deployment_branch_policy !== undefined) params.deployment_branch_policy = env.deployment_branch_policy;
   return params;
 }
 
@@ -3449,14 +3452,24 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
       }
     }
 
-    // Get existing environments for the repository
+    // Get existing environments for the repository (paginated)
     let existingEnvironments = [];
     try {
-      const response = await octokit.request('GET /repos/{owner}/{repo}/environments', {
-        owner,
-        repo: repoName
-      });
-      existingEnvironments = response.data.environments ?? [];
+      let page = 1;
+      const perPage = 30;
+      let hasMore = true;
+      while (hasMore) {
+        const response = await octokit.request('GET /repos/{owner}/{repo}/environments', {
+          owner,
+          repo: repoName,
+          per_page: perPage,
+          page
+        });
+        const envs = response.data.environments ?? [];
+        existingEnvironments.push(...envs);
+        hasMore = envs.length === perPage;
+        page++;
+      }
     } catch (error) {
       if (error.status === 404) {
         core.info(`  🌍 Repository ${repo} does not have environments accessible`);
@@ -3479,11 +3492,11 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
       const existing = normalizedExisting.get(desiredEnv.name);
 
       if (!existing) {
-        environmentsToCreate.push(desiredEnv);
+        environmentsToCreate.push(normalizedDesired);
       } else if (!environmentsEqual(normalizedDesired, existing)) {
-        environmentsToUpdate.push(desiredEnv);
+        environmentsToUpdate.push(normalizedDesired);
       } else {
-        environmentsUnchanged.push(desiredEnv);
+        environmentsUnchanged.push(normalizedDesired);
       }
     }
 
@@ -3771,7 +3784,7 @@ export async function run() {
 
     // Get environments settings
     const environmentsFile = core.getInput('environments-file');
-    const deleteUnmanagedEnvironments = getBooleanInput('delete-unmanaged-environments') === true;
+    const deleteUnmanagedEnvironments = getBooleanInput('delete-unmanaged-environments');
 
     // Get copilot instructions settings
     const copilotInstructionsMd = core.getInput('copilot-instructions-md');
@@ -4024,10 +4037,12 @@ export async function run() {
       // Handle repo-specific environments-file
       const repoEnvironmentsFile =
         repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : environmentsFile;
-      const repoDeleteUnmanagedEnvironments =
-        repoConfig['delete-unmanaged-environments'] !== undefined
-          ? repoConfig['delete-unmanaged-environments'] === true
-          : deleteUnmanagedEnvironments;
+      const repoDeleteUnmanagedEnvironments = coerceBooleanConfig(
+        repoConfig['delete-unmanaged-environments'],
+        'delete-unmanaged-environments',
+        repo,
+        deleteUnmanagedEnvironments
+      );
 
       // Handle repo-specific copilot-instructions-md
       const repoCopilotInstructionsMd =
