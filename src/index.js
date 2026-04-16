@@ -1289,7 +1289,7 @@ export async function updateRepositorySettings(
           });
           currentCodeScanning = codeScanningData.state;
         } catch (error) {
-          if (error.status === 404) {
+          if (error.status === 404 || (error.status === 403 && !enableCodeScanning)) {
             currentCodeScanning = 'not-configured';
           } else {
             throw error;
