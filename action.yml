@@ -133,7 +133,7 @@ inputs:
     description: 'Path to a JSON file containing autolink references to sync to target repositories'
     required: false
   environments:
-    description: 'Comma-separated list of environment names to create (e.g., "production, staging, development")'
+    description: 'Comma-separated list of environment names to sync (creates new, updates existing to defaults)'
     required: false
   environments-file:
     description: 'Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies)'

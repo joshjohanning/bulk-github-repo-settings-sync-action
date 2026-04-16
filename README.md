@@ -543,7 +543,7 @@ Sync deployment environments across multiple repositories to standardize environ
   with:
     github-token: ${{ steps.app-token.outputs.token }}
     repositories-file: 'repos.yml'
-    environments-file: './config/environments.json'
+    environments-file: './config/environments.yml'
     delete-unmanaged-environments: false
 ```
 
@@ -552,9 +552,9 @@ Or with repo-specific overrides in `repos.yml`:
 ```yaml
 repos:
   - repo: owner/repo1
-    environments-file: './config/environments/web-environments.json'
+    environments-file: './config/environments/web-environments.yml'
   - repo: owner/repo2
-    environments-file: './config/environments/api-environments.json'
+    environments-file: './config/environments/api-environments.yml'
   - repo: owner/repo3
     # Skip environments sync for this repo
 ```
@@ -567,51 +567,46 @@ repos:
 - If all environments match, no changes are made
 - Environments are applied directly via the GitHub API (not via pull request)
 
-**Example Environments JSON (`environments.json`):**
+**Example Environments Config (`environments.yml`):**
 
-```json
-{
-  "environments": [
-    {
-      "name": "production",
-      "wait_timer": 10,
-      "prevent_self_review": true,
-      "reviewers": [
-        {
-          "type": "User",
-          "id": 12345
-        },
-        {
-          "type": "Team",
-          "id": 67890
-        }
-      ],
-      "deployment_branch_policy": {
-        "protected_branches": true,
-        "custom_branch_policies": false
-      }
-    },
-    {
-      "name": "staging",
-      "wait_timer": 0,
-      "deployment_branch_policy": null
-    },
-    {
-      "name": "development"
-    }
-  ]
-}
+```yaml
+environments:
+  - name: production
+    wait_timer: 10
+    prevent_self_review: true
+    reviewers:
+      - type: User
+        login: joshjohanning
+      - type: Team
+        slug: platform-team
+    deployment_branch_policy:
+      protected_branches: true
+      custom_branch_policies: false
+    deployment_protection_rules:
+      - app: deployment-gate-demo
+
+  - name: staging
+    wait_timer: 0
+    deployment_branch_policy: null
+
+  - name: development
 ```
 
-| Field                      | Description                                                         | Required |
-| -------------------------- | ------------------------------------------------------------------- | -------- |
-| `name`                     | The name of the environment                                         | Yes      |
-| `wait_timer`               | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
-| `prevent_self_review`      | Whether to prevent the deployer from approving their own deployment | No       |
-| `reviewers`                | Array of users or teams that must review deployments                | No       |
-| `reviewers[].type`         | `"User"` or `"Team"`                                                | Yes      |
-| `reviewers[].id`           | The user or team ID                                                 | Yes      |
-| `deployment_branch_policy` | Branch restrictions for deployments (`null` for no restrictions)    | No       |
+| Field                               | Description                                                         | Required |
+| ----------------------------------- | ------------------------------------------------------------------- | -------- |
+| `name`                              | The name of the environment                                         | Yes      |
+| `wait_timer`                        | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
+| `prevent_self_review`               | Whether to prevent the deployer from approving their own deployment | No       |
+| `reviewers`                         | Array of users or teams that must review deployments                | No       |
+| `reviewers[].type`                  | `"User"` or `"Team"`                                                | Yes      |
+| `reviewers[].id`                    | The user or team ID (numeric)                                       | No\*     |
+| `reviewers[].login`                 | Username (for `User` type) — resolved to ID via API                 | No\*     |
+| `reviewers[].slug`                  | Team slug (for `Team` type) — resolved to ID via API                | No\*     |
+| `deployment_branch_policy`          | Branch restrictions for deployments (`null` for no restrictions)    | No       |
+| `deployment_protection_rules`       | Array of custom deployment gate apps                                | No       |
+| `deployment_protection_rules[].app` | App slug (resolved to integration ID via API)                       | Yes      |
+
+\* Each reviewer must have either `id`, `login` (User), or `slug` (Team).
 
 For more information on environments, see the [GitHub documentation](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment).
 

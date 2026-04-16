@@ -218,6 +218,7 @@ const mockActionYmlParsed = {
     'workflow-files': { description: 'Workflow files' },
     'workflow-files-pr-title': { description: 'Workflow files PR title' },
     'autolinks-file': { description: 'Autolinks file' },
+    environments: { description: 'Comma-separated environment names' },
     'environments-file': { description: 'Environments file' },
     'delete-unmanaged-environments': { description: 'Delete unmanaged environments' },
     'copilot-instructions-md': { description: 'Copilot instructions md' },

@@ -3403,7 +3403,6 @@ export function normalizeExistingEnvironment(env) {
 }
 
 /**
-/**
  * Resolve a reviewer entry to include a numeric ID.
  * If the reviewer has a `login` (User) or `slug` (Team), resolves to the numeric ID via API.
  * @param {Octokit} octokit - Octokit instance
@@ -3663,12 +3662,16 @@ function buildEnvironmentParams(owner, repoName, env) {
 export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) {
   const environments = [];
 
-  // Parse inline environment names (simple comma-separated list)
+  // Parse inline environment names (simple comma-separated list, deduplicated)
   if (environmentNames) {
-    const names = environmentNames
-      .split(',')
-      .map(n => n.trim())
-      .filter(n => n.length > 0);
+    const names = [
+      ...new Set(
+        environmentNames
+          .split(',')
+          .map(n => n.trim())
+          .filter(n => n.length > 0)
+      )
+    ];
     for (const name of names) {
       environments.push({ name });
     }
