@@ -3315,6 +3315,169 @@ export function normalizeExistingEnvironment(env) {
  * @param {Object} env - Environment object from the config
  * @returns {Object} Normalized environment settings
  */
+/**
+ * Resolve a reviewer entry to include a numeric ID.
+ * If the reviewer has a `login` (User) or `slug` (Team), resolves to the numeric ID via API.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository/org owner
+ * @param {Object} reviewer - Reviewer object with type and either id, login, or slug
+ * @returns {Promise<Object>} Reviewer with resolved id
+ */
+async function resolveReviewer(octokit, owner, reviewer) {
+  if (reviewer.id) return { type: reviewer.type, id: reviewer.id };
+
+  if (reviewer.type === 'User' && reviewer.login) {
+    const { data } = await octokit.rest.users.getByUsername({ username: reviewer.login });
+    return { type: 'User', id: data.id };
+  }
+
+  if (reviewer.type === 'Team' && reviewer.slug) {
+    const { data } = await octokit.rest.teams.getByName({ org: owner, team_slug: reviewer.slug });
+    return { type: 'Team', id: data.id };
+  }
+
+  throw new Error(
+    `Reviewer must have an "id", or "login" (for User) / "slug" (for Team). Got: ${JSON.stringify(reviewer)}`
+  );
+}
+
+/**
+ * Resolve all reviewers in an environment config, converting friendly names to IDs.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository/org owner
+ * @param {Array<Object>} reviewers - Array of reviewer objects
+ * @returns {Promise<Array<Object>>} Reviewers with resolved IDs
+ */
+async function resolveReviewers(octokit, owner, reviewers) {
+  if (!reviewers || reviewers.length === 0) return [];
+  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r)));
+}
+
+/**
+ * Sync deployment protection rules for an environment.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {string} envName - Environment name
+ * @param {Array<Object>} desiredRules - Desired protection rules (each with `app` slug)
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Array<Object>>} Array of subResults for rule operations
+ */
+async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, desiredRules, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Get available apps for this environment
+  let availableApps = [];
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps',
+      { owner, repo: repoName, environment_name: envName }
+    );
+    availableApps = data.available_custom_deployment_protection_rule_integrations ?? [];
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to list available deployment protection rule apps for ${envName}: ${error.message}`);
+    return subResults;
+  }
+
+  // Resolve app slugs to integration IDs
+  const resolvedRules = [];
+  for (const rule of desiredRules) {
+    const app = availableApps.find(a => a.slug === rule.app);
+    if (!app) {
+      core.warning(
+        `  ⚠️  Deployment protection rule app "${rule.app}" not found for environment ${envName}. ` +
+          `Available apps: ${availableApps.map(a => a.slug).join(', ') || 'none'}`
+      );
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `App "${rule.app}" not available for ${envName}`
+        )
+      );
+      continue;
+    }
+    resolvedRules.push({ integration_id: app.id, slug: rule.app });
+  }
+
+  // Get existing protection rules
+  let existingRules = [];
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+      { owner, repo: repoName, environment_name: envName }
+    );
+    existingRules = data.custom_deployment_protection_rules ?? [];
+  } catch {
+    existingRules = [];
+  }
+
+  const existingAppIds = new Set(existingRules.map(r => r.app?.id));
+  const desiredAppIds = new Set(resolvedRules.map(r => r.integration_id));
+
+  // Create missing rules
+  for (const rule of resolvedRules) {
+    if (!existingAppIds.has(rule.integration_id)) {
+      core.info(`  🛡️ ${wouldPrefix}Add deployment gate: ${rule.slug}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}add deployment gate "${rule.slug}" to ${envName}`
+        )
+      );
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+            { owner, repo: repoName, environment_name: envName, integration_id: rule.integration_id }
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to add deployment gate "${rule.slug}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'environment-protection-rule',
+            SubResultStatus.WARNING,
+            `Failed to add deployment gate "${rule.slug}": ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
+  // Delete rules not in desired set
+  for (const existing of existingRules) {
+    if (existing.app?.id && !desiredAppIds.has(existing.app.id)) {
+      const appSlug = existing.app?.slug ?? `ID ${existing.app?.id}`;
+      core.info(`  🗑️ ${wouldPrefix}Remove deployment gate: ${appSlug}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}remove deployment gate "${appSlug}" from ${envName}`
+        )
+      );
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}',
+            { owner, repo: repoName, environment_name: envName, protection_rule_id: existing.id }
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to remove deployment gate "${appSlug}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'environment-protection-rule',
+            SubResultStatus.WARNING,
+            `Failed to remove deployment gate "${appSlug}": ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
+  return subResults;
+}
+
 export function normalizeDesiredEnvironment(env) {
   const normalized = {
     name: env.name,
@@ -3487,6 +3650,25 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
     }
 
+    // Resolve reviewer friendly names to IDs
+    const resolvedEnvironments = [];
+    for (const env of environmentsList) {
+      const resolved = { ...env };
+      if (resolved.reviewers && resolved.reviewers.length > 0) {
+        try {
+          resolved.reviewers = await resolveReviewers(octokit, owner, resolved.reviewers);
+        } catch (error) {
+          return {
+            repository: repo,
+            success: false,
+            error: `Failed to resolve reviewers for environment "${env.name}": ${error.message}`,
+            dryRun
+          };
+        }
+      }
+      resolvedEnvironments.push(resolved);
+    }
+
     // Get existing environments for the repository (paginated)
     const existingEnvironments = [];
     try {
@@ -3522,7 +3704,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const environmentsToDelete = [];
 
     // Compare desired with existing
-    for (const desiredEnv of environmentsList) {
+    for (const desiredEnv of resolvedEnvironments) {
       const normalizedDesired = normalizeDesiredEnvironment(desiredEnv);
       const existing = normalizedExisting.get(desiredEnv.name);
 
@@ -3537,7 +3719,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
 
     // Find environments to delete (exist in repo but not in config)
     if (deleteUnmanaged) {
-      const desiredNames = new Set(environmentsList.map(e => e.name));
+      const desiredNames = new Set(resolvedEnvironments.map(e => e.name));
       for (const existingEnv of existingEnvironments) {
         if (!desiredNames.has(existingEnv.name)) {
           environmentsToDelete.push(existingEnv);
@@ -3545,8 +3727,18 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
     }
 
-    // If no changes needed, return early
-    if (environmentsToCreate.length === 0 && environmentsToUpdate.length === 0 && environmentsToDelete.length === 0) {
+    // Check for deployment protection rules on any desired environments
+    const envsWithProtectionRules = resolvedEnvironments.filter(
+      e => e.deployment_protection_rules && e.deployment_protection_rules.length > 0
+    );
+
+    // If no environment changes and no protection rules to sync, return early
+    if (
+      environmentsToCreate.length === 0 &&
+      environmentsToUpdate.length === 0 &&
+      environmentsToDelete.length === 0 &&
+      envsWithProtectionRules.length === 0
+    ) {
       return {
         repository: repo,
         success: true,
@@ -3607,6 +3799,11 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
         environment_name: env.name
       });
       core.info(`  🌍 Deleted environment: ${env.name}`);
+    }
+
+    // Sync deployment protection rules for environments that define them
+    for (const env of envsWithProtectionRules) {
+      await syncDeploymentProtectionRules(octokit, owner, repoName, env.name, env.deployment_protection_rules, dryRun);
     }
 
     const message = [];

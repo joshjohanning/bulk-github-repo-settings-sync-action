@@ -4,15 +4,20 @@ environments:
     prevent_self_review: true
     reviewers:
       - type: User
-        id: 12345
+        login: joshjohanning
       - type: Team
-        id: 67890
+        slug: platform-team
     deployment_branch_policy:
       protected_branches: true
       custom_branch_policies: false
+    deployment_protection_rules:
+      - app: deployment-gate-demo
 
   - name: staging
     wait_timer: 0
+    reviewers:
+      - type: Team
+        slug: dev-team
     deployment_branch_policy: null
 
   - name: development
