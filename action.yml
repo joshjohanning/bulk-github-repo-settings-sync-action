@@ -120,11 +120,14 @@ inputs:
   autolinks-file:
     description: 'Path to a JSON file containing autolink references to sync to target repositories'
     required: false
+  environments:
+    description: 'Comma-separated list of environment names to create (e.g., "production, staging, development")'
+    required: false
   environments-file:
-    description: 'Path to a JSON file containing environment configurations to sync to target repositories'
+    description: 'Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies)'
     required: false
   delete-unmanaged-environments:
-    description: 'Delete environments not defined in the environments configuration file'
+    description: 'Delete environments not defined in the environments configuration'
     required: false
     default: 'false'
   copilot-instructions-md:

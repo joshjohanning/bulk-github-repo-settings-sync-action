@@ -300,6 +300,7 @@ const {
   syncWorkflowFiles,
   syncAutolinks,
   syncEnvironments,
+  parseEnvironmentsConfig,
   normalizeExistingEnvironment,
   normalizeDesiredEnvironment,
   environmentsEqual,
@@ -3054,7 +3055,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -8220,7 +8221,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production', wait_timer: 10 }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return { data: { environments: [] } };
@@ -8231,7 +8232,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('updated');
@@ -8252,7 +8253,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production', wait_timer: 20 }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8273,7 +8274,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('updated');
@@ -8285,7 +8286,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'staging' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8304,7 +8305,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('unchanged');
@@ -8316,7 +8317,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8347,7 +8348,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, true, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('updated');
@@ -8363,7 +8364,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8388,7 +8389,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('unchanged');
@@ -8403,7 +8404,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production', wait_timer: 10 }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return { data: { environments: [] } };
@@ -8411,7 +8412,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, true);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, true);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('would-update');
@@ -8423,38 +8424,49 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should return error for invalid repository format', async () => {
-      const result = await syncEnvironments(mockOctokit, 'invalid', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'invalid', [{ name: 'prod' }], false, false);
       expect(result.success).toBe(false);
       expect(result.error).toContain('Invalid repository format');
     });
 
-    test('should return error for file read failure', async () => {
-      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
-        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
-          return mockActionYmlContent;
-        }
-        throw new Error('File not found');
-      });
-
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Failed to read or parse environments file');
-    });
-
-    test('should return error for missing environments array', async () => {
-      setMockFileContent(JSON.stringify({ invalid: true }));
-
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('must contain an "environments" array');
-    });
-
     test('should return error for environment missing name', async () => {
-      setMockFileContent(JSON.stringify({ environments: [{ wait_timer: 10 }] }));
-
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', [{ wait_timer: 10 }], false, false);
       expect(result.success).toBe(false);
       expect(result.error).toContain('must have a "name" field');
+    });
+
+    test('parseEnvironmentsConfig should parse inline names', () => {
+      const result = parseEnvironmentsConfig('production, staging, dev', null);
+      expect(result).toEqual([{ name: 'production' }, { name: 'staging' }, { name: 'dev' }]);
+    });
+
+    test('parseEnvironmentsConfig should parse YAML file', () => {
+      setMockFileContent('environments...');
+      setMockYamlContent({
+        environments: [{ name: 'production', wait_timer: 10 }, { name: 'staging' }]
+      });
+
+      const result = parseEnvironmentsConfig(null, './environments.yml');
+      expect(result).toEqual([{ name: 'production', wait_timer: 10 }, { name: 'staging' }]);
+    });
+
+    test('parseEnvironmentsConfig should merge inline and file (file overrides)', () => {
+      setMockFileContent('environments...');
+      setMockYamlContent({
+        environments: [{ name: 'production', wait_timer: 10 }]
+      });
+
+      const result = parseEnvironmentsConfig('production, staging', './environments.yml');
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({ name: 'production', wait_timer: 10 });
+      expect(result[1]).toEqual({ name: 'staging' });
+    });
+
+    test('parseEnvironmentsConfig should throw for file with no environments', () => {
+      setMockFileContent('invalid...');
+      setMockYamlContent({ invalid: true });
+
+      expect(() => parseEnvironmentsConfig(null, './envs.yml')).toThrow('must contain');
     });
 
     test('should handle API 404 for listing environments', async () => {
@@ -8462,7 +8474,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           const error = new Error('Not Found');
@@ -8475,7 +8487,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
       expect(result.success).toBe(true);
       expect(result.environmentsCreated).toContain('production');
     });
@@ -8485,7 +8497,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           const error = new Error('Rate limit exceeded');
@@ -8495,7 +8507,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync environments');
     });
@@ -8513,7 +8525,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         ]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return { data: { environments: [] } };
@@ -8524,7 +8536,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', false, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
 
       expect(result.success).toBe(true);
       expect(mockOctokit.request).toHaveBeenCalledWith(
@@ -8544,7 +8556,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production', wait_timer: 10 }, { name: 'staging' }, { name: 'new-env' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8574,7 +8586,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, false);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, true, false);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('updated');
@@ -8589,7 +8601,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         environments: [{ name: 'production' }]
       };
 
-      setMockFileContent(JSON.stringify(envConfig));
+      const testEnvironments = envConfig.environments;
       mockOctokit.request.mockImplementation(route => {
         if (route === 'GET /repos/{owner}/{repo}/environments') {
           return {
@@ -8614,7 +8626,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return {};
       });
 
-      const result = await syncEnvironments(mockOctokit, 'owner/repo', './environments.json', true, true);
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, true, true);
 
       expect(result.success).toBe(true);
       expect(result.environments).toBe('would-update');

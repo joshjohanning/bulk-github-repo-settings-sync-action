@@ -3395,15 +3395,74 @@ function buildEnvironmentParams(owner, repoName, env) {
 }
 
 /**
+ * Parse environments configuration from various input formats.
+ * Accepts a comma-separated string of names, a YAML/JSON file path, or returns null.
+ * @param {string} [environmentNames] - Comma-separated environment names (inline input)
+ * @param {string} [environmentsFilePath] - Path to YAML or JSON environments config file
+ * @returns {Array<Object>} Array of environment config objects (each with at least a name)
+ */
+export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) {
+  const environments = [];
+
+  // Parse inline environment names (simple comma-separated list)
+  if (environmentNames) {
+    const names = environmentNames
+      .split(',')
+      .map(n => n.trim())
+      .filter(n => n.length > 0);
+    for (const name of names) {
+      environments.push({ name });
+    }
+  }
+
+  // Parse environments file (YAML or JSON)
+  if (environmentsFilePath) {
+    const fileContent = fs.readFileSync(environmentsFilePath, 'utf8');
+    let parsed;
+
+    // Try YAML first, fall back to JSON
+    try {
+      parsed = yaml.load(fileContent);
+    } catch {
+      parsed = JSON.parse(fileContent);
+    }
+
+    const fileEnvs = Array.isArray(parsed?.environments) ? parsed.environments : Array.isArray(parsed) ? parsed : [];
+    if (fileEnvs.length === 0 && !environmentNames) {
+      throw new Error(
+        `Environments config file "${environmentsFilePath}" must contain an "environments" array or be a YAML/JSON array`
+      );
+    }
+
+    // File environments override inline ones with the same name
+    const inlineNames = new Set(environments.map(e => e.name));
+    for (const env of fileEnvs) {
+      if (!env.name || typeof env.name !== 'string') {
+        throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
+      }
+      if (inlineNames.has(env.name)) {
+        // Replace inline entry with richer file entry
+        const idx = environments.findIndex(e => e.name === env.name);
+        environments[idx] = env;
+      } else {
+        environments.push(env);
+      }
+    }
+  }
+
+  return environments;
+}
+
+/**
  * Sync environments to target repository
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
- * @param {string} environmentsFilePath - Path to local environments JSON file
+ * @param {Array<Object>} environmentsList - Array of environment config objects
  * @param {boolean} deleteUnmanaged - Delete environments not in the config
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncEnvironments(octokit, repo, environmentsFilePath, deleteUnmanaged, dryRun) {
+export async function syncEnvironments(octokit, repo, environmentsList, deleteUnmanaged, dryRun) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -3416,32 +3475,8 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
   }
 
   try {
-    // Read the source environments JSON file
-    let environmentsConfig;
-    try {
-      const fileContent = fs.readFileSync(environmentsFilePath, 'utf8');
-      environmentsConfig = JSON.parse(fileContent);
-    } catch (error) {
-      return {
-        repository: repo,
-        success: false,
-        error: `Failed to read or parse environments file at ${environmentsFilePath}: ${error.message}`,
-        dryRun
-      };
-    }
-
-    // Validate that the config has an environments array
-    if (!Array.isArray(environmentsConfig.environments)) {
-      return {
-        repository: repo,
-        success: false,
-        error: 'Environments configuration must contain an "environments" array.',
-        dryRun
-      };
-    }
-
     // Validate each environment entry has a name
-    for (const env of environmentsConfig.environments) {
+    for (const env of environmentsList) {
       if (!env.name || typeof env.name !== 'string') {
         return {
           repository: repo,
@@ -3453,7 +3488,7 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
     }
 
     // Get existing environments for the repository (paginated)
-    let existingEnvironments = [];
+    const existingEnvironments = [];
     try {
       let page = 1;
       const perPage = 30;
@@ -3487,7 +3522,7 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
     const environmentsToDelete = [];
 
     // Compare desired with existing
-    for (const desiredEnv of environmentsConfig.environments) {
+    for (const desiredEnv of environmentsList) {
       const normalizedDesired = normalizeDesiredEnvironment(desiredEnv);
       const existing = normalizedExisting.get(desiredEnv.name);
 
@@ -3502,7 +3537,7 @@ export async function syncEnvironments(octokit, repo, environmentsFilePath, dele
 
     // Find environments to delete (exist in repo but not in config)
     if (deleteUnmanaged) {
-      const desiredNames = new Set(environmentsConfig.environments.map(e => e.name));
+      const desiredNames = new Set(environmentsList.map(e => e.name));
       for (const existingEnv of existingEnvironments) {
         if (!desiredNames.has(existingEnv.name)) {
           environmentsToDelete.push(existingEnv);
@@ -3783,8 +3818,17 @@ export async function run() {
     const autolinksFile = core.getInput('autolinks-file');
 
     // Get environments settings
+    const environmentNames = core.getInput('environments');
     const environmentsFile = core.getInput('environments-file');
     const deleteUnmanagedEnvironments = getBooleanInput('delete-unmanaged-environments');
+    let globalEnvironments = [];
+    if (environmentNames || environmentsFile) {
+      try {
+        globalEnvironments = parseEnvironmentsConfig(environmentNames, environmentsFile);
+      } catch (error) {
+        throw new Error(`Failed to parse environments config: ${error.message}`);
+      }
+    }
 
     // Get copilot instructions settings
     const copilotInstructionsMd = core.getInput('copilot-instructions-md');
@@ -3828,13 +3872,13 @@ export async function run() {
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
-      environmentsFile ||
+      globalEnvironments.length > 0 ||
       copilotInstructionsMd ||
       codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -3884,7 +3928,9 @@ export async function run() {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
     }
     if (environmentsFile) {
-      core.info(`Environments will be synced from: ${environmentsFile}`);
+      if (globalEnvironments.length > 0) {
+        core.info(`Environments will be synced: ${globalEnvironments.map(e => e.name).join(', ')}`);
+      }
     }
     if (copilotInstructionsMd) {
       core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
@@ -4034,9 +4080,18 @@ export async function run() {
       const repoAutolinksFile =
         repoConfig['autolinks-file'] !== undefined ? repoConfig['autolinks-file'] : autolinksFile;
 
-      // Handle repo-specific environments-file
-      const repoEnvironmentsFile =
-        repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : environmentsFile;
+      // Handle repo-specific environments
+      let repoEnvironments = globalEnvironments;
+      if (repoConfig['environments'] !== undefined || repoConfig['environments-file'] !== undefined) {
+        try {
+          const repoEnvNames = repoConfig['environments'] !== undefined ? String(repoConfig['environments']) : null;
+          const repoEnvFile = repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : null;
+          repoEnvironments = parseEnvironmentsConfig(repoEnvNames, repoEnvFile);
+        } catch (error) {
+          core.warning(`Failed to parse environments config for ${repo}: ${error.message}`);
+          repoEnvironments = globalEnvironments;
+        }
+      }
       const repoDeleteUnmanagedEnvironments = coerceBooleanConfig(
         repoConfig['delete-unmanaged-environments'],
         'delete-unmanaged-environments',
@@ -4314,12 +4369,12 @@ export async function run() {
       }
 
       // Sync environments if specified
-      if (repoEnvironmentsFile) {
+      if (repoEnvironments.length > 0) {
         core.info(`  🌍 Checking environments...`);
         const environmentsResult = await syncEnvironments(
           octokit,
           repo,
-          repoEnvironmentsFile,
+          repoEnvironments,
           repoDeleteUnmanagedEnvironments,
           dryRun
         );
