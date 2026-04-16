@@ -144,7 +144,8 @@ const FILE_PATH_CONFIG_KEYS = [
   'codeowners',
   'package-json-file',
   'pull-request-template',
-  'autolinks-file'
+  'autolinks-file',
+  'environments-file'
 ];
 
 /**
@@ -3402,10 +3403,6 @@ export function normalizeExistingEnvironment(env) {
 }
 
 /**
- * Normalize a desired environment from the config file into a comparable format.
- * @param {Object} env - Environment object from the config
- * @returns {Object} Normalized environment settings
- */
 /**
  * Resolve a reviewer entry to include a numeric ID.
  * If the reviewer has a `login` (User) or `slug` (Team), resolves to the numeric ID via API.
@@ -3658,7 +3655,7 @@ function buildEnvironmentParams(owner, repoName, env) {
 
 /**
  * Parse environments configuration from various input formats.
- * Accepts a comma-separated string of names, a YAML/JSON file path, or returns null.
+ * Accepts a comma-separated string of names, a YAML/JSON file path, or both.
  * @param {string} [environmentNames] - Comma-separated environment names (inline input)
  * @param {string} [environmentsFilePath] - Path to YAML or JSON environments config file
  * @returns {Array<Object>} Array of environment config objects (each with at least a name)
@@ -4262,10 +4259,8 @@ export async function run() {
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
     }
-    if (environmentsFile) {
-      if (globalEnvironments.length > 0) {
-        core.info(`Environments will be synced: ${globalEnvironments.map(e => e.name).join(', ')}`);
-      }
+    if (globalEnvironments.length > 0) {
+      core.info(`Environments will be synced: ${globalEnvironments.map(e => e.name).join(', ')}`);
     }
     if (copilotInstructionsMd) {
       core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);

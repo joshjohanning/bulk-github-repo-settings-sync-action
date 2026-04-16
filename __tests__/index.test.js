@@ -153,6 +153,8 @@ inputs:
     description: 'Workflow files PR title'
   autolinks-file:
     description: 'Autolinks file'
+  environments:
+    description: 'Comma-separated environment names'
   environments-file:
     description: 'Environments file'
   delete-unmanaged-environments:
