@@ -3418,13 +3418,21 @@ async function resolveReviewer(octokit, owner, reviewer) {
   if (reviewer.id) return { type: reviewer.type, id: reviewer.id };
 
   if (reviewer.type === 'User' && reviewer.login) {
-    const { data } = await octokit.rest.users.getByUsername({ username: reviewer.login });
-    return { type: 'User', id: data.id };
+    try {
+      const { data } = await octokit.rest.users.getByUsername({ username: reviewer.login });
+      return { type: 'User', id: data.id };
+    } catch (error) {
+      throw new Error(`Failed to resolve User login "${reviewer.login}": ${error.message}`);
+    }
   }
 
   if (reviewer.type === 'Team' && reviewer.slug) {
-    const { data } = await octokit.rest.teams.getByName({ org: owner, team_slug: reviewer.slug });
-    return { type: 'Team', id: data.id };
+    try {
+      const { data } = await octokit.rest.teams.getByName({ org: owner, team_slug: reviewer.slug });
+      return { type: 'Team', id: data.id };
+    } catch (error) {
+      throw new Error(`Failed to resolve Team slug "${reviewer.slug}" in org "${owner}": ${error.message}`);
+    }
   }
 
   throw new Error(
@@ -3682,7 +3690,7 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
     }
 
     const fileEnvs = Array.isArray(parsed?.environments) ? parsed.environments : Array.isArray(parsed) ? parsed : [];
-    if (fileEnvs.length === 0 && !environmentNames) {
+    if (fileEnvs.length === 0) {
       throw new Error(
         `Environments config file "${environmentsFilePath}" must contain an "environments" array or be a YAML/JSON array`
       );
@@ -3819,9 +3827,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     }
 
     // Check for deployment protection rules on any desired environments
-    const envsWithProtectionRules = resolvedEnvironments.filter(
-      e => e.deployment_protection_rules && e.deployment_protection_rules.length > 0
-    );
+    const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
 
     // If no environment changes and no protection rules to sync, return early
     if (
@@ -3893,8 +3899,38 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     }
 
     // Sync deployment protection rules for environments that define them
+    const protectionRuleSubResults = [];
     for (const env of envsWithProtectionRules) {
-      await syncDeploymentProtectionRules(octokit, owner, repoName, env.name, env.deployment_protection_rules, dryRun);
+      const ruleResults = await syncDeploymentProtectionRules(
+        octokit,
+        owner,
+        repoName,
+        env.name,
+        env.deployment_protection_rules ?? [],
+        dryRun
+      );
+      protectionRuleSubResults.push(...ruleResults);
+    }
+
+    const hasProtectionChanges = protectionRuleSubResults.some(s => s.status === SubResultStatus.CHANGED);
+    const hasProtectionWarnings = protectionRuleSubResults.some(s => s.status === SubResultStatus.WARNING);
+
+    // If only protection rules were checked and nothing changed
+    if (
+      environmentsToCreate.length === 0 &&
+      environmentsToUpdate.length === 0 &&
+      environmentsToDelete.length === 0 &&
+      !hasProtectionChanges
+    ) {
+      return {
+        repository: repo,
+        success: true,
+        environments: 'unchanged',
+        message: `All ${resolvedEnvironments.length} environment(s) are already up to date`,
+        environmentsUnchanged: environmentsUnchanged.length,
+        protectionRuleSubResults,
+        dryRun
+      };
     }
 
     const message = [];
@@ -3907,16 +3943,23 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     if (environmentsToDelete.length > 0) {
       message.push(`Deleted ${environmentsToDelete.length} environment(s)`);
     }
+    if (hasProtectionChanges) {
+      message.push(`Updated deployment protection rules`);
+    }
+    if (hasProtectionWarnings) {
+      message.push(`Some deployment protection rule updates had warnings`);
+    }
 
     return {
       repository: repo,
       success: true,
-      environments: 'updated',
+      environments: dryRun ? 'would-update' : 'updated',
       message: message.join(', '),
       environmentsCreated: environmentsToCreate.map(e => e.name),
       environmentsUpdated: environmentsToUpdate.map(e => e.name),
       environmentsDeleted: environmentsToDelete.map(e => e.name),
       environmentsUnchanged: environmentsUnchanged.length,
+      protectionRuleSubResults,
       dryRun
     };
   } catch (error) {
