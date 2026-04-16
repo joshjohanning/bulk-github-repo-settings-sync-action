@@ -211,6 +211,23 @@ function getBooleanInput(name) {
 }
 
 /**
+ * Get optional enum input - returns null if not set.
+ * Validates the value against allowed values (case-insensitive).
+ * @param {string} name - Input name
+ * @param {string[]} allowedValues - Array of allowed enum values (uppercase)
+ * @returns {string|null} Uppercase enum value or null if not set
+ */
+function getEnumInput(name, allowedValues) {
+  const val = core.getInput(name);
+  if (val === '') return null;
+  const upper = val.trim().toUpperCase();
+  if (!allowedValues.includes(upper)) {
+    throw new Error(`Invalid value for '${name}': '${val}'. Allowed values: ${allowedValues.join(', ')}`);
+  }
+  return upper;
+}
+
+/**
  * Coerce a repo-specific YAML config value to boolean.
  * Falls back to the global default when the value is missing or not a proper boolean.
  * @param {*} value - Raw value from YAML config
@@ -229,6 +246,28 @@ function coerceBooleanConfig(value, fieldName, repo, globalDefault) {
   }
   core.warning(
     `Invalid boolean value for '${fieldName}' in repo '${repo}': ${JSON.stringify(value)}. Using global default.`
+  );
+  return globalDefault;
+}
+
+/**
+ * Coerce a repo-specific YAML config value to an enum string.
+ * Falls back to the global default when the value is missing or not a valid enum.
+ * @param {*} value - Raw value from YAML config
+ * @param {string} fieldName - Field name for warning messages
+ * @param {string} repo - Repository name for warning messages
+ * @param {string[]} allowedValues - Array of allowed enum values (uppercase)
+ * @param {string|null} globalDefault - Global input value to fall back to
+ * @returns {string|null} Uppercase enum value or global default
+ */
+function coerceEnumConfig(value, fieldName, repo, allowedValues, globalDefault) {
+  if (value === undefined) return globalDefault;
+  if (typeof value === 'string') {
+    const upper = value.trim().toUpperCase();
+    if (allowedValues.includes(upper)) return upper;
+  }
+  core.warning(
+    `Invalid value for '${fieldName}' in repo '${repo}': ${JSON.stringify(value)}. Allowed values: ${allowedValues.join(', ')}. Using global default.`
   );
   return globalDefault;
 }
@@ -1046,6 +1085,32 @@ export async function updateRepositorySettings(
         });
       }
     }
+    if (settings.squash_merge_commit_title !== null) {
+      updateParams.squash_merge_commit_title = settings.squash_merge_commit_title;
+      currentSettings.squash_merge_commit_title = currentRepo.squash_merge_commit_title;
+      if (currentRepo.squash_merge_commit_title !== settings.squash_merge_commit_title) {
+        changes.push({
+          setting: 'squash_merge_commit_title',
+          from: currentRepo.squash_merge_commit_title,
+          to: settings.squash_merge_commit_title
+        });
+      }
+    }
+    if (settings.squash_merge_commit_message !== null) {
+      updateParams.squash_merge_commit_message = settings.squash_merge_commit_message;
+      // GitHub API requires squash_merge_commit_title when squash_merge_commit_message is set
+      if (!updateParams.squash_merge_commit_title) {
+        updateParams.squash_merge_commit_title = currentRepo.squash_merge_commit_title;
+      }
+      currentSettings.squash_merge_commit_message = currentRepo.squash_merge_commit_message;
+      if (currentRepo.squash_merge_commit_message !== settings.squash_merge_commit_message) {
+        changes.push({
+          setting: 'squash_merge_commit_message',
+          from: currentRepo.squash_merge_commit_message,
+          to: settings.squash_merge_commit_message
+        });
+      }
+    }
     if (settings.allow_merge_commit !== null) {
       updateParams.allow_merge_commit = settings.allow_merge_commit;
       currentSettings.allow_merge_commit = currentRepo.allow_merge_commit;
@@ -1054,6 +1119,32 @@ export async function updateRepositorySettings(
           setting: 'allow_merge_commit',
           from: currentRepo.allow_merge_commit,
           to: settings.allow_merge_commit
+        });
+      }
+    }
+    if (settings.merge_commit_title !== null) {
+      updateParams.merge_commit_title = settings.merge_commit_title;
+      currentSettings.merge_commit_title = currentRepo.merge_commit_title;
+      if (currentRepo.merge_commit_title !== settings.merge_commit_title) {
+        changes.push({
+          setting: 'merge_commit_title',
+          from: currentRepo.merge_commit_title,
+          to: settings.merge_commit_title
+        });
+      }
+    }
+    if (settings.merge_commit_message !== null) {
+      updateParams.merge_commit_message = settings.merge_commit_message;
+      // GitHub API requires merge_commit_title when merge_commit_message is set
+      if (!updateParams.merge_commit_title) {
+        updateParams.merge_commit_title = currentRepo.merge_commit_title;
+      }
+      currentSettings.merge_commit_message = currentRepo.merge_commit_message;
+      if (currentRepo.merge_commit_message !== settings.merge_commit_message) {
+        changes.push({
+          setting: 'merge_commit_message',
+          from: currentRepo.merge_commit_message,
+          to: settings.merge_commit_message
         });
       }
     }
@@ -3375,7 +3466,11 @@ export async function run() {
     // Get settings inputs
     const settings = {
       allow_squash_merge: getBooleanInput('allow-squash-merge'),
+      squash_merge_commit_title: getEnumInput('squash-merge-commit-title', ['PR_TITLE', 'COMMIT_OR_PR_TITLE']),
+      squash_merge_commit_message: getEnumInput('squash-merge-commit-message', ['PR_BODY', 'COMMIT_MESSAGES', 'BLANK']),
       allow_merge_commit: getBooleanInput('allow-merge-commit'),
+      merge_commit_title: getEnumInput('merge-commit-title', ['PR_TITLE', 'MERGE_MESSAGE']),
+      merge_commit_message: getEnumInput('merge-commit-message', ['PR_TITLE', 'PR_BODY', 'BLANK']),
       allow_rebase_merge: getBooleanInput('allow-rebase-merge'),
       allow_auto_merge: getBooleanInput('allow-auto-merge'),
       delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
@@ -3583,11 +3678,39 @@ export async function run() {
           repo,
           settings.allow_squash_merge
         ),
+        squash_merge_commit_title: coerceEnumConfig(
+          repoConfig['squash-merge-commit-title'],
+          'squash-merge-commit-title',
+          repo,
+          ['PR_TITLE', 'COMMIT_OR_PR_TITLE'],
+          settings.squash_merge_commit_title
+        ),
+        squash_merge_commit_message: coerceEnumConfig(
+          repoConfig['squash-merge-commit-message'],
+          'squash-merge-commit-message',
+          repo,
+          ['PR_BODY', 'COMMIT_MESSAGES', 'BLANK'],
+          settings.squash_merge_commit_message
+        ),
         allow_merge_commit: coerceBooleanConfig(
           repoConfig['allow-merge-commit'],
           'allow-merge-commit',
           repo,
           settings.allow_merge_commit
+        ),
+        merge_commit_title: coerceEnumConfig(
+          repoConfig['merge-commit-title'],
+          'merge-commit-title',
+          repo,
+          ['PR_TITLE', 'MERGE_MESSAGE'],
+          settings.merge_commit_title
+        ),
+        merge_commit_message: coerceEnumConfig(
+          repoConfig['merge-commit-message'],
+          'merge-commit-message',
+          repo,
+          ['PR_TITLE', 'PR_BODY', 'BLANK'],
+          settings.merge_commit_message
         ),
         allow_rebase_merge: coerceBooleanConfig(
           repoConfig['allow-rebase-merge'],
