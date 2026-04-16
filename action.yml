@@ -36,8 +36,20 @@ inputs:
   allow-squash-merge:
     description: 'Allow squash merging pull requests'
     required: false
+  squash-merge-commit-title:
+    description: 'Default title for squash merge commits. Allowed values: PR_TITLE, COMMIT_OR_PR_TITLE'
+    required: false
+  squash-merge-commit-message:
+    description: 'Default message for squash merge commits. Allowed values: PR_BODY, COMMIT_MESSAGES, BLANK'
+    required: false
   allow-merge-commit:
     description: 'Allow merge commits for pull requests'
+    required: false
+  merge-commit-title:
+    description: 'Default title for merge commits. Allowed values: PR_TITLE, MERGE_MESSAGE'
+    required: false
+  merge-commit-message:
+    description: 'Default message for merge commits. Allowed values: PR_TITLE, PR_BODY, BLANK'
     required: false
   allow-rebase-merge:
     description: 'Allow rebase merging pull requests'

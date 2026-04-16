@@ -914,7 +914,11 @@ Output shows what would change:
 | `custom-property-name`            | Name of the custom property to filter repositories by (organizations only)                                                                 | No       | -                                       |
 | `custom-property-value`           | Comma-separated list of custom property values to match (used with `custom-property-name`)                                                 | No       | -                                       |
 | `allow-squash-merge`              | Allow squash merging pull requests                                                                                                         | No       | -                                       |
+| `squash-merge-commit-title`       | Default title for squash merge commits (`PR_TITLE`, `COMMIT_OR_PR_TITLE`)                                                                  | No       | -                                       |
+| `squash-merge-commit-message`     | Default message for squash merge commits (`PR_BODY`, `COMMIT_MESSAGES`, `BLANK`)                                                           | No       | -                                       |
 | `allow-merge-commit`              | Allow merge commits for pull requests                                                                                                      | No       | -                                       |
+| `merge-commit-title`              | Default title for merge commits (`PR_TITLE`, `MERGE_MESSAGE`)                                                                              | No       | -                                       |
+| `merge-commit-message`            | Default message for merge commits (`PR_TITLE`, `PR_BODY`, `BLANK`)                                                                         | No       | -                                       |
 | `allow-rebase-merge`              | Allow rebase merging pull requests                                                                                                         | No       | -                                       |
 | `allow-auto-merge`                | Allow auto-merge on pull requests                                                                                                          | No       | -                                       |
 | `delete-branch-on-merge`          | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                       |
@@ -952,6 +956,30 @@ Output shows what would change:
 | `write-job-summary`               | Write a summary table to the GitHub Actions job summary                                                                                    | No       | `true`                                  |
 
 \* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
+
+### Default Commit Message Settings
+
+The `squash-merge-commit-title`/`squash-merge-commit-message` and `merge-commit-title`/`merge-commit-message` inputs map to the GitHub API fields that control the default commit message when merging PRs. These correspond to the dropdown options in the repository settings UI:
+
+**Squash merge options:**
+
+| UI Option                             | `squash-merge-commit-title` | `squash-merge-commit-message` |
+| ------------------------------------- | --------------------------- | ----------------------------- |
+| Default message                       | `COMMIT_OR_PR_TITLE`        | `COMMIT_MESSAGES`             |
+| Pull request title                    | `PR_TITLE`                  | `BLANK`                       |
+| Pull request title and commit details | `PR_TITLE`                  | `COMMIT_MESSAGES`             |
+| Pull request title and description    | `PR_TITLE`                  | `PR_BODY`                     |
+
+**Merge commit options:**
+
+| UI Option                          | `merge-commit-title` | `merge-commit-message` |
+| ---------------------------------- | -------------------- | ---------------------- |
+| Default message                    | `MERGE_MESSAGE`      | `PR_TITLE`             |
+| Pull request title                 | `PR_TITLE`           | `BLANK`                |
+| Pull request title and description | `PR_TITLE`           | `PR_BODY`              |
+
+> [!NOTE]
+> The GitHub API requires `*-commit-title` when `*-commit-message` is set. If you only specify a message, the action will automatically include the current title to satisfy this requirement.
 
 ## Action Outputs
 

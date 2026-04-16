@@ -97,8 +97,16 @@ inputs:
     description: 'Owner'
   allow-squash-merge:
     description: 'Allow squash merge'
+  squash-merge-commit-title:
+    description: 'Squash merge commit title'
+  squash-merge-commit-message:
+    description: 'Squash merge commit message'
   allow-merge-commit:
     description: 'Allow merge commit'
+  merge-commit-title:
+    description: 'Merge commit title'
+  merge-commit-message:
+    description: 'Merge commit message'
   allow-rebase-merge:
     description: 'Allow rebase merge'
   allow-auto-merge:
@@ -180,7 +188,11 @@ const mockActionYmlParsed = {
     'repositories-file': { description: 'Repositories file' },
     owner: { description: 'Owner' },
     'allow-squash-merge': { description: 'Allow squash merge' },
+    'squash-merge-commit-title': { description: 'Squash merge commit title' },
+    'squash-merge-commit-message': { description: 'Squash merge commit message' },
     'allow-merge-commit': { description: 'Allow merge commit' },
+    'merge-commit-title': { description: 'Merge commit title' },
+    'merge-commit-message': { description: 'Merge commit message' },
     'allow-rebase-merge': { description: 'Allow rebase merge' },
     'allow-auto-merge': { description: 'Allow auto merge' },
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
@@ -2662,6 +2674,96 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
+    test('should update squash and merge commit message settings', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          permissions: { admin: true, push: true, pull: true },
+          allow_squash_merge: true,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          squash_merge_commit_message: 'COMMIT_MESSAGES',
+          allow_merge_commit: true,
+          merge_commit_title: 'MERGE_MESSAGE',
+          merge_commit_message: 'PR_TITLE'
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: null,
+        squash_merge_commit_title: 'PR_TITLE',
+        squash_merge_commit_message: 'BLANK',
+        allow_merge_commit: null,
+        merge_commit_title: 'PR_TITLE',
+        merge_commit_message: 'PR_BODY',
+        allow_rebase_merge: null,
+        allow_auto_merge: null,
+        delete_branch_on_merge: null,
+        allow_update_branch: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.changes).toEqual(
+        expect.arrayContaining([
+          { setting: 'squash_merge_commit_title', from: 'COMMIT_OR_PR_TITLE', to: 'PR_TITLE' },
+          { setting: 'squash_merge_commit_message', from: 'COMMIT_MESSAGES', to: 'BLANK' },
+          { setting: 'merge_commit_title', from: 'MERGE_MESSAGE', to: 'PR_TITLE' },
+          { setting: 'merge_commit_message', from: 'PR_TITLE', to: 'PR_BODY' }
+        ])
+      );
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        squash_merge_commit_title: 'PR_TITLE',
+        squash_merge_commit_message: 'BLANK',
+        merge_commit_title: 'PR_TITLE',
+        merge_commit_message: 'PR_BODY'
+      });
+    });
+
+    test('should skip null commit message settings', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          permissions: { admin: true, push: true, pull: true },
+          allow_squash_merge: true,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          squash_merge_commit_message: 'COMMIT_MESSAGES',
+          allow_merge_commit: true,
+          merge_commit_title: 'MERGE_MESSAGE',
+          merge_commit_message: 'PR_TITLE'
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: null,
+        squash_merge_commit_title: null,
+        squash_merge_commit_message: null,
+        allow_merge_commit: null,
+        merge_commit_title: null,
+        merge_commit_message: null,
+        allow_rebase_merge: null,
+        allow_auto_merge: null,
+        delete_branch_on_merge: null,
+        allow_update_branch: null
+      };
+
+      await updateRepositorySettings(mockOctokit, 'owner/repo', settings, false, null, null, null, false);
+
+      // Should not call update since no settings are specified
+      expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
+    });
+
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
       const result = await updateRepositorySettings(
@@ -3041,6 +3143,26 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith('Action failed with error: github-token is required');
+    });
+
+    test('should fail when invalid enum value is provided for squash-merge-commit-title', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'squash-merge-commit-title': 'INVALID_VALUE'
+        };
+        return inputs[name] || '';
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Invalid value for 'squash-merge-commit-title': 'INVALID_VALUE'. Allowed values: PR_TITLE, COMMIT_OR_PR_TITLE`
+        )
+      );
     });
 
     test('should fail when no settings specified', async () => {
@@ -4228,6 +4350,51 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // repo1 should use override (false), repo2 should use global (true)
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+    });
+
+    test('should warn and use global default for invalid enum config in YAML', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'allow-squash-merge': 'true',
+          'squash-merge-commit-title': 'PR_TITLE'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    squash-merge-commit-title: INVALID_VALUE');
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', 'squash-merge-commit-title': 'INVALID_VALUE' }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValueOnce({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      // Should warn about invalid enum value
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(`Invalid value for 'squash-merge-commit-title'`)
+      );
+      // Should still process the repo using global default (PR_TITLE)
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          squash_merge_commit_title: 'PR_TITLE'
+        })
+      );
     });
 
     test('should process repo-specific topics as string', async () => {
