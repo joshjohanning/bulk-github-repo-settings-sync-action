@@ -873,6 +873,30 @@ Output shows what would change:
 
 \* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
 
+### Default Commit Message Settings
+
+The `squash-merge-commit-title`/`squash-merge-commit-message` and `merge-commit-title`/`merge-commit-message` inputs map to the GitHub API fields that control the default commit message when merging PRs. These correspond to the dropdown options in the repository settings UI:
+
+**Squash merge options:**
+
+| UI Option                             | `squash-merge-commit-title` | `squash-merge-commit-message` |
+| ------------------------------------- | --------------------------- | ----------------------------- |
+| Default message                       | `COMMIT_OR_PR_TITLE`        | `COMMIT_MESSAGES`             |
+| Pull request title                    | `PR_TITLE`                  | `BLANK`                       |
+| Pull request title and commit details | `PR_TITLE`                  | `COMMIT_MESSAGES`             |
+| Pull request title and description    | `PR_TITLE`                  | `PR_BODY`                     |
+
+**Merge commit options:**
+
+| UI Option                          | `merge-commit-title` | `merge-commit-message` |
+| ---------------------------------- | -------------------- | ---------------------- |
+| Default message                    | `MERGE_MESSAGE`      | `PR_TITLE`             |
+| Pull request title                 | `PR_TITLE`           | `BLANK`                |
+| Pull request title and description | `PR_TITLE`           | `PR_BODY`              |
+
+> [!NOTE]
+> The GitHub API requires `*-commit-title` when `*-commit-message` is set. If you only specify a message, the action will automatically include the current title to satisfy this requirement.
+
 ## Action Outputs
 
 | Output                   | Description                                                                                        |
