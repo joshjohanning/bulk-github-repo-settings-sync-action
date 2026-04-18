@@ -12,7 +12,7 @@ These rules prevent CI failures and broken releases. **Never skip them.**
 
 - **MUST:** Run `npm run all` before committing. This runs format, lint, test, package, and badge generation. Fix any failures before proceeding.
 - **MUST:** Bump `package.json` version when the published artifact changes: action behavior, runtime requirements, production dependencies, inputs/outputs, or bundled code. Do **not** bump for docs-only, tests-only, CI-only, or devDependency-only changes.
-- **MUST:** When bumping versions or changing dependencies, run `npm install` first to sync `package-lock.json`, then run `npm run all`. A mismatched lockfile breaks CI.
+- **MUST:** When bumping versions or changing dependencies, run `npm install --ignore-scripts --allow-git=none` first to sync `package-lock.json`, then run `npm run all`. A mismatched lockfile breaks CI.
 - **MUST:** Update `README.md` and `action.yml` when adding, removing, or changing inputs, outputs, or behavior. Keep usage examples in the README in sync with `action.yml`.
 - **MUST:** When updating Node.js support, update `runs.using` in `action.yml`, `engines.node` in `package.json`, and CI matrices together.
 - **MUST:** If the action calls GitHub APIs, support GitHub.com, GHES, and GHEC-DR using a `github-api-url` input with default `${{ github.api_url }}`.
