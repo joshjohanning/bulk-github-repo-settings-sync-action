@@ -1788,6 +1788,59 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
     });
 
+    test('should treat 403 as not-configured when disabling code scanning (non-GHAS repo)', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Code scanning is not enabled for this repository'), { status: 403 })
+      );
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningUnchanged).toBe(true);
+      expect(result.codeScanningWarning).toBeUndefined();
+      expect(mockOctokit.rest.codeScanning.updateDefaultSetup).not.toHaveBeenCalled();
+    });
+
+    test('should surface warning on 403 when enabling code scanning (non-GHAS repo)', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(
+        Object.assign(new Error('Code scanning is not enabled for this repository'), { status: 403 })
+      );
+
+      const settings = { allow_squash_merge: true };
+
+      const result = await updateRepositorySettings(mockOctokit, 'owner/repo', settings, true, null, null, null, false);
+
+      expect(result.success).toBe(true);
+      expect(result.codeScanningWarning).toContain('Could not process CodeQL');
+      expect(result.codeScanningWarning).toContain('Code scanning is not enabled');
+      expect(result.hasWarnings).toBe(true);
+    });
+
     test('should detect CodeQL disable change in dry-run mode', async () => {
       mockOctokit.rest.repos.get.mockResolvedValue({
         data: {
