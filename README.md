@@ -920,14 +920,14 @@ For better security and rate limits, use a GitHub App:
    - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
    - **Organization Custom Properties**: Read (required when using organization custom property filtering, including `custom-property` selectors in `settings-config.yml` or the `custom-property-name` / `custom-property-value` action inputs)
 2. Install it to your organization/repositories
-3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
+3. Add `CLIENT_ID` and `APP_PRIVATE_KEY` as repository secrets
 
 ```yml
 - name: Generate GitHub App Token
   id: app-token
   uses: actions/create-github-app-token@v3
   with:
-    app-id: ${{ secrets.APP_ID }}
+    client-id: ${{ secrets.CLIENT_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
 
@@ -982,7 +982,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
