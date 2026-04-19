@@ -222,7 +222,8 @@ const mockActionYmlParsed = {
     'package-json-sync-engines': { description: 'Sync engines' },
     'package-json-pr-title': { description: 'Package json PR title' },
     'dry-run': { description: 'Dry run' },
-    'write-job-summary': { description: 'Write job summary' }
+    'write-job-summary': { description: 'Write job summary' },
+    'summary-heading': { description: 'Custom job summary heading' }
   }
 };
 
@@ -4009,6 +4010,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.summary.write).toHaveBeenCalled();
     });
 
+    test('should use custom summary heading when provided', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'summary-heading': 'Private custom property selection results'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Private custom property selection results');
+    });
+
     test('should skip job summary when write-job-summary is false', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -4341,6 +4360,37 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow).toBeDefined();
       expect(repoRow[2]).toContain('Would update');
+    });
+
+    test('should append dry-run suffix to custom summary heading', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true',
+          'dry-run': 'true',
+          'summary-heading': 'Private custom property selection results'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          name: 'repo1',
+          full_name: 'owner/repo1',
+          archived: false,
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      await run();
+
+      expect(mockCore.summary.addHeading).toHaveBeenCalledWith('Private custom property selection results (DRY-RUN)');
     });
 
     test('should process repo-specific settings overrides from YAML', async () => {

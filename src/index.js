@@ -3499,6 +3499,8 @@ export async function run() {
 
     const dryRun = getBooleanInput('dry-run');
     const writeJobSummary = getBooleanInput('write-job-summary') !== false;
+    const jobSummaryHeadingInput = core.getInput('summary-heading').trim();
+    const jobSummaryHeadingBase = jobSummaryHeadingInput || 'Bulk Repository Settings Update Results';
 
     // Parse topics if provided
     const topicsInput = core.getInput('topics');
@@ -4456,9 +4458,7 @@ export async function run() {
       ];
 
       try {
-        const heading = dryRun
-          ? 'Bulk Repository Settings Update Results (DRY-RUN)'
-          : 'Bulk Repository Settings Update Results';
+        const heading = dryRun ? `${jobSummaryHeadingBase} (DRY-RUN)` : jobSummaryHeadingBase;
 
         let summaryBuilder = core.summary.addHeading(heading);
 
@@ -4476,9 +4476,7 @@ export async function run() {
         await summaryBuilder.write();
       } catch {
         // Fallback for local development
-        const heading = dryRun
-          ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
-          : '📊 Bulk Repository Settings Update Results';
+        const heading = dryRun ? `🔍 DRY-RUN: ${jobSummaryHeadingBase}` : `📊 ${jobSummaryHeadingBase}`;
         core.info(heading);
         core.info(`Total Repositories: ${repoList.length}`);
         core.info(`Changed: ${changedCount}`);

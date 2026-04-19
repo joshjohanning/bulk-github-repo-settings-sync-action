@@ -175,6 +175,9 @@ inputs:
     description: 'Write a summary table to the GitHub Actions job summary'
     required: false
     default: 'true'
+  summary-heading:
+    description: 'Custom heading for the GitHub Actions job summary'
+    required: false
 
 outputs:
   updated-repositories:
