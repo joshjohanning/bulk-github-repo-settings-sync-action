@@ -559,7 +559,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should fetch all repositories for owner', async () => {
       mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not an org'));
       mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
-        data: [{ full_name: 'owner/repo1' }, { full_name: 'owner/repo2' }]
+        data: [
+          { full_name: 'owner/repo1', owner: { login: 'owner' } },
+          { full_name: 'owner/repo2', owner: { login: 'owner' } }
+        ]
       });
       mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
         data: []
@@ -568,6 +571,23 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await parseRepositories('all', '', 'owner', mockOctokit);
       expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
       expect(mockOctokit.rest.repos.listForUser).toHaveBeenCalled();
+    });
+
+    test('should only include repositories owned by the user when fetching all repositories for owner', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not an org'));
+      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+        data: [
+          { full_name: 'owner/repo1', owner: { login: 'owner' } },
+          { full_name: 'other/repo2', owner: { login: 'other' } },
+          { full_name: 'OWNER/repo3', owner: { login: 'OWNER' } }
+        ]
+      });
+      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+        data: []
+      });
+
+      const result = await parseRepositories('all', '', 'owner', mockOctokit);
+      expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'OWNER/repo3' }]);
     });
 
     test('should fetch all repositories for organization', async () => {
@@ -1257,6 +1277,38 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([
         { repo: 'my-org/repo1', 'delete-branch-on-merge': true },
         { repo: 'my-org/repo2', 'delete-branch-on-merge': true }
+      ]);
+    });
+
+    test('should only include repositories owned by the user for all selector', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+        data: [
+          { full_name: 'my-user/repo1', owner: { login: 'my-user' }, fork: false },
+          { full_name: 'other/repo2', owner: { login: 'other' }, fork: false },
+          { full_name: 'MY-USER/repo3', owner: { login: 'MY-USER' }, fork: false }
+        ]
+      });
+
+      const config = {
+        owner: 'my-user',
+        rules: [
+          {
+            selector: {
+              all: true
+            },
+            settings: {
+              'delete-branch-on-merge': true
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        { repo: 'my-user/repo1', 'delete-branch-on-merge': true },
+        { repo: 'MY-USER/repo3', 'delete-branch-on-merge': true }
       ]);
     });
 

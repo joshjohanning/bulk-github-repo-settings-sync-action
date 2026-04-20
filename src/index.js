@@ -620,9 +620,10 @@ export async function parseConfigWithRules(config, octokit) {
         const { data } = isOrg
           ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: perPage, page })
           : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
+        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
 
-        matchedRepos.push(...data.map(repository => ({ repo: repository.full_name, repository })));
-        for (const repository of data) {
+        matchedRepos.push(...ownedRepositories.map(repository => ({ repo: repository.full_name, repository })));
+        for (const repository of ownedRepositories) {
           repositoryMetadataCache.set(repository.full_name, repository);
         }
 
@@ -797,11 +798,12 @@ export async function parseRepositories(
               per_page: 100,
               page
             });
+        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
 
         if (data.length === 0) {
           hasMore = false;
         } else {
-          repos.push(...data.map(r => ({ repo: r.full_name })));
+          repos.push(...ownedRepositories.map(r => ({ repo: r.full_name })));
           page++;
         }
       }
@@ -874,6 +876,18 @@ function createSubResult(kind, status, message, extra) {
   if (extra?.prNumber) sub.prNumber = extra.prNumber;
   if (extra?.prUrl) sub.prUrl = extra.prUrl;
   return sub;
+}
+
+/**
+ * Filter repositories to those owned by the configured owner.
+ * GitHub's user repository listing can include repositories visible to the user
+ * that are owned by other accounts.
+ * @param {Array<Object>} repositories - Repository API responses
+ * @param {string} owner - Expected owner login
+ * @returns {Array<Object>} Repositories owned by the configured owner
+ */
+function filterRepositoriesByOwner(repositories, owner) {
+  return repositories.filter(repository => repository.owner?.login?.toLowerCase() === owner.toLowerCase());
 }
 
 /**
