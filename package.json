@@ -52,6 +52,7 @@
   "devDependencies": {
     "@joshjohanning/make-coverage-badge-better": "^1.0.1",
     "@vercel/ncc": "^0.38.4",
+    "baseline-browser-mapping": "^2.10.20",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-github": "^6.0.0",
