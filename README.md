@@ -537,7 +537,20 @@ For more information on autolinks, see the [GitHub documentation](https://docs.g
 
 ### Syncing Environments
 
-Sync deployment environments across multiple repositories to standardize environment configurations (e.g., production, staging):
+Sync deployment environments across multiple repositories to standardize environment configurations (e.g., production, staging).
+
+**Simple — just create named environments (inline):**
+
+```yml
+- name: Sync Environments
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    environments: production, staging, development
+```
+
+**Advanced — use a YAML/JSON file for full configuration:**
 
 ```yml
 - name: Sync Environments
@@ -548,6 +561,8 @@ Sync deployment environments across multiple repositories to standardize environ
     environments-file: './config/environments.yml'
     delete-unmanaged-environments: false
 ```
+
+Both `environments` and `environments-file` can be combined — file entries override inline entries with the same name.
 
 Or with repo-specific overrides in `repos.yml`:
 
