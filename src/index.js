@@ -621,9 +621,10 @@ export async function parseConfigWithRules(config, octokit) {
         const { data } = isOrg
           ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: perPage, page })
           : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
+        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
 
-        matchedRepos.push(...data.map(repository => ({ repo: repository.full_name, repository })));
-        for (const repository of data) {
+        matchedRepos.push(...ownedRepositories.map(repository => ({ repo: repository.full_name, repository })));
+        for (const repository of ownedRepositories) {
           repositoryMetadataCache.set(repository.full_name, repository);
         }
 
@@ -798,11 +799,12 @@ export async function parseRepositories(
               per_page: 100,
               page
             });
+        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
 
         if (data.length === 0) {
           hasMore = false;
         } else {
-          repos.push(...data.map(r => ({ repo: r.full_name })));
+          repos.push(...ownedRepositories.map(r => ({ repo: r.full_name })));
           page++;
         }
       }
@@ -876,6 +878,22 @@ function createSubResult(kind, status, message, extra) {
   if (extra?.prNumber) sub.prNumber = extra.prNumber;
   if (extra?.prUrl) sub.prUrl = extra.prUrl;
   return sub;
+}
+
+/**
+ * Filter repositories to those owned by the configured owner.
+ * GitHub's user repository listing can include repositories visible to the user
+ * that are owned by other accounts.
+ * @param {Array<Object>} repositories - Repository API responses
+ * @param {string} owner - Expected owner login
+ * @returns {Array<Object>} Repositories owned by the configured owner
+ */
+function filterRepositoriesByOwner(repositories, owner) {
+  if (typeof owner !== 'string') {
+    throw new TypeError(`Invalid repository owner configuration: expected a string but received ${typeof owner}`);
+  }
+  const normalizedOwner = owner.trim().toLowerCase();
+  return repositories.filter(repository => repository.owner?.login?.toLowerCase() === normalizedOwner);
 }
 
 /**
@@ -953,6 +971,7 @@ export function formatPrLink(prNumber, prUrl) {
  * @param {Object} securitySettings - Security settings to update
  * @param {boolean|null} securitySettings.secretScanning - Enable or disable secret scanning
  * @param {boolean|null} securitySettings.secretScanningPushProtection - Enable or disable push protection
+ * @param {boolean|null} securitySettings.privateVulnerabilityReporting - Enable or disable private vulnerability reporting
  * @param {boolean|null} securitySettings.dependabotAlerts - Enable or disable Dependabot alerts
  * @param {boolean|null} securitySettings.dependabotSecurityUpdates - Enable or disable Dependabot security updates
  * @param {boolean} dryRun - Preview mode without making actual changes
@@ -1291,7 +1310,7 @@ export async function updateRepositorySettings(
           });
           currentCodeScanning = codeScanningData.state;
         } catch (error) {
-          if (error.status === 404) {
+          if (error.status === 404 || (error.status === 403 && !enableCodeScanning)) {
             currentCodeScanning = 'not-configured';
           } else {
             throw error;
@@ -1530,6 +1549,72 @@ export async function updateRepositorySettings(
               'push-protection',
               SubResultStatus.WARNING,
               'Secret scanning push protection produced a warning'
+            )
+          );
+        }
+      }
+
+      // Handle private vulnerability reporting
+      if (securitySettings.privateVulnerabilityReporting !== null) {
+        try {
+          const response = await octokit.request('GET /repos/{owner}/{repo}/private-vulnerability-reporting', {
+            owner,
+            repo: repoName,
+            headers: {
+              'X-GitHub-Api-Version': '2022-11-28'
+            }
+          });
+          const currentPrivateVulnerabilityReporting = response.data.enabled === true;
+          result.currentPrivateVulnerabilityReporting = currentPrivateVulnerabilityReporting;
+
+          if (currentPrivateVulnerabilityReporting !== securitySettings.privateVulnerabilityReporting) {
+            result.privateVulnerabilityReportingChange = {
+              from: currentPrivateVulnerabilityReporting,
+              to: securitySettings.privateVulnerabilityReporting
+            };
+
+            if (!dryRun) {
+              if (securitySettings.privateVulnerabilityReporting) {
+                await octokit.request('PUT /repos/{owner}/{repo}/private-vulnerability-reporting', {
+                  owner,
+                  repo: repoName,
+                  headers: {
+                    'X-GitHub-Api-Version': '2022-11-28'
+                  }
+                });
+              } else {
+                await octokit.request('DELETE /repos/{owner}/{repo}/private-vulnerability-reporting', {
+                  owner,
+                  repo: repoName,
+                  headers: {
+                    'X-GitHub-Api-Version': '2022-11-28'
+                  }
+                });
+              }
+              result.privateVulnerabilityReportingUpdated = true;
+            } else {
+              result.privateVulnerabilityReportingWouldUpdate = true;
+            }
+            const action = securitySettings.privateVulnerabilityReporting ? 'enable' : 'disable';
+            const actionText = dryRun ? `Would ${action}` : `${action.charAt(0).toUpperCase()}${action.slice(1)}d`;
+            result.subResults.push(
+              createSubResult(
+                'private-vulnerability-reporting',
+                SubResultStatus.CHANGED,
+                `${actionText} private vulnerability reporting`
+              )
+            );
+          } else {
+            result.privateVulnerabilityReportingUnchanged = true;
+          }
+        } catch (error) {
+          result.privateVulnerabilityReportingWarning = `Could not process private vulnerability reporting: ${error.message}`;
+          result.hasWarnings = true;
+          result.subResults.push(
+            createSubResult(
+              'private-vulnerability-reporting',
+              SubResultStatus.WARNING,
+              'Private vulnerability reporting produced a warning'
             )
           );
         }
@@ -4105,12 +4190,14 @@ export async function run() {
     const securitySettings = {
       secretScanning: getBooleanInput('secret-scanning'),
       secretScanningPushProtection: getBooleanInput('secret-scanning-push-protection'),
+      privateVulnerabilityReporting: getBooleanInput('private-vulnerability-reporting'),
       dependabotAlerts: getBooleanInput('dependabot-alerts'),
       dependabotSecurityUpdates: getBooleanInput('dependabot-security-updates')
     };
 
     const dryRun = getBooleanInput('dry-run');
     const writeJobSummary = getBooleanInput('write-job-summary') !== false;
+    const jobSummaryHeadingBase = core.getInput('summary-heading').trim();
 
     // Parse topics if provided
     const topicsInput = core.getInput('topics');
@@ -4277,6 +4364,11 @@ export async function run() {
     if (securitySettings.secretScanningPushProtection !== null) {
       core.info(
         `Secret scanning push protection will be ${securitySettings.secretScanningPushProtection ? 'enabled' : 'disabled'}`
+      );
+    }
+    if (securitySettings.privateVulnerabilityReporting !== null) {
+      core.info(
+        `Private vulnerability reporting will be ${securitySettings.privateVulnerabilityReporting ? 'enabled' : 'disabled'}`
       );
     }
     if (securitySettings.dependabotAlerts !== null) {
@@ -4501,6 +4593,12 @@ export async function run() {
           'secret-scanning-push-protection',
           repo,
           securitySettings.secretScanningPushProtection
+        ),
+        privateVulnerabilityReporting: coerceBooleanConfig(
+          repoConfig['private-vulnerability-reporting'],
+          'private-vulnerability-reporting',
+          repo,
+          securitySettings.privateVulnerabilityReporting
         ),
         dependabotAlerts: coerceBooleanConfig(
           repoConfig['dependabot-alerts'],
@@ -5137,9 +5235,7 @@ export async function run() {
       ];
 
       try {
-        const heading = dryRun
-          ? 'Bulk Repository Settings Update Results (DRY-RUN)'
-          : 'Bulk Repository Settings Update Results';
+        const heading = dryRun ? `${jobSummaryHeadingBase} (DRY-RUN)` : jobSummaryHeadingBase;
 
         let summaryBuilder = core.summary.addHeading(heading);
 
@@ -5157,9 +5253,7 @@ export async function run() {
         await summaryBuilder.write();
       } catch {
         // Fallback for local development
-        const heading = dryRun
-          ? '🔍 DRY-RUN: Bulk Repository Settings Update Results'
-          : '📊 Bulk Repository Settings Update Results';
+        const heading = dryRun ? `🔍 DRY-RUN: ${jobSummaryHeadingBase}` : `📊 ${jobSummaryHeadingBase}`;
         core.info(heading);
         core.info(`Total Repositories: ${repoList.length}`);
         core.info(`Changed: ${changedCount}`);

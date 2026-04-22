@@ -1,7 +1,7 @@
 {
   "name": "bulk-github-repo-settings-sync-action",
   "description": "Update repository settings in bulk for multiple GitHub repositories",
-  "version": "2.6.0",
+  "version": "2.8.0",
   "type": "module",
   "author": {
     "name": "Josh Johanning",
@@ -60,6 +60,6 @@
     "eslint-plugin-prettier": "^5.5.5",
     "globals": "^17.5.0",
     "jest": "^30.3.0",
-    "prettier": "^3.8.2"
+    "prettier": "^3.8.3"
   }
 }
