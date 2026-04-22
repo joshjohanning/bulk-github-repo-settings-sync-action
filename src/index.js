@@ -3953,8 +3953,15 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
     // Try YAML first, fall back to JSON
     try {
       parsed = yaml.load(fileContent);
-    } catch {
-      parsed = JSON.parse(fileContent);
+    } catch (yamlError) {
+      try {
+        parsed = JSON.parse(fileContent);
+      } catch (jsonError) {
+        throw new Error(
+          `Failed to parse environments config file "${environmentsFilePath}" as YAML or JSON. ` +
+            `YAML error: ${yamlError.message}. JSON error: ${jsonError.message}`
+        );
+      }
     }
 
     const fileEnvs = Array.isArray(parsed?.environments) ? parsed.environments : Array.isArray(parsed) ? parsed : [];
