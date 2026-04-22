@@ -4014,10 +4014,13 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     // Check for deployment protection rules on any desired environments
     const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
 
-    // Check for custom branch patterns to sync
-    const envsWithBranchPatterns = resolvedEnvironments.filter(
-      e => e.deployment_branch_policy?.custom_branch_policies === true && Array.isArray(e.branch_name_patterns)
-    );
+    // Check for custom branch patterns to sync (treat omitted patterns as empty = delete all existing)
+    const envsWithBranchPatterns = resolvedEnvironments
+      .filter(e => e.deployment_branch_policy?.custom_branch_policies === true)
+      .map(e => ({
+        ...e,
+        branch_name_patterns: Array.isArray(e.branch_name_patterns) ? e.branch_name_patterns : []
+      }));
 
     // If no environment changes, no protection rules, and no branch patterns to sync, return early
     if (
@@ -4048,51 +4051,39 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       if (environmentsToDelete.length > 0) {
         message.push(`Would delete ${environmentsToDelete.length} environment(s)`);
       }
-      if (envsWithProtectionRules.length > 0) {
-        message.push(`Would sync deployment protection rules for ${envsWithProtectionRules.length} environment(s)`);
+      if (message.length > 0) {
+        core.info(`  🌍 Dry run: ${message.join(', ')}`);
       }
-      if (envsWithBranchPatterns.length > 0) {
-        message.push(`Would sync branch policies for ${envsWithBranchPatterns.length} environment(s)`);
+    }
+
+    if (!dryRun) {
+      // Create new environments
+      for (const env of environmentsToCreate) {
+        await octokit.request(
+          'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+          buildEnvironmentParams(owner, repoName, env)
+        );
+        core.info(`  🌍 Created environment: ${env.name}`);
       }
-      return {
-        repository: repo,
-        success: true,
-        environments: 'would-update',
-        message: message.join(', '),
-        environmentsWouldCreate: environmentsToCreate.map(e => e.name),
-        environmentsWouldUpdate: environmentsToUpdate.map(e => e.name),
-        environmentsWouldDelete: environmentsToDelete.map(e => e.name),
-        environmentsUnchanged: environmentsUnchanged.length,
-        dryRun
-      };
-    }
 
-    // Create new environments
-    for (const env of environmentsToCreate) {
-      await octokit.request(
-        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
-        buildEnvironmentParams(owner, repoName, env)
-      );
-      core.info(`  🌍 Created environment: ${env.name}`);
-    }
+      // Update existing environments
+      for (const env of environmentsToUpdate) {
+        await octokit.request(
+          'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+          buildEnvironmentParams(owner, repoName, env)
+        );
+        core.info(`  🌍 Updated environment: ${env.name}`);
+      }
 
-    // Update existing environments
-    for (const env of environmentsToUpdate) {
-      await octokit.request(
-        'PUT /repos/{owner}/{repo}/environments/{environment_name}',
-        buildEnvironmentParams(owner, repoName, env)
-      );
-      core.info(`  🌍 Updated environment: ${env.name}`);
-    }
-
-    // Delete unmanaged environments
-    for (const env of environmentsToDelete) {
-      await octokit.request('DELETE /repos/{owner}/{repo}/environments/{environment_name}', {
-        owner,
-        repo: repoName,
-        environment_name: env.name
-      });
-      core.info(`  🌍 Deleted environment: ${env.name}`);
+      // Delete unmanaged environments
+      for (const env of environmentsToDelete) {
+        await octokit.request('DELETE /repos/{owner}/{repo}/environments/{environment_name}', {
+          owner,
+          repo: repoName,
+          environment_name: env.name
+        });
+        core.info(`  🌍 Deleted environment: ${env.name}`);
+      }
     }
 
     // Sync custom deployment branch policies for environments that use them
@@ -4148,22 +4139,22 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
 
     const message = [];
     if (environmentsToCreate.length > 0) {
-      message.push(`Created ${environmentsToCreate.length} environment(s)`);
+      message.push(`${dryRun ? 'Would create' : 'Created'} ${environmentsToCreate.length} environment(s)`);
     }
     if (environmentsToUpdate.length > 0) {
-      message.push(`Updated ${environmentsToUpdate.length} environment(s)`);
+      message.push(`${dryRun ? 'Would update' : 'Updated'} ${environmentsToUpdate.length} environment(s)`);
     }
     if (environmentsToDelete.length > 0) {
-      message.push(`Deleted ${environmentsToDelete.length} environment(s)`);
+      message.push(`${dryRun ? 'Would delete' : 'Deleted'} ${environmentsToDelete.length} environment(s)`);
     }
     if (hasProtectionChanges) {
-      message.push(`Updated deployment protection rules`);
+      message.push(`${dryRun ? 'Would update' : 'Updated'} deployment protection rules`);
     }
     if (hasProtectionWarnings) {
       message.push(`Some deployment protection rule updates had warnings`);
     }
     if (hasBranchPolicyChanges) {
-      message.push(`Updated deployment branch policies`);
+      message.push(`${dryRun ? 'Would update' : 'Updated'} deployment branch policies`);
     }
 
     return {
@@ -4171,9 +4162,12 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       success: true,
       environments: dryRun ? 'would-update' : 'updated',
       message: message.join(', '),
-      environmentsCreated: environmentsToCreate.map(e => e.name),
-      environmentsUpdated: environmentsToUpdate.map(e => e.name),
-      environmentsDeleted: environmentsToDelete.map(e => e.name),
+      environmentsCreated: dryRun ? undefined : environmentsToCreate.map(e => e.name),
+      environmentsUpdated: dryRun ? undefined : environmentsToUpdate.map(e => e.name),
+      environmentsDeleted: dryRun ? undefined : environmentsToDelete.map(e => e.name),
+      environmentsWouldCreate: dryRun ? environmentsToCreate.map(e => e.name) : undefined,
+      environmentsWouldUpdate: dryRun ? environmentsToUpdate.map(e => e.name) : undefined,
+      environmentsWouldDelete: dryRun ? environmentsToDelete.map(e => e.name) : undefined,
       environmentsUnchanged: environmentsUnchanged.length,
       protectionRuleSubResults,
       branchPolicySubResults,
