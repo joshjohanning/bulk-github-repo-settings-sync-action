@@ -3496,7 +3496,13 @@ export function normalizeExistingEnvironment(env) {
  * @returns {Promise<Object>} Reviewer with resolved id
  */
 async function resolveReviewer(octokit, owner, reviewer) {
-  if (reviewer.id) return { type: reviewer.type, id: reviewer.id };
+  if (reviewer.id) {
+    const numId = Number(reviewer.id);
+    if (!Number.isFinite(numId) || numId <= 0) {
+      throw new Error(`Invalid reviewer id "${reviewer.id}": must be a positive number`);
+    }
+    return { type: reviewer.type, id: numId };
+  }
 
   if (reviewer.type === 'User' && reviewer.login) {
     try {
@@ -3567,9 +3573,12 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
     return subResults;
   }
 
-  // Resolve app slugs to integration IDs
+  // Resolve app slugs to integration IDs (deduplicate by slug)
   const resolvedRules = [];
+  const seenSlugs = new Set();
   for (const rule of desiredRules) {
+    if (seenSlugs.has(rule.app)) continue;
+    seenSlugs.add(rule.app);
     const app = availableApps.find(a => a.slug === rule.app);
     if (!app) {
       core.warning(
@@ -3714,6 +3723,9 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
+  // Normalize desired patterns: trim, filter empty, deduplicate
+  const normalizedPatterns = [...new Set(desiredPatterns.map(p => p.trim()).filter(p => p.length > 0))];
+
   // Get existing branch policies
   let existingPolicies = [];
   try {
@@ -3735,10 +3747,10 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   }
 
   const existingNames = new Set(existingPolicies.map(p => p.name));
-  const desiredNames = new Set(desiredPatterns);
+  const desiredNames = new Set(normalizedPatterns);
 
   // Create missing policies
-  for (const pattern of desiredPatterns) {
+  for (const pattern of normalizedPatterns) {
     if (!existingNames.has(pattern)) {
       core.info(`  🌿 ${wouldPrefix}Add branch policy: ${pattern} to ${envName}`);
       subResults.push(
