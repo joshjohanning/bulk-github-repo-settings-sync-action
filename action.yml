@@ -81,6 +81,9 @@ inputs:
   secret-scanning-push-protection:
     description: 'Enable or disable secret scanning push protection for repositories'
     required: false
+  private-vulnerability-reporting:
+    description: 'Enable or disable private vulnerability reporting for repositories'
+    required: false
   dependabot-alerts:
     description: 'Enable or disable Dependabot alerts (vulnerability alerts) for repositories. Also enables the dependency graph.'
     required: false

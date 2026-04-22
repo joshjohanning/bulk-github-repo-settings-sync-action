@@ -61,6 +61,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
     code-scanning: true
     secret-scanning: true
     secret-scanning-push-protection: true
+    private-vulnerability-reporting: true
     dependabot-alerts: true
     dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
@@ -186,6 +187,7 @@ rules:
       code-scanning: true
       secret-scanning: true
       secret-scanning-push-protection: true
+      private-vulnerability-reporting: true
       immutable-releases: true
       dependabot-yml: './config/dependabot/npm-actions.yml'
 
@@ -845,6 +847,7 @@ Output shows what would change:
 | `code-scanning`                   | Enable or disable default code scanning setup                                                                                              | No       | -                                         |
 | `secret-scanning`                 | Enable or disable secret scanning                                                                                                          | No       | -                                         |
 | `secret-scanning-push-protection` | Enable or disable secret scanning push protection                                                                                          | No       | -                                         |
+| `private-vulnerability-reporting` | Enable or disable private vulnerability reporting                                                                                          | No       | -                                         |
 | `dependabot-alerts`               | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                 | No       | -                                         |
 | `dependabot-security-updates`     | Enable or disable Dependabot security updates (automated security fixes)                                                                   | No       | -                                         |
 | `topics`                          | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                         |
