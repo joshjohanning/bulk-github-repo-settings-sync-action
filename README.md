@@ -558,7 +558,8 @@ repos:
   - repo: owner/repo2
     environments-file: './config/environments/api-environments.yml'
   - repo: owner/repo3
-    # Skip environments sync for this repo
+    # Skip environments sync for this repo by setting empty environments
+    environments: ''
 ```
 
 **Behavior:**
@@ -946,7 +947,7 @@ Output shows what would change:
 | `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                           | No       | -                                         |
 | `environments`                    | Comma-separated list of environment names to create (e.g., `production, staging, development`)                                              | No       | -                                         |
 | `environments-file`               | Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules) | No       | -                                         |
-| `delete-unmanaged-environments`   | Delete environments not defined in the environments configuration file                                                                      | No       | `false`                                   |
+| `delete-unmanaged-environments`   | Delete environments not included in the configured environments                                                                             | No       | `false`                                   |
 | `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                  | No       | -                                         |
 | `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                               | No       | `chore: update copilot-instructions.md`   |
 | `codeowners`                      | Path to a CODEOWNERS file to sync to target repositories                                                                                    | No       | -                                         |

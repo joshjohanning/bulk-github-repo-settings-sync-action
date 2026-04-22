@@ -4779,7 +4779,25 @@ export async function run() {
       let repoEnvironments = globalEnvironments;
       if (repoConfig['environments'] !== undefined || repoConfig['environments-file'] !== undefined) {
         try {
-          const repoEnvNames = repoConfig['environments'] !== undefined ? String(repoConfig['environments']) : null;
+          const rawEnv = repoConfig['environments'];
+          let repoEnvNames = null;
+          if (rawEnv !== undefined && rawEnv !== null) {
+            if (typeof rawEnv === 'string') {
+              repoEnvNames = rawEnv;
+            } else if (Array.isArray(rawEnv)) {
+              repoEnvNames = rawEnv
+                .map(n => {
+                  if (typeof n !== 'string') {
+                    throw new Error('Repo-specific environments array must contain only string environment names');
+                  }
+                  return n.trim();
+                })
+                .filter(n => n.length > 0)
+                .join(',');
+            } else {
+              throw new Error('Repo-specific environments must be a string, an array of strings, or null');
+            }
+          }
           const repoEnvFile = repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : null;
           repoEnvironments = parseEnvironmentsConfig(repoEnvNames, repoEnvFile);
         } catch (error) {
