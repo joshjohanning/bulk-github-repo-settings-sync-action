@@ -3937,8 +3937,19 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
       );
     }
 
-    // Check for duplicate names within the file
-    const fileNames = fileEnvs.filter(e => e.name).map(e => e.name);
+    // Validate and normalize environment names from file
+    for (const env of fileEnvs) {
+      if (!env.name || typeof env.name !== 'string') {
+        throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
+      }
+      env.name = env.name.trim();
+      if (env.name.length === 0) {
+        throw new Error(`Environment name in "${environmentsFilePath}" cannot be empty or whitespace`);
+      }
+    }
+
+    // Check for duplicate names within the file (after trimming)
+    const fileNames = fileEnvs.map(e => e.name);
     const fileDuplicates = fileNames.filter((name, idx) => fileNames.indexOf(name) !== idx);
     if (fileDuplicates.length > 0) {
       throw new Error(
@@ -3949,13 +3960,6 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
     // File environments override inline ones with the same name
     const inlineNames = new Set(environments.map(e => e.name));
     for (const env of fileEnvs) {
-      if (!env.name || typeof env.name !== 'string') {
-        throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
-      }
-      env.name = env.name.trim();
-      if (env.name.length === 0) {
-        throw new Error(`Environment name in "${environmentsFilePath}" cannot be empty or whitespace`);
-      }
       if (inlineNames.has(env.name)) {
         // Replace inline entry with richer file entry
         const idx = environments.findIndex(e => e.name === env.name);

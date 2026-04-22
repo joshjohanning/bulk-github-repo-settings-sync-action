@@ -594,21 +594,26 @@ environments:
   - name: development
 ```
 
-| Field                               | Description                                                         | Required |
-| ----------------------------------- | ------------------------------------------------------------------- | -------- |
-| `name`                              | The name of the environment                                         | Yes      |
-| `wait_timer`                        | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
-| `prevent_self_review`               | Whether to prevent the deployer from approving their own deployment | No       |
-| `reviewers`                         | Array of users or teams that must review deployments                | No       |
-| `reviewers[].type`                  | `"User"` or `"Team"`                                                | Yes      |
-| `reviewers[].id`                    | The user or team ID (numeric)                                       | No\*     |
-| `reviewers[].login`                 | Username (for `User` type) — resolved to ID via API                 | No\*     |
-| `reviewers[].slug`                  | Team slug (for `Team` type) — resolved to ID via API                | No\*     |
-| `deployment_branch_policy`          | Branch restrictions for deployments (`null` for no restrictions)    | No       |
-| `deployment_protection_rules`       | Array of custom deployment gate apps                                | No       |
-| `deployment_protection_rules[].app` | App slug (resolved to integration ID via API)                       | Yes      |
+| Field                                             | Description                                                         | Required |
+| ------------------------------------------------- | ------------------------------------------------------------------- | -------- |
+| `name`                                            | The name of the environment                                         | Yes      |
+| `wait_timer`                                      | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
+| `prevent_self_review`                             | Whether to prevent the deployer from approving their own deployment | No       |
+| `reviewers`                                       | Array of users or teams that must review deployments                | No       |
+| `reviewers[].type`                                | `"User"` or `"Team"`                                                | Yes      |
+| `reviewers[].id`                                  | The user or team ID (numeric)                                       | No\*     |
+| `reviewers[].login`                               | Username (for `User` type) — resolved to ID via API                 | No\*     |
+| `reviewers[].slug`                                | Team slug (for `Team` type) — resolved to ID via API                | No\*     |
+| `deployment_branch_policy`                        | Branch restrictions for deployments (`null` for no restrictions)    | No       |
+| `deployment_branch_policy.protected_branches`     | Whether only protected branches can deploy                          | No       |
+| `deployment_branch_policy.custom_branch_policies` | Whether to use custom branch name policies                          | No       |
+| `branch_name_patterns`                            | Array of custom branch name patterns to allow for deployment        | No\*\*   |
+| `deployment_protection_rules`                     | Array of custom deployment gate apps                                | No       |
+| `deployment_protection_rules[].app`               | App slug (resolved to integration ID via API)                       | Yes      |
 
 \* Each reviewer must have either `id`, `login` (User), or `slug` (Team).
+
+\*\* `branch_name_patterns` applies only when `deployment_branch_policy.custom_branch_policies` is `true`. If custom branch policies are enabled and `branch_name_patterns` is omitted, any existing custom branch patterns will be removed during sync.
 
 For more information on environments, see the [GitHub documentation](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment).
 

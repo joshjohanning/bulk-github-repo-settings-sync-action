@@ -9142,6 +9142,285 @@ describe('Bulk GitHub Repository Settings Action', () => {
         expect.anything()
       );
     });
+
+    test('should sync deployment protection rules - create and delete', async () => {
+      const testEnvironments = [
+        {
+          name: 'production',
+          deployment_protection_rules: [{ app: 'gate-app' }]
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [{ name: 'production', protection_rules: [], deployment_branch_policy: null }]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps') {
+          return {
+            data: {
+              available_custom_deployment_protection_rule_integrations: [
+                { id: 42, slug: 'gate-app' },
+                { id: 99, slug: 'other-app' }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules') {
+          return {
+            data: {
+              custom_deployment_protection_rules: [{ id: 1, app: { id: 99, slug: 'other-app' } }]
+            }
+          };
+        }
+        if (route === 'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules') {
+          return {};
+        }
+        if (
+          route ===
+          'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}'
+        ) {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+        expect.objectContaining({ integration_id: 42 })
+      );
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}',
+        expect.objectContaining({ protection_rule_id: 1 })
+      );
+    });
+
+    test('should preview deployment protection rules in dry-run', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_protection_rules: [{ app: 'gate-app' }]
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [{ name: 'staging', protection_rules: [], deployment_branch_policy: null }]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps') {
+          return {
+            data: {
+              available_custom_deployment_protection_rule_integrations: [{ id: 42, slug: 'gate-app' }]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules') {
+          return { data: { custom_deployment_protection_rules: [] } };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, true);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+        expect.anything()
+      );
+      expect(result.protectionRuleSubResults.length).toBeGreaterThan(0);
+    });
+
+    test('should warn when deployment protection rule app not found', async () => {
+      const testEnvironments = [
+        {
+          name: 'production',
+          deployment_protection_rules: [{ app: 'nonexistent-app' }]
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [{ name: 'production', protection_rules: [], deployment_branch_policy: null }]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps') {
+          return { data: { available_custom_deployment_protection_rule_integrations: [] } };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules') {
+          return { data: { custom_deployment_protection_rules: [] } };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.protectionRuleSubResults.some(s => s.status === 'warning')).toBe(true);
+    });
+
+    test('should sync custom branch name patterns - create and delete', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          branch_name_patterns: ['main', 'release/*']
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return {
+            data: {
+              branch_policies: [
+                { id: 1, name: 'main' },
+                { id: 2, name: 'hotfix/*' }
+              ]
+            }
+          };
+        }
+        if (route === 'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return {};
+        }
+        if (
+          route ===
+          'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}'
+        ) {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      // Should create release/* (missing) and delete hotfix/* (unmanaged)
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+        expect.objectContaining({ name: 'release/*' })
+      );
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.objectContaining({ branch_policy_id: 2 })
+      );
+      // Should NOT delete main (it exists and is desired)
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.objectContaining({ branch_policy_id: 1 })
+      );
+    });
+
+    test('should preview branch policy changes in dry-run', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          branch_name_patterns: ['main']
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return { data: { branch_policies: [{ id: 1, name: 'old-branch' }] } };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, true);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+        expect.anything()
+      );
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.anything()
+      );
+      expect(result.branchPolicySubResults.length).toBeGreaterThan(0);
+    });
+
+    test('should delete all branch patterns when custom_branch_policies is true but patterns omitted', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+          // no branch_name_patterns — should delete existing
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return { data: { branch_policies: [{ id: 1, name: 'old-pattern' }] } };
+        }
+        if (
+          route ===
+          'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}'
+        ) {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.objectContaining({ branch_policy_id: 1 })
+      );
+    });
   });
 
   describe('syncGitignore', () => {
