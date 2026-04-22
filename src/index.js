@@ -3499,8 +3499,7 @@ export async function run() {
 
     const dryRun = getBooleanInput('dry-run');
     const writeJobSummary = getBooleanInput('write-job-summary') !== false;
-    const jobSummaryHeadingInput = core.getInput('summary-heading').trim();
-    const jobSummaryHeadingBase = jobSummaryHeadingInput || 'Bulk Repository Settings Update Results';
+    const jobSummaryHeadingBase = core.getInput('summary-heading').trim();
 
     // Parse topics if provided
     const topicsInput = core.getInput('topics');

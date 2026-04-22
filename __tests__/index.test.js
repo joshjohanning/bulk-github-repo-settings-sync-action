@@ -3996,7 +3996,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'allow-squash-merge': 'true'
+          'allow-squash-merge': 'true',
+          'summary-heading': 'Bulk Repository Settings Update Results'
         };
         return inputs[name] || '';
       });
@@ -4333,7 +4334,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
           'allow-squash-merge': 'true',
-          'dry-run': 'true'
+          'dry-run': 'true',
+          'summary-heading': 'Bulk Repository Settings Update Results'
         };
         return inputs[name] || '';
       });
