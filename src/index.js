@@ -3589,7 +3589,8 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
       { owner, repo: repoName, environment_name: envName }
     );
     existingRules = data.custom_deployment_protection_rules ?? [];
-  } catch {
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to list deployment protection rules for ${envName}: ${error.message}`);
     existingRules = [];
   }
 
@@ -3941,6 +3942,9 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
       if (environmentsToDelete.length > 0) {
         message.push(`Would delete ${environmentsToDelete.length} environment(s)`);
+      }
+      if (envsWithProtectionRules.length > 0) {
+        message.push(`Would sync deployment protection rules for ${envsWithProtectionRules.length} environment(s)`);
       }
       return {
         repository: repo,
