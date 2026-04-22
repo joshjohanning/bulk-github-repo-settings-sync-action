@@ -565,7 +565,7 @@ repos:
 
 - Creates environments that don't exist in the repository
 - Updates environments that exist but have different settings (wait timer, reviewers, branch policy, etc.)
-- Optionally deletes environments not defined in the configuration file (`delete-unmanaged-environments: true`)
+- Optionally deletes environments not included in the desired environment configuration for the repository (`delete-unmanaged-environments: true`)
 - If all environments match, no changes are made
 - Environments are applied directly via the GitHub API (not via pull request)
 

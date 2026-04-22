@@ -3753,20 +3753,42 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   for (const pattern of normalizedPatterns) {
     if (!existingNames.has(pattern)) {
       core.info(`  🌿 ${wouldPrefix}Add branch policy: ${pattern} to ${envName}`);
-      subResults.push(
-        createSubResult(
-          'environment-branch-policy',
-          SubResultStatus.CHANGED,
-          `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
-        )
-      );
       if (!dryRun) {
-        await octokit.request('POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies', {
-          owner,
-          repo: repoName,
-          environment_name: envName,
-          name: pattern
-        });
+        try {
+          await octokit.request(
+            'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+            {
+              owner,
+              repo: repoName,
+              environment_name: envName,
+              name: pattern
+            }
+          );
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.CHANGED,
+              `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+            )
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to add branch policy "${pattern}" to ${envName}: ${error.message}`);
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.WARNING,
+              `Failed to add branch policy "${pattern}" to ${envName}`
+            )
+          );
+        }
+      } else {
+        subResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+          )
+        );
       }
     }
   }
@@ -3775,17 +3797,36 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   for (const policy of existingPolicies) {
     if (!desiredNames.has(policy.name)) {
       core.info(`  🌿 ${wouldPrefix}Remove branch policy: ${policy.name} from ${envName}`);
-      subResults.push(
-        createSubResult(
-          'environment-branch-policy',
-          SubResultStatus.CHANGED,
-          `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
-        )
-      );
       if (!dryRun) {
-        await octokit.request(
-          'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
-          { owner, repo: repoName, environment_name: envName, branch_policy_id: policy.id }
+        try {
+          await octokit.request(
+            'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+            { owner, repo: repoName, environment_name: envName, branch_policy_id: policy.id }
+          );
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.CHANGED,
+              `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+            )
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to remove branch policy "${policy.name}" from ${envName}: ${error.message}`);
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.WARNING,
+              `Failed to remove branch policy "${policy.name}" from ${envName}`
+            )
+          );
+        }
+      } else {
+        subResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+          )
         );
       }
     }
