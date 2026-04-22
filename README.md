@@ -61,6 +61,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
     code-scanning: true
     secret-scanning: true
     secret-scanning-push-protection: true
+    private-vulnerability-reporting: true
     dependabot-alerts: true
     dependabot-security-updates: true
     dependabot-yml: './config/dependabot/npm-actions.yml'
@@ -186,6 +187,7 @@ rules:
       code-scanning: true
       secret-scanning: true
       secret-scanning-push-protection: true
+      private-vulnerability-reporting: true
       immutable-releases: true
       dependabot-yml: './config/dependabot/npm-actions.yml'
 
@@ -1002,14 +1004,14 @@ For better security and rate limits, use a GitHub App:
    - **Pull Requests**: Read and write (required if syncing `dependabot.yml`)
    - **Organization Custom Properties**: Read (required when using organization custom property filtering, including `custom-property` selectors in `settings-config.yml` or the `custom-property-name` / `custom-property-value` action inputs)
 2. Install it to your organization/repositories
-3. Add `APP_ID` and `APP_PRIVATE_KEY` as repository secrets
+3. Add `APP_CLIENT_ID` as a repository variable and `APP_PRIVATE_KEY` as a repository secret
 
 ```yml
 - name: Generate GitHub App Token
   id: app-token
   uses: actions/create-github-app-token@v3
   with:
-    app-id: ${{ secrets.APP_ID }}
+    client-id: ${{ vars.APP_CLIENT_ID }}
     private-key: ${{ secrets.APP_PRIVATE_KEY }}
     owner: ${{ github.repository_owner }}
 
@@ -1064,7 +1066,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 

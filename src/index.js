@@ -3557,6 +3557,13 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
     availableApps = data.available_custom_deployment_protection_rule_integrations ?? [];
   } catch (error) {
     core.warning(`  ⚠️  Failed to list available deployment protection rule apps for ${envName}: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'environment-protection-rule',
+        SubResultStatus.WARNING,
+        `Failed to list deployment protection rule apps for ${envName}`
+      )
+    );
     return subResults;
   }
 
@@ -3717,6 +3724,13 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
     existingPolicies = data.branch_policies ?? [];
   } catch (error) {
     core.warning(`  ⚠️  Failed to list deployment branch policies for ${envName}: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'environment-branch-policy',
+        SubResultStatus.WARNING,
+        `Failed to list deployment branch policies for ${envName}`
+      )
+    );
     return subResults;
   }
 
