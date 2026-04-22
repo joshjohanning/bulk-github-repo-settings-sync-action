@@ -887,7 +887,11 @@ function createSubResult(kind, status, message, extra) {
  * @returns {Array<Object>} Repositories owned by the configured owner
  */
 function filterRepositoriesByOwner(repositories, owner) {
-  return repositories.filter(repository => repository.owner?.login?.toLowerCase() === owner.toLowerCase());
+  if (typeof owner !== 'string') {
+    throw new TypeError(`Invalid repository owner configuration: expected a string but received ${typeof owner}`);
+  }
+  const normalizedOwner = owner.trim().toLowerCase();
+  return repositories.filter(repository => repository.owner?.login?.toLowerCase() === normalizedOwner);
 }
 
 /**
