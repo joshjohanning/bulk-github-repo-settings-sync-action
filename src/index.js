@@ -3496,7 +3496,7 @@ export function normalizeExistingEnvironment(env) {
  * @returns {Promise<Object>} Reviewer with resolved id
  */
 async function resolveReviewer(octokit, owner, reviewer) {
-  if (reviewer.id) {
+  if (reviewer.id !== undefined && reviewer.id !== null) {
     const numId = Number(reviewer.id);
     if (!Number.isFinite(numId) || numId <= 0) {
       throw new Error(`Invalid reviewer id "${reviewer.id}": must be a positive number`);
@@ -3589,24 +3589,38 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
   const resolvedRules = [];
   const seenSlugs = new Set();
   for (const rule of desiredRules) {
-    if (seenSlugs.has(rule.app)) continue;
-    seenSlugs.add(rule.app);
-    const app = availableApps.find(a => a.slug === rule.app);
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule) || typeof rule.app !== 'string' || !rule.app.trim()) {
+      core.warning(
+        `  ⚠️  Invalid deployment protection rule for ${envName}: expected an object with a non-empty "app" string`
+      );
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `Invalid deployment protection rule for ${envName}`
+        )
+      );
+      continue;
+    }
+    const appSlug = rule.app.trim();
+    if (seenSlugs.has(appSlug)) continue;
+    seenSlugs.add(appSlug);
+    const app = availableApps.find(a => a.slug === appSlug);
     if (!app) {
       core.warning(
-        `  ⚠️  Deployment protection rule app "${rule.app}" not found for environment ${envName}. ` +
+        `  ⚠️  Deployment protection rule app "${appSlug}" not found for environment ${envName}. ` +
           `Available apps: ${availableApps.map(a => a.slug).join(', ') || 'none'}`
       );
       subResults.push(
         createSubResult(
           'environment-protection-rule',
           SubResultStatus.WARNING,
-          `App "${rule.app}" not available for ${envName}`
+          `App "${appSlug}" not available for ${envName}`
         )
       );
       continue;
     }
-    resolvedRules.push({ integration_id: app.id, slug: rule.app });
+    resolvedRules.push({ integration_id: app.id, slug: appSlug });
   }
 
   // Get existing protection rules
@@ -3735,8 +3749,21 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
-  // Normalize desired patterns: trim, filter empty, deduplicate
-  const normalizedPatterns = [...new Set(desiredPatterns.map(p => p.trim()).filter(p => p.length > 0))];
+  // Normalize desired patterns: validate strings, trim, filter empty, deduplicate
+  const normalizedPatterns = [];
+  const seenPatterns = new Set();
+  for (const pattern of desiredPatterns) {
+    if (typeof pattern !== 'string') {
+      core.warning(
+        `  ⚠️  Skipping invalid branch policy pattern for ${envName}: expected string but got ${pattern === null ? 'null' : typeof pattern}`
+      );
+      continue;
+    }
+    const trimmed = pattern.trim();
+    if (trimmed.length === 0 || seenPatterns.has(trimmed)) continue;
+    seenPatterns.add(trimmed);
+    normalizedPatterns.push(trimmed);
+  }
 
   // Get existing branch policies
   let existingPolicies = [];
@@ -4096,12 +4123,20 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
 
     // Check for custom branch patterns to sync (treat omitted patterns as empty = delete all existing)
-    const envsWithBranchPatterns = resolvedEnvironments
-      .filter(e => e.deployment_branch_policy?.custom_branch_policies === true)
-      .map(e => ({
+    const envsWithBranchPatterns = [];
+    for (const e of resolvedEnvironments) {
+      if (e.deployment_branch_policy?.custom_branch_policies !== true) continue;
+      if (e.branch_name_patterns !== undefined && !Array.isArray(e.branch_name_patterns)) {
+        core.warning(
+          `  ⚠️  Invalid branch_name_patterns for environment "${e.name}": expected an array. Skipping branch policy sync.`
+        );
+        continue;
+      }
+      envsWithBranchPatterns.push({
         ...e,
         branch_name_patterns: Array.isArray(e.branch_name_patterns) ? e.branch_name_patterns : []
-      }));
+      });
+    }
 
     // If no environment changes, no protection rules, and no branch patterns to sync, return early
     if (
