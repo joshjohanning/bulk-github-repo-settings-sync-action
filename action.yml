@@ -178,6 +178,7 @@ inputs:
   summary-heading:
     description: 'Custom heading for the GitHub Actions job summary'
     required: false
+    default: 'Bulk Repository Settings Update Results'
 
 outputs:
   updated-repositories:

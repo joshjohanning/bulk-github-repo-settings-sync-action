@@ -173,6 +173,16 @@ inputs:
     description: 'Package json PR title'
   dry-run:
     description: 'Dry run'
+  write-job-summary:
+    description: 'Write job summary'
+  summary-heading:
+    description: 'Custom job summary heading'
+  custom-property-name:
+    description: 'Custom property name'
+  custom-property-value:
+    description: 'Custom property value'
+  base-path:
+    description: 'Base path'
 `;
 
 const mockActionYmlParsed = {
@@ -4381,6 +4391,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
           name: 'repo1',
           full_name: 'owner/repo1',
           archived: false,
+          permissions: { admin: true },
           allow_squash_merge: false,
           allow_merge_commit: true,
           allow_rebase_merge: true,
