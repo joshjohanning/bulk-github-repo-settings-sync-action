@@ -3553,6 +3553,18 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
   const subResults = [];
   const wouldPrefix = dryRun ? 'Would ' : '';
 
+  if (!Array.isArray(desiredRules)) {
+    core.warning(`  ⚠️  Invalid deployment_protection_rules for ${envName}: expected an array`);
+    subResults.push(
+      createSubResult(
+        'environment-protection-rule',
+        SubResultStatus.WARNING,
+        `Invalid deployment_protection_rules for ${envName}`
+      )
+    );
+    return subResults;
+  }
+
   // Get available apps for this environment
   let availableApps = [];
   try {
@@ -3940,6 +3952,10 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
       if (!env.name || typeof env.name !== 'string') {
         throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
       }
+      env.name = env.name.trim();
+      if (env.name.length === 0) {
+        throw new Error(`Environment name in "${environmentsFilePath}" cannot be empty or whitespace`);
+      }
       if (inlineNames.has(env.name)) {
         // Replace inline entry with richer file entry
         const idx = environments.findIndex(e => e.name === env.name);
@@ -3991,7 +4007,15 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const resolvedEnvironments = [];
     for (const env of environmentsList) {
       const resolved = { ...env };
-      if (resolved.reviewers && resolved.reviewers.length > 0) {
+      if (resolved.reviewers && !Array.isArray(resolved.reviewers)) {
+        return {
+          repository: repo,
+          success: false,
+          error: `Invalid reviewers for environment "${env.name}": expected an array`,
+          dryRun
+        };
+      }
+      if (Array.isArray(resolved.reviewers) && resolved.reviewers.length > 0) {
         try {
           resolved.reviewers = await resolveReviewers(octokit, owner, resolved.reviewers);
         } catch (error) {
