@@ -3693,6 +3693,82 @@ function reviewersEqual(a, b) {
 }
 
 /**
+ * Sync custom deployment branch policies (name patterns) for an environment.
+ * Only runs when custom_branch_policies is true in the environment config.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {string} envName - Environment name
+ * @param {Array<string>} desiredPatterns - Desired branch/tag name patterns
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Array<Object>>} Array of subResults
+ */
+async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, desiredPatterns, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Get existing branch policies
+  let existingPolicies = [];
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+      { owner, repo: repoName, environment_name: envName }
+    );
+    existingPolicies = data.branch_policies ?? [];
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to list deployment branch policies for ${envName}: ${error.message}`);
+    return subResults;
+  }
+
+  const existingNames = new Set(existingPolicies.map(p => p.name));
+  const desiredNames = new Set(desiredPatterns);
+
+  // Create missing policies
+  for (const pattern of desiredPatterns) {
+    if (!existingNames.has(pattern)) {
+      core.info(`  🌿 ${wouldPrefix}Add branch policy: ${pattern} to ${envName}`);
+      subResults.push(
+        createSubResult(
+          'environment-branch-policy',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+        )
+      );
+      if (!dryRun) {
+        await octokit.request('POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies', {
+          owner,
+          repo: repoName,
+          environment_name: envName,
+          name: pattern
+        });
+      }
+    }
+  }
+
+  // Delete policies not in desired list
+  for (const policy of existingPolicies) {
+    if (!desiredNames.has(policy.name)) {
+      core.info(`  🌿 ${wouldPrefix}Remove branch policy: ${policy.name} from ${envName}`);
+      subResults.push(
+        createSubResult(
+          'environment-branch-policy',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+        )
+      );
+      if (!dryRun) {
+        await octokit.request(
+          'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+          { owner, repo: repoName, environment_name: envName, branch_policy_id: policy.id }
+        );
+      }
+    }
+  }
+
+  return subResults;
+}
+
+/**
  * Compare two deployment branch policy objects for equality.
  * @param {Object|null} a - First branch policy
  * @param {Object|null} b - Second branch policy
@@ -3779,6 +3855,15 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
     if (fileEnvs.length === 0) {
       throw new Error(
         `Environments config file "${environmentsFilePath}" must contain an "environments" array or be a YAML/JSON array`
+      );
+    }
+
+    // Check for duplicate names within the file
+    const fileNames = fileEnvs.filter(e => e.name).map(e => e.name);
+    const fileDuplicates = fileNames.filter((name, idx) => fileNames.indexOf(name) !== idx);
+    if (fileDuplicates.length > 0) {
+      throw new Error(
+        `Duplicate environment name(s) in "${environmentsFilePath}": ${[...new Set(fileDuplicates)].join(', ')}`
       );
     }
 
@@ -3915,12 +4000,18 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     // Check for deployment protection rules on any desired environments
     const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
 
-    // If no environment changes and no protection rules to sync, return early
+    // Check for custom branch patterns to sync
+    const envsWithBranchPatterns = resolvedEnvironments.filter(
+      e => e.deployment_branch_policy?.custom_branch_policies === true && Array.isArray(e.branch_name_patterns)
+    );
+
+    // If no environment changes, no protection rules, and no branch patterns to sync, return early
     if (
       environmentsToCreate.length === 0 &&
       environmentsToUpdate.length === 0 &&
       environmentsToDelete.length === 0 &&
-      envsWithProtectionRules.length === 0
+      envsWithProtectionRules.length === 0 &&
+      envsWithBranchPatterns.length === 0
     ) {
       return {
         repository: repo,
@@ -3945,6 +4036,9 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
       if (envsWithProtectionRules.length > 0) {
         message.push(`Would sync deployment protection rules for ${envsWithProtectionRules.length} environment(s)`);
+      }
+      if (envsWithBranchPatterns.length > 0) {
+        message.push(`Would sync branch policies for ${envsWithBranchPatterns.length} environment(s)`);
       }
       return {
         repository: repo,
@@ -3987,6 +4081,20 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       core.info(`  🌍 Deleted environment: ${env.name}`);
     }
 
+    // Sync custom deployment branch policies for environments that use them
+    const branchPolicySubResults = [];
+    for (const env of envsWithBranchPatterns) {
+      const policyResults = await syncDeploymentBranchPolicies(
+        octokit,
+        owner,
+        repoName,
+        env.name,
+        env.branch_name_patterns,
+        dryRun
+      );
+      branchPolicySubResults.push(...policyResults);
+    }
+
     // Sync deployment protection rules for environments that define them
     const protectionRuleSubResults = [];
     for (const env of envsWithProtectionRules) {
@@ -4003,13 +4111,15 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
 
     const hasProtectionChanges = protectionRuleSubResults.some(s => s.status === SubResultStatus.CHANGED);
     const hasProtectionWarnings = protectionRuleSubResults.some(s => s.status === SubResultStatus.WARNING);
+    const hasBranchPolicyChanges = branchPolicySubResults.some(s => s.status === SubResultStatus.CHANGED);
 
-    // If only protection rules were checked and nothing changed
+    // If nothing changed across environments, protection rules, or branch policies
     if (
       environmentsToCreate.length === 0 &&
       environmentsToUpdate.length === 0 &&
       environmentsToDelete.length === 0 &&
-      !hasProtectionChanges
+      !hasProtectionChanges &&
+      !hasBranchPolicyChanges
     ) {
       return {
         repository: repo,
@@ -4038,6 +4148,9 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     if (hasProtectionWarnings) {
       message.push(`Some deployment protection rule updates had warnings`);
     }
+    if (hasBranchPolicyChanges) {
+      message.push(`Updated deployment branch policies`);
+    }
 
     return {
       repository: repo,
@@ -4049,6 +4162,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       environmentsDeleted: environmentsToDelete.map(e => e.name),
       environmentsUnchanged: environmentsUnchanged.length,
       protectionRuleSubResults,
+      branchPolicySubResults,
       dryRun
     };
   } catch (error) {
@@ -4545,8 +4659,10 @@ export async function run() {
           const repoEnvFile = repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : null;
           repoEnvironments = parseEnvironmentsConfig(repoEnvNames, repoEnvFile);
         } catch (error) {
-          core.warning(`Failed to parse environments config for ${repo}: ${error.message}`);
-          repoEnvironments = globalEnvironments;
+          core.warning(
+            `Failed to parse environments config for ${repo}: ${error.message}. Skipping environment sync for this repo.`
+          );
+          repoEnvironments = null;
         }
       }
       const repoDeleteUnmanagedEnvironments = coerceBooleanConfig(
@@ -4832,7 +4948,7 @@ export async function run() {
       }
 
       // Sync environments if specified
-      if (repoEnvironments.length > 0) {
+      if (repoEnvironments && repoEnvironments.length > 0) {
         core.info(`  🌍 Checking environments...`);
         const environmentsResult = await syncEnvironments(
           octokit,
@@ -4853,6 +4969,17 @@ export async function run() {
                 syncStatus: environmentsResult.environments
               })
             );
+          }
+          // Propagate protection rule and branch policy subResults
+          if (environmentsResult.protectionRuleSubResults) {
+            result.subResults.push(...environmentsResult.protectionRuleSubResults);
+          }
+          if (environmentsResult.branchPolicySubResults) {
+            result.subResults.push(...environmentsResult.branchPolicySubResults);
+          }
+          // Mark warnings from protection rules
+          if (environmentsResult.protectionRuleSubResults?.some(s => s.status === SubResultStatus.WARNING)) {
+            result.hasWarnings = true;
           }
         } else {
           result.hasWarnings = true;
