@@ -11721,7 +11721,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should return null when no stale PRs exist', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
       expect(result).toBeNull();
       expect(mockOctokit.rest.pulls.list).toHaveBeenCalledWith({
@@ -11907,7 +11907,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // Should close PR #10 (bot-user) but warn on #11 (human-user)
       expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(1);
       expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
-      expect(result.action).toBe('warned');
+      // Prefer closed result over warned
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(10);
     });
   });
 

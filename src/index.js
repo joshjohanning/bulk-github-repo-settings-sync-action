@@ -1806,6 +1806,12 @@ export async function updateRepositorySettings(
 export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin) {
   const [owner, repoName] = repo.split('/');
 
+  // If authenticatedLogin is unknown, skip stale PR cleanup entirely
+  if (!authenticatedLogin) {
+    core.debug(`  Skipping stale PR check — authenticated user unknown`);
+    return null;
+  }
+
   try {
     const { data: pulls } = await octokit.rest.pulls.list({
       owner,
@@ -1818,15 +1824,11 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
 
     // Process all matching stale PRs
     let lastResult = null;
+    let closedResult = null;
     let remainingOpenPrs = pulls.length;
 
     for (const pr of pulls) {
       // Safety check: only close PRs created by the same user/app running the action
-      // If authenticatedLogin is unknown, skip stale PR cleanup entirely
-      if (!authenticatedLogin) {
-        core.debug(`  Skipping stale PR check — authenticated user unknown`);
-        return null;
-      }
       if (pr.user?.login !== authenticatedLogin) {
         const message = `Found stale PR #${pr.number} on branch ${branchName} but it was created by ${pr.user?.login || 'unknown'}, not ${authenticatedLogin} — skipping auto-close.`;
         core.warning(`  ⚠️  ${message}`);
@@ -1842,12 +1844,14 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
       if (dryRun) {
         const message = `Would close stale PR #${pr.number} (source matches target)`;
         core.info(`  🔍 ${message}`);
-        lastResult = {
+        const result = {
           action: 'would-close',
           prNumber: pr.number,
           prUrl: pr.html_url,
           message
         };
+        closedResult = result;
+        lastResult = result;
         continue;
       }
 
@@ -1870,12 +1874,14 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
       remainingOpenPrs--;
       const message = `Closed stale PR #${pr.number} (source matches target)`;
       core.info(`  🗑️  ${message}`);
-      lastResult = {
+      const result = {
         action: 'closed',
         prNumber: pr.number,
         prUrl: pr.html_url,
         message
       };
+      closedResult = result;
+      lastResult = result;
     }
 
     // Clean up the branch only if no open PRs remain on it
@@ -1892,7 +1898,8 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
       }
     }
 
-    return lastResult;
+    // Prefer closed/would-close result over warned
+    return closedResult || lastResult;
   } catch (error) {
     // Non-fatal error - don't fail the sync because of stale PR cleanup
     core.warning(`  ⚠️  Could not check for stale PRs: ${error.message}`);
