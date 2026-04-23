@@ -1794,15 +1794,16 @@ export async function updateRepositorySettings(
 /**
  * Close stale PRs created by this action when the source file has been reverted to match the target.
  * Searches for open PRs on the given sync branch and closes them with an explanatory comment.
- * If the PR has more than 1 commit (indicating possible manual changes), warns instead of closing.
+ * If the PR has more commits than expected (indicating possible manual changes), warns instead of closing.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {number} [expectedCommits=1] - Max expected commits from the action (1 per file synced)
  * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
  *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
  */
-export async function closeStaleActionPrs(octokit, repo, branchName, dryRun) {
+export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, expectedCommits = 1) {
   const [owner, repoName] = repo.split('/');
 
   try {
@@ -1815,50 +1816,65 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun) {
 
     if (pulls.length === 0) return null;
 
-    const pr = pulls[0];
+    // Process all matching stale PRs
+    let lastResult = null;
+    let remainingOpenPrs = pulls.length;
 
-    // Safety check: if PR has more than 1 commit, it may contain manual changes
-    // The action creates exactly 1 commit per sync PR
-    if (pr.commits > 1) {
-      const message = `Found stale PR #${pr.number} but it has ${pr.commits} commits (expected 1). It may contain manual changes — skipping auto-close.`;
-      core.warning(`  ⚠️  ${message}`);
-      return {
-        action: 'warned',
+    for (const pr of pulls) {
+      // Safety check: if PR has more commits than expected, it may contain manual changes
+      if (pr.commits > expectedCommits) {
+        const message = `Found stale PR #${pr.number} but it has ${pr.commits} commits (expected ≤${expectedCommits}). It may contain manual changes — skipping auto-close.`;
+        core.warning(`  ⚠️  ${message}`);
+        lastResult = {
+          action: 'warned',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        continue;
+      }
+
+      if (dryRun) {
+        const message = `Would close stale PR #${pr.number} (source matches target)`;
+        core.info(`  🔍 ${message}`);
+        lastResult = {
+          action: 'would-close',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        continue;
+      }
+
+      // Add comment explaining why the PR is being closed
+      await octokit.rest.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: pr.number,
+        body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+      });
+
+      // Close the PR
+      await octokit.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: pr.number,
+        state: 'closed'
+      });
+
+      remainingOpenPrs--;
+      const message = `Closed stale PR #${pr.number} (source matches target)`;
+      core.info(`  🗑️  ${message}`);
+      lastResult = {
+        action: 'closed',
         prNumber: pr.number,
         prUrl: pr.html_url,
         message
       };
     }
 
-    if (dryRun) {
-      const message = `Would close stale PR #${pr.number} (source matches target)`;
-      core.info(`  🔍 ${message}`);
-      return {
-        action: 'would-close',
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        message
-      };
-    }
-
-    // Add comment explaining why the PR is being closed
-    await octokit.rest.issues.createComment({
-      owner,
-      repo: repoName,
-      issue_number: pr.number,
-      body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
-    });
-
-    // Close the PR
-    await octokit.rest.pulls.update({
-      owner,
-      repo: repoName,
-      pull_number: pr.number,
-      state: 'closed'
-    });
-
-    // Clean up the branch only if no other open PRs use it
-    if (pulls.length === 1) {
+    // Clean up the branch only if no open PRs remain on it
+    if (!dryRun && remainingOpenPrs === 0) {
       try {
         await octokit.rest.git.deleteRef({
           owner,
@@ -1871,14 +1887,7 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun) {
       }
     }
 
-    const message = `Closed stale PR #${pr.number} (source matches target)`;
-    core.info(`  🗑️  ${message}`);
-    return {
-      action: 'closed',
-      prNumber: pr.number,
-      prUrl: pr.html_url,
-      message
-    };
+    return lastResult;
   } catch (error) {
     // Non-fatal error - don't fail the sync because of stale PR cleanup
     core.warning(`  ⚠️  Could not check for stale PRs: ${error.message}`);
@@ -2033,7 +2042,7 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       const targetPaths = fileInfos.map(f => f.targetPath);
 
       // Check for stale open PRs that should be closed (source reverted to match target)
-      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun);
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, fileInfos.length);
 
       if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
         return {

@@ -11846,7 +11846,27 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check for stale PRs'));
     });
 
-    test('should warn when PR has more than 1 commit (possible manual changes)', async () => {
+    test('should warn when PR has more commits than expected', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 10,
+            html_url: 'https://github.com/owner/repo/pull/10',
+            commits: 4
+          }
+        ]
+      });
+
+      // 3 workflow files = expectedCommits of 3, but PR has 4 (manual change)
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', false, 3);
+
+      expect(result.action).toBe('warned');
+      expect(result.prNumber).toBe(10);
+      expect(result.message).toContain('4 commits');
+      expect(result.message).toContain('manual changes');
+    });
+
+    test('should close PR when commits match expected for multi-file sync', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           {
@@ -11856,16 +11876,18 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', false);
+      // 3 workflow files = expectedCommits of 3, PR has 3 = safe to close
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', false, 3);
 
-      expect(result.action).toBe('warned');
+      expect(result.action).toBe('closed');
       expect(result.prNumber).toBe(10);
-      expect(result.message).toContain('3 commits');
-      expect(result.message).toContain('manual changes');
     });
 
-    test('should not delete branch when multiple PRs exist on same branch', async () => {
+    test('should close all matching PRs and delete branch when none remain', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           { number: 10, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
@@ -11874,13 +11896,38 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
       mockOctokit.rest.issues.createComment.mockResolvedValue({});
       mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
       const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
 
+      // Should close both PRs
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledTimes(2);
+      // Should delete branch since no open PRs remain
+      expect(mockOctokit.rest.git.deleteRef).toHaveBeenCalled();
+      // Returns last closed PR
       expect(result.action).toBe('closed');
-      expect(result.prNumber).toBe(10);
-      // Should NOT delete branch since another PR exists on it
+      expect(result.prNumber).toBe(11);
+    });
+
+    test('should not delete branch when some PRs have extra commits', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          { number: 10, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
+          { number: 11, html_url: 'https://github.com/owner/repo/pull/11', commits: 5 }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+
+      // Should close PR #10 but warn on #11
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(1);
+      // Should NOT delete branch since PR #11 is still open (warned, not closed)
       expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
+      // Returns last result (the warning)
+      expect(result.action).toBe('warned');
     });
   });
 
