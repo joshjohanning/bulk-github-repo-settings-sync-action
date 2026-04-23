@@ -8943,7 +8943,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('parseEnvironmentsConfig should parse inline names', () => {
       const result = parseEnvironmentsConfig('production, staging, dev', null);
-      expect(result).toEqual([{ name: 'production' }, { name: 'staging' }, { name: 'dev' }]);
+      expect(result).toEqual([
+        { name: 'production', _nameOnly: true },
+        { name: 'staging', _nameOnly: true },
+        { name: 'dev', _nameOnly: true }
+      ]);
     });
 
     test('parseEnvironmentsConfig should parse YAML file', () => {
@@ -8965,7 +8969,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = parseEnvironmentsConfig('production, staging', './environments.yml');
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({ name: 'production', wait_timer: 10 });
-      expect(result[1]).toEqual({ name: 'staging' });
+      expect(result[1]).toEqual({ name: 'staging', _nameOnly: true });
     });
 
     test('parseEnvironmentsConfig should throw for file with no environments', () => {
@@ -9055,6 +9059,42 @@ describe('Bulk GitHub Repository Settings Action', () => {
           deployment_branch_policy: { protected_branches: true, custom_branch_policies: false }
         })
       );
+    });
+
+    test('should not update existing environments in simple mode (name-only)', async () => {
+      // Inline environments have _nameOnly flag - should only create, not update
+      const testEnvironments = [
+        { name: 'production', _nameOnly: true },
+        { name: 'new-env', _nameOnly: true }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'production',
+                  protection_rules: [{ type: 'wait_timer', wait_timer: 30 }],
+                  deployment_branch_policy: null
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'PUT /repos/{owner}/{repo}/environments/{environment_name}') {
+          return {};
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      expect(result.environmentsCreated).toEqual(['new-env']);
+      // production should NOT be updated even though settings differ
+      expect(result.environmentsUpdated ?? []).toEqual([]);
+      expect(result.environmentsUnchanged).toBe(1);
     });
 
     test('should handle multiple environments with mixed create/update/delete', async () => {

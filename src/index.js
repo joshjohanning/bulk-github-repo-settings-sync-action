@@ -3941,7 +3941,7 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
       )
     ];
     for (const name of names) {
-      environments.push({ name });
+      environments.push({ name, _nameOnly: true });
     }
   }
 
@@ -4109,6 +4109,9 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
 
       if (!existing) {
         environmentsToCreate.push(normalizedDesired);
+      } else if (desiredEnv._nameOnly) {
+        // Simple mode (name-only): don't update existing environments, just ensure they exist
+        environmentsUnchanged.push(normalizedDesired);
       } else if (!environmentsEqual(normalizedDesired, existing)) {
         environmentsToUpdate.push(normalizedDesired);
       } else {
