@@ -3633,7 +3633,14 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
     existingRules = data.custom_deployment_protection_rules ?? [];
   } catch (error) {
     core.warning(`  ⚠️  Failed to list deployment protection rules for ${envName}: ${error.message}`);
-    existingRules = [];
+    subResults.push(
+      createSubResult(
+        'environment-protection-rule',
+        SubResultStatus.WARNING,
+        `Failed to list deployment protection rules for ${envName}: ${error.message}`
+      )
+    );
+    return subResults;
   }
 
   const existingAppIds = new Set(existingRules.map(r => r.app?.id));
@@ -4133,12 +4140,20 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
 
     // Check for custom branch patterns to sync (treat omitted patterns as empty = delete all existing)
+    const branchPolicySubResults = [];
     const envsWithBranchPatterns = [];
     for (const e of resolvedEnvironments) {
       if (e.deployment_branch_policy?.custom_branch_policies !== true) continue;
       if (e.branch_name_patterns !== undefined && !Array.isArray(e.branch_name_patterns)) {
         core.warning(
           `  ⚠️  Invalid branch_name_patterns for environment "${e.name}": expected an array. Skipping branch policy sync.`
+        );
+        branchPolicySubResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.WARNING,
+            `Invalid branch_name_patterns for environment "${e.name}"`
+          )
         );
         continue;
       }
@@ -4213,7 +4228,6 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     }
 
     // Sync custom deployment branch policies for environments that use them
-    const branchPolicySubResults = [];
     for (const env of envsWithBranchPatterns) {
       const policyResults = await syncDeploymentBranchPolicies(
         octokit,
