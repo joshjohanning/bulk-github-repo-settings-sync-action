@@ -4227,8 +4227,13 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
     }
 
+    // In dry-run, skip branch policy/protection rule sync for environments being created
+    // (they don't exist yet, so API calls would 404)
+    const envsToCreateNames = new Set(environmentsToCreate.map(e => e.name));
+
     // Sync custom deployment branch policies for environments that use them
     for (const env of envsWithBranchPatterns) {
+      if (dryRun && envsToCreateNames.has(env.name)) continue;
       const policyResults = await syncDeploymentBranchPolicies(
         octokit,
         owner,
@@ -4243,6 +4248,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     // Sync deployment protection rules for environments that define them
     const protectionRuleSubResults = [];
     for (const env of envsWithProtectionRules) {
+      if (dryRun && envsToCreateNames.has(env.name)) continue;
       const ruleResults = await syncDeploymentProtectionRules(
         octokit,
         owner,
@@ -5118,8 +5124,8 @@ export async function run() {
         }
       }
 
-      // Sync environments if specified
-      if (repoEnvironments && repoEnvironments.length > 0) {
+      // Sync environments if specified (or if delete-unmanaged is enabled with empty list)
+      if (repoEnvironments && (repoEnvironments.length > 0 || repoDeleteUnmanagedEnvironments)) {
         core.info(`  🌍 Checking environments...`);
         const environmentsResult = await syncEnvironments(
           octokit,

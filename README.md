@@ -634,6 +634,9 @@ environments:
 
 \*\* `branch_name_patterns` applies only when `deployment_branch_policy.custom_branch_policies` is `true`. If custom branch policies are enabled and `branch_name_patterns` is omitted, any existing custom branch patterns will be removed during sync.
 
+> [!NOTE]
+> When using `environments-file`, omitted optional fields are set to their defaults (e.g., `wait_timer: 0`, `reviewers: []`, `deployment_branch_policy: null`). This means existing environment settings will be updated to match the file configuration. To leave an existing environment unchanged, use the inline `environments` input instead — it only creates environments that don't already exist.
+
 For more information on environments, see the [GitHub documentation](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment).
 
 ### Syncing Copilot Instructions
