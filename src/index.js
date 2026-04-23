@@ -3493,9 +3493,10 @@ export function normalizeExistingEnvironment(env) {
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - Repository/org owner
  * @param {Object} reviewer - Reviewer object with type and either id, login, or slug
+ * @param {Map} [cache] - Optional cache for resolved reviewer IDs
  * @returns {Promise<Object>} Reviewer with resolved id
  */
-async function resolveReviewer(octokit, owner, reviewer) {
+async function resolveReviewer(octokit, owner, reviewer, cache) {
   if (reviewer.id !== undefined && reviewer.id !== null) {
     const numId = Number(reviewer.id);
     if (!Number.isFinite(numId) || numId <= 0) {
@@ -3504,10 +3505,15 @@ async function resolveReviewer(octokit, owner, reviewer) {
     return { type: reviewer.type, id: numId };
   }
 
+  const cacheKey = `${reviewer.type}:${reviewer.login || reviewer.slug}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
   if (reviewer.type === 'User' && reviewer.login) {
     try {
       const { data } = await octokit.rest.users.getByUsername({ username: reviewer.login });
-      return { type: 'User', id: data.id };
+      const result = { type: 'User', id: data.id };
+      cache?.set(cacheKey, result);
+      return result;
     } catch (error) {
       throw new Error(`Failed to resolve User login "${reviewer.login}": ${error.message}`);
     }
@@ -3516,7 +3522,9 @@ async function resolveReviewer(octokit, owner, reviewer) {
   if (reviewer.type === 'Team' && reviewer.slug) {
     try {
       const { data } = await octokit.rest.teams.getByName({ org: owner, team_slug: reviewer.slug });
-      return { type: 'Team', id: data.id };
+      const result = { type: 'Team', id: data.id };
+      cache?.set(cacheKey, result);
+      return result;
     } catch (error) {
       throw new Error(`Failed to resolve Team slug "${reviewer.slug}" in org "${owner}": ${error.message}`);
     }
@@ -3532,11 +3540,12 @@ async function resolveReviewer(octokit, owner, reviewer) {
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - Repository/org owner
  * @param {Array<Object>} reviewers - Array of reviewer objects
+ * @param {Map} [cache] - Optional cache for resolved reviewer IDs
  * @returns {Promise<Array<Object>>} Reviewers with resolved IDs
  */
-async function resolveReviewers(octokit, owner, reviewers) {
+async function resolveReviewers(octokit, owner, reviewers, cache) {
   if (!reviewers || reviewers.length === 0) return [];
-  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r)));
+  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
 }
 
 /**
@@ -4039,9 +4048,10 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
  * @param {Array<Object>} environmentsList - Array of environment config objects
  * @param {boolean} deleteUnmanaged - Delete environments not in the config
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {Map} [reviewerCache] - Optional cache for resolved reviewer IDs
  * @returns {Promise<Object>} Result object
  */
-export async function syncEnvironments(octokit, repo, environmentsList, deleteUnmanaged, dryRun) {
+export async function syncEnvironments(octokit, repo, environmentsList, deleteUnmanaged, dryRun, reviewerCache) {
   const [owner, repoName] = repo.split('/');
 
   if (!owner || !repoName) {
@@ -4080,7 +4090,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
       }
       if (Array.isArray(resolved.reviewers) && resolved.reviewers.length > 0) {
         try {
-          resolved.reviewers = await resolveReviewers(octokit, owner, resolved.reviewers);
+          resolved.reviewers = await resolveReviewers(octokit, owner, resolved.reviewers, reviewerCache);
         } catch (error) {
           return {
             repository: repo,
@@ -4683,6 +4693,9 @@ export async function run() {
     let changedCount = 0;
     let warningCount = 0;
 
+    // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
+    const reviewerCache = new Map();
+
     for (const repoConfig of repoList) {
       const repo = repoConfig.repo;
       core.info(`Updating ${repo}...`);
@@ -5151,7 +5164,8 @@ export async function run() {
           repo,
           repoEnvironments,
           repoDeleteUnmanagedEnvironments,
-          dryRun
+          dryRun,
+          reviewerCache
         );
 
         // Add environments result to the main result
