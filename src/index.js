@@ -4240,6 +4240,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const hasProtectionChanges = protectionRuleSubResults.some(s => s.status === SubResultStatus.CHANGED);
     const hasProtectionWarnings = protectionRuleSubResults.some(s => s.status === SubResultStatus.WARNING);
     const hasBranchPolicyChanges = branchPolicySubResults.some(s => s.status === SubResultStatus.CHANGED);
+    const hasBranchPolicyWarnings = branchPolicySubResults.some(s => s.status === SubResultStatus.WARNING);
 
     // If nothing changed across environments, protection rules, or branch policies
     if (
@@ -4256,6 +4257,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
         message: `All ${resolvedEnvironments.length} environment(s) are already up to date`,
         environmentsUnchanged: environmentsUnchanged.length,
         protectionRuleSubResults,
+        branchPolicySubResults,
         dryRun
       };
     }
@@ -4278,6 +4280,9 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     }
     if (hasBranchPolicyChanges) {
       message.push(`${dryRun ? 'Would update' : 'Updated'} deployment branch policies`);
+    }
+    if (hasBranchPolicyWarnings) {
+      message.push(`Some deployment branch policy updates had warnings`);
     }
 
     return {
@@ -5126,8 +5131,11 @@ export async function run() {
           if (environmentsResult.branchPolicySubResults) {
             result.subResults.push(...environmentsResult.branchPolicySubResults);
           }
-          // Mark warnings from protection rules
-          if (environmentsResult.protectionRuleSubResults?.some(s => s.status === SubResultStatus.WARNING)) {
+          // Mark warnings from protection rules and branch policies
+          if (
+            environmentsResult.protectionRuleSubResults?.some(s => s.status === SubResultStatus.WARNING) ||
+            environmentsResult.branchPolicySubResults?.some(s => s.status === SubResultStatus.WARNING)
+          ) {
             result.hasWarnings = true;
           }
         } else {

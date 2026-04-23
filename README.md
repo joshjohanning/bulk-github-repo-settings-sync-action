@@ -550,6 +550,9 @@ Sync deployment environments across multiple repositories to standardize environ
     environments: production, staging, development
 ```
 
+> [!WARNING]
+> Using only `environments:` syncs those environment names with default settings (no reviewers, no wait timer, no branch restrictions). If an environment with the same name already exists, its current configuration will be reset to defaults. Use `environments-file` when you need to preserve or explicitly manage environment settings.
+
 **Advanced — use a YAML/JSON file for full configuration:**
 
 ```yml
