@@ -3505,7 +3505,8 @@ async function resolveReviewer(octokit, owner, reviewer, cache) {
     return { type: reviewer.type, id: numId };
   }
 
-  const cacheKey = `${reviewer.type}:${reviewer.login || reviewer.slug}`;
+  // Include owner in team cache key since team slugs are org-scoped
+  const cacheKey = reviewer.type === 'Team' ? `Team:${owner}:${reviewer.slug}` : `User:${reviewer.login}`;
   if (cache?.has(cacheKey)) return cache.get(cacheKey);
 
   if (reviewer.type === 'User' && reviewer.login) {
@@ -4843,7 +4844,9 @@ export async function run() {
 
       // Handle repo-specific environments
       let repoEnvironments = globalEnvironments;
+      let repoHasExplicitEnvConfig = globalEnvironments.length > 0;
       if (repoConfig['environments'] !== undefined || repoConfig['environments-file'] !== undefined) {
+        repoHasExplicitEnvConfig = true;
         try {
           const rawEnv = repoConfig['environments'];
           let repoEnvNames = null;
@@ -5155,8 +5158,11 @@ export async function run() {
         }
       }
 
-      // Sync environments if specified (or if delete-unmanaged is enabled with empty list)
-      if (repoEnvironments && (repoEnvironments.length > 0 || repoDeleteUnmanagedEnvironments)) {
+      // Sync environments if specified (delete-unmanaged requires explicit env config to prevent accidental mass deletion)
+      if (
+        repoEnvironments &&
+        (repoEnvironments.length > 0 || (repoDeleteUnmanagedEnvironments && repoHasExplicitEnvConfig))
+      ) {
         core.info(`  🌍 Checking environments...`);
         const environmentsResult = await syncEnvironments(
           octokit,
