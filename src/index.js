@@ -3677,7 +3677,14 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
     }
   }
 
-  // Delete rules not in desired set
+  // Delete rules not in desired set (skip if all desired rules failed validation — avoids accidental delete-all)
+  const hasValidationFailures = subResults.some(s => s.status === SubResultStatus.WARNING);
+  if (desiredRules.length > 0 && resolvedRules.length === 0 && hasValidationFailures) {
+    core.warning(
+      `  ⚠️  All deployment protection rules for ${envName} failed validation — skipping deletion to avoid accidental removal`
+    );
+    return subResults;
+  }
   for (const existing of existingRules) {
     if (existing.app?.id && !desiredAppIds.has(existing.app.id)) {
       const appSlug = existing.app?.slug ?? `ID ${existing.app?.id}`;
@@ -3841,7 +3848,13 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
     }
   }
 
-  // Delete policies not in desired list
+  // Delete policies not in desired list (skip if all patterns were invalid — avoids accidental delete-all)
+  if (desiredPatterns.length > 0 && normalizedPatterns.length === 0) {
+    core.warning(
+      `  ⚠️  All branch name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`
+    );
+    return subResults;
+  }
   for (const policy of existingPolicies) {
     if (!desiredNames.has(policy.name)) {
       core.info(`  🌿 ${wouldPrefix}Remove branch policy: ${policy.name} from ${envName}`);
@@ -4577,6 +4590,7 @@ export async function run() {
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
       globalEnvironments.length > 0 ||
+      deleteUnmanagedEnvironments ||
       copilotInstructionsMd ||
       codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
