@@ -4107,7 +4107,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const existingEnvironments = [];
     try {
       let page = 1;
-      const perPage = 30;
+      const perPage = 100;
       let hasMore = true;
       while (hasMore) {
         const response = await octokit.request('GET /repos/{owner}/{repo}/environments', {
@@ -4600,7 +4600,6 @@ export async function run() {
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
       globalEnvironments.length > 0 ||
-      deleteUnmanagedEnvironments ||
       copilotInstructionsMd ||
       codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
