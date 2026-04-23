@@ -921,6 +921,10 @@ function formatSubResultSummary(subResult, dryRun) {
 
   if (syncStatus === 'pr-up-to-date') {
     return `${label} ${prRef} up-to-date (pending merge)`;
+  } else if (syncStatus === 'stale-pr-closed') {
+    return `Closed stale ${prRef} for ${label}`;
+  } else if (syncStatus === 'would-close-stale-pr') {
+    return `Would close stale ${prRef} for ${label}`;
   } else if (syncStatus === 'would-update-pr') {
     return `Would update existing ${prRef} for ${label}`;
   } else if (syncStatus.startsWith('would-')) {
@@ -1788,6 +1792,100 @@ export async function updateRepositorySettings(
 }
 
 /**
+ * Close stale PRs created by this action when the source file has been reverted to match the target.
+ * Searches for open PRs on the given sync branch and closes them with an explanatory comment.
+ * If the PR has more commits than expected (indicating possible manual changes), warns instead of closing.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
+ * @param {number} expectedCommits - Expected number of commits from the action (typically 1 per file synced)
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
+ *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
+ */
+export async function closeStaleActionPrs(octokit, repo, branchName, expectedCommits, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  try {
+    const { data: pulls } = await octokit.rest.pulls.list({
+      owner,
+      repo: repoName,
+      state: 'open',
+      head: `${owner}:${branchName}`
+    });
+
+    if (pulls.length === 0) return null;
+
+    const pr = pulls[0];
+
+    // Safety check: if PR has more commits than expected, it may contain manual changes
+    if (pr.commits > expectedCommits) {
+      const message = `Found stale PR #${pr.number} but it has ${pr.commits} commit(s) (expected ${expectedCommits}). It may contain manual changes — skipping auto-close.`;
+      core.warning(`  ⚠️  ${message}`);
+      return {
+        action: 'warned',
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        message
+      };
+    }
+
+    if (dryRun) {
+      const message = `Would close stale PR #${pr.number} (source matches target)`;
+      core.info(`  🔍 ${message}`);
+      return {
+        action: 'would-close',
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        message
+      };
+    }
+
+    // Add comment explaining why the PR is being closed
+    await octokit.rest.issues.createComment({
+      owner,
+      repo: repoName,
+      issue_number: pr.number,
+      body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+    });
+
+    // Close the PR
+    await octokit.rest.pulls.update({
+      owner,
+      repo: repoName,
+      pull_number: pr.number,
+      state: 'closed'
+    });
+
+    // Clean up the branch (best-effort)
+    try {
+      await octokit.rest.git.deleteRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`
+      });
+      core.info(`  🗑️  Deleted branch ${branchName}`);
+    } catch (error) {
+      // Non-fatal - branch cleanup is best-effort
+      core.debug(`  Could not delete branch ${branchName}: ${error.message}`);
+    }
+
+    const message = `Closed stale PR #${pr.number} (source matches target)`;
+    core.info(`  🗑️  ${message}`);
+    return {
+      action: 'closed',
+      prNumber: pr.number,
+      prUrl: pr.html_url,
+      message
+    };
+  } catch (error) {
+    // Non-fatal error - don't fail the sync because of stale PR cleanup
+    core.warning(`  ⚠️  Could not check for stale PRs: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Generic function to sync one or more files to a target repository via pull request.
  * If an open PR already exists for the same branch, the function checks if the PR branch
  * content differs from the new source content. If different, it updates the PR branch with
@@ -1819,6 +1917,8 @@ export async function updateRepositorySettings(
  *   - 'would-create': Dry-run - would create new file(s)
  *   - 'would-update': Dry-run - would update existing file(s)
  *   - 'would-update-pr': Dry-run - would update existing PR branch
+ *   - 'stale-pr-closed': Source matches target and a stale PR was auto-closed
+ *   - 'would-close-stale-pr': Dry-run - would close a stale PR
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
   const {
@@ -1927,12 +2027,29 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       }
     }
 
-    // If no files need updates, return early
+    // If no files need updates, check for stale PRs and return
     if (filesToUpdate.length === 0) {
       const targetPaths = fileInfos.map(f => f.targetPath);
+
+      // Check for stale open PRs that should be closed (source reverted to match target)
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, fileInfos.length, dryRun);
+
+      if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
+        return {
+          repository: repo,
+          success: true,
+          [resultKey]: stalePrResult.action === 'closed' ? 'stale-pr-closed' : 'would-close-stale-pr',
+          message: stalePrResult.message,
+          prNumber: stalePrResult.prNumber,
+          prUrl: stalePrResult.prUrl,
+          filesProcessed: targetPaths,
+          dryRun
+        };
+      }
+
       const message =
         fileInfos.length === 1 ? `${targetPaths[0]} is already up to date` : 'All files are already up to date';
-      return {
+      const result = {
         repository: repo,
         success: true,
         [resultKey]: 'unchanged',
@@ -1940,6 +2057,13 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         filesProcessed: targetPaths,
         dryRun
       };
+
+      // If stale PR was warned (has extra commits), attach warning info
+      if (stalePrResult && stalePrResult.action === 'warned') {
+        result.stalePrWarning = stalePrResult;
+      }
+
+      return result;
     }
 
     // Check if there's already an open PR for this update
@@ -2557,15 +2681,37 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
       }
     }
 
-    // If no changes needed, return early
+    // If no changes needed, check for stale PRs and return
     if (changes.length === 0) {
-      return {
+      // Check for stale open PRs that should be closed (source reverted to match target)
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, 1, dryRun);
+
+      if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
+        return {
+          repository: repo,
+          success: true,
+          packageJson: stalePrResult.action === 'closed' ? 'stale-pr-closed' : 'would-close-stale-pr',
+          message: stalePrResult.message,
+          prNumber: stalePrResult.prNumber,
+          prUrl: stalePrResult.prUrl,
+          dryRun
+        };
+      }
+
+      const result = {
         repository: repo,
         success: true,
         packageJson: 'unchanged',
         message: `${targetPath} is already up to date`,
         dryRun
       };
+
+      // If stale PR was warned (has extra commits), attach warning info
+      if (stalePrResult && stalePrResult.action === 'warned') {
+        result.stalePrWarning = stalePrResult;
+      }
+
+      return result;
     }
 
     // Check if there's already an open PR for this update
@@ -4989,6 +5135,15 @@ export async function run() {
               })
             );
           }
+          if (dependabotResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('dependabot-sync', SubResultStatus.WARNING, dependabotResult.stalePrWarning.message, {
+                prNumber: dependabotResult.stalePrWarning.prNumber,
+                prUrl: dependabotResult.stalePrWarning.prUrl
+              })
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.dependabotSyncWarning = dependabotResult.error;
@@ -5018,6 +5173,15 @@ export async function run() {
                 syncStatus: gitignoreResult.gitignore,
                 prNumber: gitignoreResult.prNumber,
                 prUrl: gitignoreResult.prUrl
+              })
+            );
+          }
+          if (gitignoreResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('gitignore-sync', SubResultStatus.WARNING, gitignoreResult.stalePrWarning.message, {
+                prNumber: gitignoreResult.stalePrWarning.prNumber,
+                prUrl: gitignoreResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5089,6 +5253,15 @@ export async function run() {
               })
             );
           }
+          if (templateResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('pr-template-sync', SubResultStatus.WARNING, templateResult.stalePrWarning.message, {
+                prNumber: templateResult.stalePrWarning.prNumber,
+                prUrl: templateResult.stalePrWarning.prUrl
+              })
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.pullRequestTemplateSyncWarning = templateResult.error;
@@ -5118,6 +5291,15 @@ export async function run() {
                 syncStatus: workflowResult.workflowFiles,
                 prNumber: workflowResult.prNumber,
                 prUrl: workflowResult.prUrl
+              })
+            );
+          }
+          if (workflowResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('workflow-files-sync', SubResultStatus.WARNING, workflowResult.stalePrWarning.message, {
+                prNumber: workflowResult.stalePrWarning.prNumber,
+                prUrl: workflowResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5237,6 +5419,20 @@ export async function run() {
               })
             );
           }
+          if (copilotResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult(
+                'copilot-instructions-sync',
+                SubResultStatus.WARNING,
+                copilotResult.stalePrWarning.message,
+                {
+                  prNumber: copilotResult.stalePrWarning.prNumber,
+                  prUrl: copilotResult.stalePrWarning.prUrl
+                }
+              )
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.copilotInstructionsSyncWarning = copilotResult.error;
@@ -5282,6 +5478,15 @@ export async function run() {
                 syncStatus: codeownersResult.codeowners,
                 prNumber: codeownersResult.prNumber,
                 prUrl: codeownersResult.prUrl
+              })
+            );
+          }
+          if (codeownersResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('codeowners-sync', SubResultStatus.WARNING, codeownersResult.stalePrWarning.message, {
+                prNumber: codeownersResult.stalePrWarning.prNumber,
+                prUrl: codeownersResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5333,6 +5538,15 @@ export async function run() {
                 syncStatus: packageJsonResult.packageJson,
                 prNumber: packageJsonResult.prNumber,
                 prUrl: packageJsonResult.prUrl
+              })
+            );
+          }
+          if (packageJsonResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('package-json-sync', SubResultStatus.WARNING, packageJsonResult.stalePrWarning.message, {
+                prNumber: packageJsonResult.stalePrWarning.prNumber,
+                prUrl: packageJsonResult.stalePrWarning.prUrl
               })
             );
           }

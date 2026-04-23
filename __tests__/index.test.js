@@ -59,7 +59,11 @@ const mockOctokit = {
     git: {
       getRef: jest.fn(),
       createRef: jest.fn(),
-      updateRef: jest.fn()
+      updateRef: jest.fn(),
+      deleteRef: jest.fn()
+    },
+    issues: {
+      createComment: jest.fn()
     },
     pulls: {
       list: jest.fn(),
@@ -336,6 +340,7 @@ const {
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
+  closeStaleActionPrs,
   escapeHtmlAttribute,
   formatPrLink,
   resetKnownRepoConfigKeysCache,
@@ -11697,6 +11702,385 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow[1]).toBe('\u2796 No changes');
       expect(repoRow[2]).toBe('No changes needed');
+    });
+  });
+
+  describe('closeStaleActionPrs', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+    });
+
+    test('should return null when no stale PRs exist', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, false);
+
+      expect(result).toBeNull();
+      expect(mockOctokit.rest.pulls.list).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        state: 'open',
+        head: 'owner:dependabot-yml-sync'
+      });
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should close stale PR when source matches target', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, false);
+
+      expect(result).toEqual({
+        action: 'closed',
+        prNumber: 42,
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        message: 'Closed stale PR #42 (source matches target)'
+      });
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        issue_number: 42,
+        body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+      });
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        pull_number: 42,
+        state: 'closed'
+      });
+      expect(mockOctokit.rest.git.deleteRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/dependabot-yml-sync'
+      });
+    });
+
+    test('should warn instead of closing when PR has extra commits', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 3
+          }
+        ]
+      });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, false);
+
+      expect(result.action).toBe('warned');
+      expect(result.prNumber).toBe(42);
+      expect(result.message).toContain('manual changes');
+      expect(result.message).toContain('3 commit(s)');
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should report would-close in dry-run mode', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, true);
+
+      expect(result).toEqual({
+        action: 'would-close',
+        prNumber: 42,
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        message: 'Would close stale PR #42 (source matches target)'
+      });
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should handle branch deletion failure gracefully', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockRejectedValue(new Error('Branch not found'));
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, false);
+
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(42);
+      // Should still succeed even if branch deletion fails
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalled();
+    });
+
+    test('should return null when API call fails', async () => {
+      mockOctokit.rest.pulls.list.mockRejectedValue(new Error('API error'));
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', 1, false);
+
+      expect(result).toBeNull();
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check for stale PRs'));
+    });
+
+    test('should use expectedCommits for multi-file threshold', async () => {
+      // 3 commits for 3 workflow files is expected
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 10,
+            html_url: 'https://github.com/owner/repo/pull/10',
+            commits: 3
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', 3, false);
+
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(10);
+    });
+  });
+
+  describe('syncDependabotYml - stale PR closing', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+    });
+
+    test('should close stale PR when content is unchanged and stale PR exists', async () => {
+      const content =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with same content (unchanged)
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      // Stale PR exists on the sync branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 5,
+            html_url: 'https://github.com/owner/repo/pull/5',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('stale-pr-closed');
+      expect(result.prNumber).toBe(5);
+      expect(result.message).toContain('Closed stale PR #5');
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 5, state: 'closed' })
+      );
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith(expect.objectContaining({ issue_number: 5 }));
+    });
+
+    test('should report would-close in dry-run when content is unchanged and stale PR exists', async () => {
+      const content = 'version: 2\nupdates: []';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 7,
+            html_url: 'https://github.com/owner/repo/pull/7',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        true
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('would-close-stale-pr');
+      expect(result.prNumber).toBe(7);
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should warn about stale PR with extra commits and return unchanged', async () => {
+      const content = 'version: 2\nupdates: []';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      // Stale PR with extra commits
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 8,
+            html_url: 'https://github.com/owner/repo/pull/8',
+            commits: 3
+          }
+        ]
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('unchanged');
+      expect(result.stalePrWarning).toBeDefined();
+      expect(result.stalePrWarning.action).toBe('warned');
+      expect(result.stalePrWarning.prNumber).toBe(8);
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncPackageJson - stale PR closing', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+    });
+
+    test('should close stale PR when package.json is unchanged and stale PR exists', async () => {
+      const sourceJson = { name: 'test', scripts: { build: 'tsc' } };
+      const existingJson = { name: 'test', scripts: { build: 'tsc' } };
+
+      setMockFileContent(JSON.stringify(sourceJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(JSON.stringify(existingJson)).toString('base64')
+        }
+      });
+
+      // Stale PR exists on the sync branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 15,
+            html_url: 'https://github.com/owner/repo/pull/15',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('stale-pr-closed');
+      expect(result.prNumber).toBe(15);
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 15, state: 'closed' })
+      );
     });
   });
 
