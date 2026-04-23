@@ -1794,16 +1794,16 @@ export async function updateRepositorySettings(
 /**
  * Close stale PRs created by this action when the source file has been reverted to match the target.
  * Searches for open PRs on the given sync branch and closes them with an explanatory comment.
- * If the PR has more commits than expected (indicating possible manual changes), warns instead of closing.
+ * Only closes PRs created by the authenticated user/app to avoid closing unrelated PRs.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
  * @param {boolean} dryRun - Preview mode without making actual changes
- * @param {number} [expectedCommits=1] - Max expected commits from the action (1 per file synced)
+ * @param {string} authenticatedLogin - Login of the authenticated user/app running the action
  * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
  *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
  */
-export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, expectedCommits = 1) {
+export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin) {
   const [owner, repoName] = repo.split('/');
 
   try {
@@ -1821,9 +1821,9 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, exp
     let remainingOpenPrs = pulls.length;
 
     for (const pr of pulls) {
-      // Safety check: if PR has more commits than expected, it may contain manual changes
-      if (pr.commits > expectedCommits) {
-        const message = `Found stale PR #${pr.number} but it has ${pr.commits} commits (expected ≤${expectedCommits}). It may contain manual changes — skipping auto-close.`;
+      // Safety check: only close PRs created by the same user/app running the action
+      if (authenticatedLogin && pr.user?.login !== authenticatedLogin) {
+        const message = `Found stale PR #${pr.number} on branch ${branchName} but it was created by ${pr.user?.login || 'unknown'}, not ${authenticatedLogin} — skipping auto-close.`;
         core.warning(`  ⚠️  ${message}`);
         lastResult = {
           action: 'warned',
@@ -1940,7 +1940,8 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
     resultKey,
     fileDescription,
     contentProcessor,
-    contentTransformer
+    contentTransformer,
+    authenticatedLogin
   } = options;
 
   const [owner, repoName] = repo.split('/');
@@ -2042,7 +2043,7 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       const targetPaths = fileInfos.map(f => f.targetPath);
 
       // Check for stale open PRs that should be closed (source reverted to match target)
-      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, fileInfos.length);
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
 
       if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
         return {
@@ -2445,7 +2446,7 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -2457,7 +2458,8 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       prBodyCreate: `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`,
       prBodyUpdate: `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`,
       resultKey: 'dependabotYml',
-      fileDescription: 'dependabot.yml'
+      fileDescription: 'dependabot.yml',
+      authenticatedLogin
     },
     dryRun
   );
@@ -2534,7 +2536,7 @@ const gitignoreContentProcessor = {
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun) {
+export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -2547,6 +2549,7 @@ export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRu
       prBodyUpdate: `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration\n- Repository-specific entries have been preserved`,
       resultKey: 'gitignore',
       fileDescription: '.gitignore',
+      authenticatedLogin,
       contentProcessor: gitignoreContentProcessor
     },
     dryRun
@@ -2586,7 +2589,16 @@ function deepEqual(obj1, obj2) {
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncPackageJson(octokit, repo, packageJsonPath, syncScripts, syncEngines, prTitle, dryRun) {
+export async function syncPackageJson(
+  octokit,
+  repo,
+  packageJsonPath,
+  syncScripts,
+  syncEngines,
+  prTitle,
+  dryRun,
+  authenticatedLogin
+) {
   const [owner, repoName] = repo.split('/');
   const targetPath = 'package.json';
   const branchName = 'package-json-sync';
@@ -2694,7 +2706,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
     // If no changes needed, check for stale PRs and return
     if (changes.length === 0) {
       // Check for stale open PRs that should be closed (source reverted to match target)
-      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun);
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
 
       if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
         return {
@@ -3352,7 +3364,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun) {
+export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -3364,7 +3376,8 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
       prBodyCreate: `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`,
       prBodyUpdate: `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`,
       resultKey: 'pullRequestTemplate',
-      fileDescription: 'pull request template'
+      fileDescription: 'pull request template',
+      authenticatedLogin
     },
     dryRun
   );
@@ -3379,7 +3392,7 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun, authenticatedLogin) {
   // Validate that workflow files array is non-empty
   if (!workflowFilePaths || workflowFilePaths.length === 0) {
     return {
@@ -3406,7 +3419,8 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
       prBodyCreate: 'This PR adds workflow files.',
       prBodyUpdate: 'This PR syncs workflow files to the latest versions.',
       resultKey: 'workflowFiles',
-      fileDescription: 'workflow files'
+      fileDescription: 'workflow files',
+      authenticatedLogin
     },
     dryRun
   );
@@ -4528,7 +4542,14 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object
  */
-export async function syncCopilotInstructions(octokit, repo, copilotInstructionsPath, prTitle, dryRun) {
+export async function syncCopilotInstructions(
+  octokit,
+  repo,
+  copilotInstructionsPath,
+  prTitle,
+  dryRun,
+  authenticatedLogin
+) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -4540,7 +4561,8 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
       prBodyCreate: `This PR adds \`.github/copilot-instructions.md\` to configure GitHub Copilot.\n\n**Changes:**\n- Added Copilot instructions`,
       prBodyUpdate: `This PR updates \`.github/copilot-instructions.md\` to the latest version.\n\n**Changes:**\n- Updated Copilot instructions`,
       resultKey: 'copilotInstructions',
-      fileDescription: 'copilot-instructions.md'
+      fileDescription: 'copilot-instructions.md',
+      authenticatedLogin
     },
     dryRun
   );
@@ -4557,7 +4579,16 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
  * @param {Object} [templateVars] - Optional template variables for {{variable}} replacement
  * @returns {Promise<Object>} Result object
  */
-export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, prTitle, dryRun, templateVars = null) {
+export async function syncCodeowners(
+  octokit,
+  repo,
+  codeownersPath,
+  targetPath,
+  prTitle,
+  dryRun,
+  authenticatedLogin,
+  templateVars = null
+) {
   // Validate target path
   const validPaths = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
   if (!validPaths.includes(targetPath)) {
@@ -4590,6 +4621,7 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
       prBodyUpdate: `This PR updates \`${targetPath}\` to the latest version.\n\n**Changes:**\n- Updated CODEOWNERS file`,
       resultKey: 'codeowners',
       fileDescription: 'CODEOWNERS',
+      authenticatedLogin,
       contentTransformer
     },
     dryRun
@@ -4771,6 +4803,16 @@ export async function run() {
       auth: githubToken,
       baseUrl: githubApiUrl
     });
+
+    // Get authenticated user/app login for stale PR author matching
+    let authenticatedLogin = '';
+    try {
+      const { data: authUser } = await octokit.rest.users.getAuthenticated();
+      authenticatedLogin = authUser.login;
+      core.debug(`Authenticated as: ${authenticatedLogin}`);
+    } catch (error) {
+      core.debug(`Could not determine authenticated user: ${error.message}`);
+    }
 
     // Parse repository list
     const repoList = await parseRepositories(
@@ -5126,7 +5168,14 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Checking dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(
+          octokit,
+          repo,
+          repoDependabotYml,
+          dependabotPrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -5167,7 +5216,14 @@ export async function run() {
       // Sync .gitignore if specified
       if (repoGitignore) {
         core.info(`  📝 Checking .gitignore...`);
-        const gitignoreResult = await syncGitignore(octokit, repo, repoGitignore, gitignorePrTitle, dryRun);
+        const gitignoreResult = await syncGitignore(
+          octokit,
+          repo,
+          repoGitignore,
+          gitignorePrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add gitignore result to the main result
         result.gitignoreSync = gitignoreResult;
@@ -5243,7 +5299,8 @@ export async function run() {
           repo,
           repoPullRequestTemplate,
           pullRequestTemplatePrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add pull request template result to the main result
@@ -5285,7 +5342,14 @@ export async function run() {
       // Sync workflow files if specified
       if (repoWorkflowFiles && repoWorkflowFiles.length > 0) {
         core.info(`  🔧 Checking workflow files...`);
-        const workflowResult = await syncWorkflowFiles(octokit, repo, repoWorkflowFiles, workflowFilesPrTitle, dryRun);
+        const workflowResult = await syncWorkflowFiles(
+          octokit,
+          repo,
+          repoWorkflowFiles,
+          workflowFilesPrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add workflow files result to the main result
         result.workflowFilesSync = workflowResult;
@@ -5409,7 +5473,8 @@ export async function run() {
           repo,
           repoCopilotInstructionsMd,
           copilotInstructionsPrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add copilot instructions result to the main result
@@ -5471,6 +5536,7 @@ export async function run() {
           repoCodeownersTargetPath,
           codeownersPrTitle,
           dryRun,
+          authenticatedLogin,
           repoCodeownersVars
         );
 
@@ -5526,7 +5592,8 @@ export async function run() {
           repoSyncScripts,
           repoSyncEngines,
           packageJsonPrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add package.json result to the main result

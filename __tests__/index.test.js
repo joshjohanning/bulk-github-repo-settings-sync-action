@@ -10524,6 +10524,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         '.github/CODEOWNERS',
         'chore: update CODEOWNERS',
         false,
+        '',
         { default_team: '@org/team-a', code_reviewers: '@org/leads' }
       );
 
@@ -10566,6 +10567,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         '.github/CODEOWNERS',
         'chore: update CODEOWNERS',
         false,
+        '',
         { default_team: '@org/team-a', code_reviewers: '@org/leads' }
       );
 
@@ -11293,6 +11295,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo1/pull/42'
           }
         ]
@@ -11433,6 +11436,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo1/pull/42'
           }
         ]
@@ -11735,6 +11739,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/42',
             commits: 1
           }
@@ -11744,7 +11749,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.pulls.update.mockResolvedValue({});
       mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
       expect(result).toEqual({
         action: 'closed',
@@ -11771,23 +11776,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
-    test('should warn instead of closing when PR has extra commits', async () => {
+    test('should warn instead of closing when PR author does not match', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           {
             number: 42,
+            user: { login: 'other-user' },
             html_url: 'https://github.com/owner/repo/pull/42',
-            commits: 3
+            commits: 1
           }
         ]
       });
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
       expect(result.action).toBe('warned');
       expect(result.prNumber).toBe(42);
-      expect(result.message).toContain('manual changes');
-      expect(result.message).toContain('3 commits');
+      expect(result.message).toContain('other-user');
+      expect(result.message).toContain('bot-user');
       expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
     });
@@ -11797,13 +11803,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/42',
             commits: 1
           }
         ]
       });
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', true);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', true, 'bot-user');
 
       expect(result).toEqual({
         action: 'would-close',
@@ -11820,6 +11827,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/42',
             commits: 1
           }
@@ -11829,7 +11837,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.pulls.update.mockResolvedValue({});
       mockOctokit.rest.git.deleteRef.mockRejectedValue(new Error('Branch not found'));
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
       expect(result.action).toBe('closed');
       expect(result.prNumber).toBe(42);
@@ -11840,39 +11848,20 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('should return null when API call fails', async () => {
       mockOctokit.rest.pulls.list.mockRejectedValue(new Error('API error'));
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
       expect(result).toBeNull();
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check for stale PRs'));
     });
 
-    test('should warn when PR has more commits than expected', async () => {
+    test('should close PR when authenticatedLogin is empty (graceful degradation)', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           {
             number: 10,
+            user: { login: 'any-user' },
             html_url: 'https://github.com/owner/repo/pull/10',
-            commits: 4
-          }
-        ]
-      });
-
-      // 3 workflow files = expectedCommits of 3, but PR has 4 (manual change)
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', false, 3);
-
-      expect(result.action).toBe('warned');
-      expect(result.prNumber).toBe(10);
-      expect(result.message).toContain('4 commits');
-      expect(result.message).toContain('manual changes');
-    });
-
-    test('should close PR when commits match expected for multi-file sync', async () => {
-      mockOctokit.rest.pulls.list.mockResolvedValue({
-        data: [
-          {
-            number: 10,
-            html_url: 'https://github.com/owner/repo/pull/10',
-            commits: 3
+            commits: 1
           }
         ]
       });
@@ -11880,53 +11869,47 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockOctokit.rest.pulls.update.mockResolvedValue({});
       mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
-      // 3 workflow files = expectedCommits of 3, PR has 3 = safe to close
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'workflow-files-sync', false, 3);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, '');
 
       expect(result.action).toBe('closed');
       expect(result.prNumber).toBe(10);
     });
 
-    test('should close all matching PRs and delete branch when none remain', async () => {
+    test('should close all matching PRs from same author and delete branch', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
-          { number: 10, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
-          { number: 11, html_url: 'https://github.com/owner/repo/pull/11', commits: 1 }
+          { number: 10, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
+          { number: 11, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/11', commits: 1 }
         ]
       });
       mockOctokit.rest.issues.createComment.mockResolvedValue({});
       mockOctokit.rest.pulls.update.mockResolvedValue({});
       mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
-      // Should close both PRs
       expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(2);
       expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledTimes(2);
-      // Should delete branch since no open PRs remain
       expect(mockOctokit.rest.git.deleteRef).toHaveBeenCalled();
-      // Returns last closed PR
       expect(result.action).toBe('closed');
       expect(result.prNumber).toBe(11);
     });
 
-    test('should not delete branch when some PRs have extra commits', async () => {
+    test('should not delete branch when some PRs are from different authors', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
-          { number: 10, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
-          { number: 11, html_url: 'https://github.com/owner/repo/pull/11', commits: 5 }
+          { number: 10, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
+          { number: 11, user: { login: 'human-user' }, html_url: 'https://github.com/owner/repo/pull/11', commits: 1 }
         ]
       });
       mockOctokit.rest.issues.createComment.mockResolvedValue({});
       mockOctokit.rest.pulls.update.mockResolvedValue({});
 
-      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false);
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
 
-      // Should close PR #10 but warn on #11
+      // Should close PR #10 (bot-user) but warn on #11 (human-user)
       expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(1);
-      // Should NOT delete branch since PR #11 is still open (warned, not closed)
       expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
-      // Returns last result (the warning)
       expect(result.action).toBe('warned');
     });
   });
@@ -12037,7 +12020,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
     });
 
-    test('should warn about stale PR with extra commits and return unchanged', async () => {
+    test('should warn about stale PR from different author and return unchanged', async () => {
       const content = 'version: 2\nupdates: []';
 
       setMockFileContent(content);
@@ -12053,13 +12036,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
         }
       });
 
-      // Stale PR with extra commits
+      // Stale PR from a different user
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           {
             number: 8,
+            user: { login: 'other-user' },
             html_url: 'https://github.com/owner/repo/pull/8',
-            commits: 3
+            commits: 1
           }
         ]
       });
@@ -12069,7 +12053,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'owner/repo',
         './dependabot.yml',
         'chore: update dependabot.yml',
-        false
+        false,
+        'bot-user'
       );
 
       expect(result.success).toBe(true);
