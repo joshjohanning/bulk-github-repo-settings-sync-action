@@ -1794,16 +1794,15 @@ export async function updateRepositorySettings(
 /**
  * Close stale PRs created by this action when the source file has been reverted to match the target.
  * Searches for open PRs on the given sync branch and closes them with an explanatory comment.
- * If the PR has more commits than expected (indicating possible manual changes), warns instead of closing.
+ * If the PR has more than 1 commit (indicating possible manual changes), warns instead of closing.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
- * @param {number} expectedCommits - Expected number of commits from the action (typically 1 per file synced)
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
  *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
  */
-export async function closeStaleActionPrs(octokit, repo, branchName, expectedCommits, dryRun) {
+export async function closeStaleActionPrs(octokit, repo, branchName, dryRun) {
   const [owner, repoName] = repo.split('/');
 
   try {
@@ -1818,9 +1817,10 @@ export async function closeStaleActionPrs(octokit, repo, branchName, expectedCom
 
     const pr = pulls[0];
 
-    // Safety check: if PR has more commits than expected, it may contain manual changes
-    if (pr.commits > expectedCommits) {
-      const message = `Found stale PR #${pr.number} but it has ${pr.commits} commit(s) (expected ${expectedCommits}). It may contain manual changes — skipping auto-close.`;
+    // Safety check: if PR has more than 1 commit, it may contain manual changes
+    // The action creates exactly 1 commit per sync PR
+    if (pr.commits > 1) {
+      const message = `Found stale PR #${pr.number} but it has ${pr.commits} commits (expected 1). It may contain manual changes — skipping auto-close.`;
       core.warning(`  ⚠️  ${message}`);
       return {
         action: 'warned',
@@ -1857,17 +1857,18 @@ export async function closeStaleActionPrs(octokit, repo, branchName, expectedCom
       state: 'closed'
     });
 
-    // Clean up the branch (best-effort)
-    try {
-      await octokit.rest.git.deleteRef({
-        owner,
-        repo: repoName,
-        ref: `heads/${branchName}`
-      });
-      core.info(`  🗑️  Deleted branch ${branchName}`);
-    } catch (error) {
-      // Non-fatal - branch cleanup is best-effort
-      core.debug(`  Could not delete branch ${branchName}: ${error.message}`);
+    // Clean up the branch only if no other open PRs use it
+    if (pulls.length === 1) {
+      try {
+        await octokit.rest.git.deleteRef({
+          owner,
+          repo: repoName,
+          ref: `heads/${branchName}`
+        });
+        core.info(`  🗑️  Deleted branch ${branchName}`);
+      } catch (error) {
+        core.debug(`  Could not delete branch ${branchName}: ${error.message}`);
+      }
     }
 
     const message = `Closed stale PR #${pr.number} (source matches target)`;
@@ -2032,7 +2033,7 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       const targetPaths = fileInfos.map(f => f.targetPath);
 
       // Check for stale open PRs that should be closed (source reverted to match target)
-      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, fileInfos.length, dryRun);
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun);
 
       if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
         return {
@@ -2684,7 +2685,7 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
     // If no changes needed, check for stale PRs and return
     if (changes.length === 0) {
       // Check for stale open PRs that should be closed (source reverted to match target)
-      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, 1, dryRun);
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun);
 
       if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
         return {
