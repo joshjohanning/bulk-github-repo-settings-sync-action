@@ -1,0 +1,28 @@
+environments:
+  - name: production
+    wait_timer: 10
+    prevent_self_review: true
+    reviewers:
+      - type: User
+        login: joshjohanning
+      - type: Team
+        slug: platform-team
+    deployment_branch_policy:
+      protected_branches: true
+      custom_branch_policies: false
+    deployment_protection_rules:
+      - app: deployment-gate-demo
+
+  - name: staging
+    wait_timer: 0
+    reviewers:
+      - type: Team
+        slug: dev-team
+    deployment_branch_policy:
+      protected_branches: false
+      custom_branch_policies: true
+    branch_name_patterns:
+      - main
+      - release/*
+
+  - name: development

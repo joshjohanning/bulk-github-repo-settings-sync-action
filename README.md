@@ -535,6 +535,110 @@ repos:
 
 For more information on autolinks, see the [GitHub documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-autolinks-to-reference-external-resources).
 
+### Syncing Environments
+
+Sync deployment environments across multiple repositories to standardize environment configurations (e.g., production, staging).
+
+**Simple — just create named environments (inline):**
+
+```yml
+- name: Sync Environments
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    environments: production, staging, development
+```
+
+> [!NOTE]
+> Inline `environments` only creates environments that don't already exist. Existing environments are left unchanged. Use `environments-file` when you need to manage environment settings (reviewers, wait timers, branch policies, etc.).
+
+**Advanced — use a YAML/JSON file for full configuration:**
+
+```yml
+- name: Sync Environments
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    environments-file: './config/environments.yml'
+    delete-unmanaged-environments: false
+```
+
+Both `environments` and `environments-file` can be combined — file entries override inline entries with the same name.
+
+Or with repo-specific overrides in `repos.yml`:
+
+```yaml
+repos:
+  - repo: owner/repo1
+    environments-file: './config/environments/web-environments.yml'
+  - repo: owner/repo2
+    environments-file: './config/environments/api-environments.yml'
+  - repo: owner/repo3
+    # Skip environments sync for this repo (empty list + no delete-unmanaged)
+    environments: ''
+```
+
+**Behavior:**
+
+- Creates environments that don't exist in the repository
+- Updates environments that exist but have different settings (wait timer, reviewers, branch policy, etc.)
+- Optionally deletes environments not included in the desired environment configuration for the repository (`delete-unmanaged-environments: true`)
+- If all environments match, no changes are made
+- Environments are applied directly via the GitHub API (not via pull request)
+
+**Example Environments Config (`environments.yml`):**
+
+```yaml
+environments:
+  - name: production
+    wait_timer: 10
+    prevent_self_review: true
+    reviewers:
+      - type: User
+        login: joshjohanning
+      - type: Team
+        slug: platform-team
+    deployment_branch_policy:
+      protected_branches: true
+      custom_branch_policies: false
+    deployment_protection_rules:
+      - app: deployment-gate-demo
+
+  - name: staging
+    wait_timer: 0
+    deployment_branch_policy: null
+
+  - name: development
+```
+
+| Field                                             | Description                                                         | Required |
+| ------------------------------------------------- | ------------------------------------------------------------------- | -------- |
+| `name`                                            | The name of the environment                                         | Yes      |
+| `wait_timer`                                      | Minutes to wait before allowing deployments to proceed (0-43200)    | No       |
+| `prevent_self_review`                             | Whether to prevent the deployer from approving their own deployment | No       |
+| `reviewers`                                       | Array of users or teams that must review deployments                | No       |
+| `reviewers[].type`                                | `"User"` or `"Team"`                                                | Yes      |
+| `reviewers[].id`                                  | The user or team ID (numeric)                                       | No\*     |
+| `reviewers[].login`                               | Username (for `User` type) — resolved to ID via API                 | No\*     |
+| `reviewers[].slug`                                | Team slug (for `Team` type) — resolved to ID via API                | No\*     |
+| `deployment_branch_policy`                        | Branch restrictions for deployments (`null` for no restrictions)    | No       |
+| `deployment_branch_policy.protected_branches`     | Whether only protected branches can deploy                          | No       |
+| `deployment_branch_policy.custom_branch_policies` | Whether to use custom branch name policies                          | No       |
+| `branch_name_patterns`                            | Array of custom branch name patterns to allow for deployment        | No\*\*   |
+| `deployment_protection_rules`                     | Array of custom deployment gate apps                                | No       |
+| `deployment_protection_rules[].app`               | App slug (resolved to integration ID via API)                       | Yes      |
+
+\* Each reviewer must have either `id`, `login` (User), or `slug` (Team).
+
+\*\* `branch_name_patterns` applies only when `deployment_branch_policy.custom_branch_policies` is `true`. If custom branch policies are enabled and `branch_name_patterns` is omitted, any existing custom branch patterns will be removed during sync.
+
+> [!NOTE]
+> When using `environments-file`, omitted optional fields are set to their defaults (e.g., `wait_timer: 0`, `reviewers: []`, `deployment_branch_policy: null`). This means existing environment settings will be updated to match the file configuration. To leave an existing environment unchanged, use the inline `environments` input instead — it only creates environments that don't already exist.
+
+For more information on environments, see the [GitHub documentation](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment).
+
 ### Syncing Copilot Instructions
 
 Sync a `copilot-instructions.md` file to `.github/copilot-instructions.md` in target repositories via pull requests:
@@ -824,56 +928,59 @@ Output shows what would change:
 
 ## Action Inputs
 
-| Input                             | Description                                                                                                                                | Required | Default                                   |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------------- |
-| `github-token`                    | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                           | Yes      | -                                         |
-| `github-api-url`                  | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived. | No       | `${{ github.api_url }}`                   |
-| `repositories`                    | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                      | No\*     | -                                         |
-| `repositories-file`               | Path to YAML file containing repository list                                                                                               | No\*     | -                                         |
-| `owner`                           | Owner (user or organization) name - required when using `repositories: "all"` or custom property filtering                                 | No       | -                                         |
-| `custom-property-name`            | Name of the custom property to filter repositories by (organizations only)                                                                 | No       | -                                         |
-| `custom-property-value`           | Comma-separated list of custom property values to match (used with `custom-property-name`)                                                 | No       | -                                         |
-| `allow-squash-merge`              | Allow squash merging pull requests                                                                                                         | No       | -                                         |
-| `squash-merge-commit-title`       | Default title for squash merge commits (`PR_TITLE`, `COMMIT_OR_PR_TITLE`)                                                                  | No       | -                                         |
-| `squash-merge-commit-message`     | Default message for squash merge commits (`PR_BODY`, `COMMIT_MESSAGES`, `BLANK`)                                                           | No       | -                                         |
-| `allow-merge-commit`              | Allow merge commits for pull requests                                                                                                      | No       | -                                         |
-| `merge-commit-title`              | Default title for merge commits (`PR_TITLE`, `MERGE_MESSAGE`)                                                                              | No       | -                                         |
-| `merge-commit-message`            | Default message for merge commits (`PR_TITLE`, `PR_BODY`, `BLANK`)                                                                         | No       | -                                         |
-| `allow-rebase-merge`              | Allow rebase merging pull requests                                                                                                         | No       | -                                         |
-| `allow-auto-merge`                | Allow auto-merge on pull requests                                                                                                          | No       | -                                         |
-| `delete-branch-on-merge`          | Automatically delete head branches after pull requests are merged                                                                          | No       | -                                         |
-| `allow-update-branch`             | Always suggest updating pull request branches                                                                                              | No       | -                                         |
-| `immutable-releases`              | Enable immutable releases to prevent release deletion and modification                                                                     | No       | -                                         |
-| `code-scanning`                   | Enable or disable default code scanning setup                                                                                              | No       | -                                         |
-| `secret-scanning`                 | Enable or disable secret scanning                                                                                                          | No       | -                                         |
-| `secret-scanning-push-protection` | Enable or disable secret scanning push protection                                                                                          | No       | -                                         |
-| `private-vulnerability-reporting` | Enable or disable private vulnerability reporting                                                                                          | No       | -                                         |
-| `dependabot-alerts`               | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                 | No       | -                                         |
-| `dependabot-security-updates`     | Enable or disable Dependabot security updates (automated security fixes)                                                                   | No       | -                                         |
-| `topics`                          | Comma-separated list of topics to set on repositories (replaces existing topics)                                                           | No       | -                                         |
-| `dependabot-yml`                  | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                   | No       | -                                         |
-| `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                       | No       | `chore: update dependabot.yml`            |
-| `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                    | No       | -                                         |
-| `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                           | No       | `chore: update .gitignore`                |
-| `rulesets-file`                   | Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories                     | No       | -                                         |
-| `delete-unmanaged-rulesets`       | Delete all other rulesets besides those being synced                                                                                       | No       | `false`                                   |
-| `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                  | No       | -                                         |
-| `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                | No       | `chore: update pull request template`     |
-| `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                         | No       | -                                         |
-| `workflow-files-pr-title`         | Title for pull requests when updating workflow files                                                                                       | No       | `chore: sync workflow configuration`      |
-| `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                          | No       | -                                         |
-| `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                 | No       | -                                         |
-| `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                              | No       | `chore: update copilot-instructions.md`   |
-| `codeowners`                      | Path to a CODEOWNERS file to sync to target repositories                                                                                   | No       | -                                         |
-| `codeowners-target-path`          | Target path for the CODEOWNERS file (`.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`)                                             | No       | `.github/CODEOWNERS`                      |
-| `codeowners-pr-title`             | Title for pull requests when updating CODEOWNERS                                                                                           | No       | `chore: update CODEOWNERS`                |
-| `package-json-file`               | Path to a package.json file to use as source for syncing scripts and/or engines                                                            | No       | -                                         |
-| `package-json-sync-scripts`       | Sync npm scripts from package-json-file to target repositories                                                                             | No       | `true`                                    |
-| `package-json-sync-engines`       | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                 | No       | `true`                                    |
-| `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                         | No       | `chore: update package.json`              |
-| `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                         | No       | `false`                                   |
-| `write-job-summary`               | Write a summary table to the GitHub Actions job summary                                                                                    | No       | `true`                                    |
-| `summary-heading`                 | Custom heading for the GitHub Actions job summary                                                                                          | No       | `Bulk Repository Settings Update Results` |
+| Input                             | Description                                                                                                                                 | Required | Default                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------- |
+| `github-token`                    | GitHub token for API access (requires `repo` scope or GitHub App with repository administration)                                            | Yes      | -                                         |
+| `github-api-url`                  | GitHub API URL (e.g., `https://api.github.com` for GitHub.com or `https://ghes.domain.com/api/v3` for GHES). Instance URL is auto-derived.  | No       | `${{ github.api_url }}`                   |
+| `repositories`                    | Comma-separated list of repositories (`owner/repo`) or `"all"` for all org/user repos                                                       | No\*     | -                                         |
+| `repositories-file`               | Path to YAML file containing repository list                                                                                                | No\*     | -                                         |
+| `owner`                           | Owner (user or organization) name - required when using `repositories: "all"` or custom property filtering                                  | No       | -                                         |
+| `custom-property-name`            | Name of the custom property to filter repositories by (organizations only)                                                                  | No       | -                                         |
+| `custom-property-value`           | Comma-separated list of custom property values to match (used with `custom-property-name`)                                                  | No       | -                                         |
+| `allow-squash-merge`              | Allow squash merging pull requests                                                                                                          | No       | -                                         |
+| `squash-merge-commit-title`       | Default title for squash merge commits (`PR_TITLE`, `COMMIT_OR_PR_TITLE`)                                                                   | No       | -                                         |
+| `squash-merge-commit-message`     | Default message for squash merge commits (`PR_BODY`, `COMMIT_MESSAGES`, `BLANK`)                                                            | No       | -                                         |
+| `allow-merge-commit`              | Allow merge commits for pull requests                                                                                                       | No       | -                                         |
+| `merge-commit-title`              | Default title for merge commits (`PR_TITLE`, `MERGE_MESSAGE`)                                                                               | No       | -                                         |
+| `merge-commit-message`            | Default message for merge commits (`PR_TITLE`, `PR_BODY`, `BLANK`)                                                                          | No       | -                                         |
+| `allow-rebase-merge`              | Allow rebase merging pull requests                                                                                                          | No       | -                                         |
+| `allow-auto-merge`                | Allow auto-merge on pull requests                                                                                                           | No       | -                                         |
+| `delete-branch-on-merge`          | Automatically delete head branches after pull requests are merged                                                                           | No       | -                                         |
+| `allow-update-branch`             | Always suggest updating pull request branches                                                                                               | No       | -                                         |
+| `immutable-releases`              | Enable immutable releases to prevent release deletion and modification                                                                      | No       | -                                         |
+| `code-scanning`                   | Enable or disable default code scanning setup                                                                                               | No       | -                                         |
+| `secret-scanning`                 | Enable or disable secret scanning                                                                                                           | No       | -                                         |
+| `secret-scanning-push-protection` | Enable or disable secret scanning push protection                                                                                           | No       | -                                         |
+| `private-vulnerability-reporting` | Enable or disable private vulnerability reporting                                                                                           | No       | -                                         |
+| `dependabot-alerts`               | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                  | No       | -                                         |
+| `dependabot-security-updates`     | Enable or disable Dependabot security updates (automated security fixes)                                                                    | No       | -                                         |
+| `topics`                          | Comma-separated list of topics to set on repositories (replaces existing topics)                                                            | No       | -                                         |
+| `dependabot-yml`                  | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                    | No       | -                                         |
+| `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                        | No       | `chore: update dependabot.yml`            |
+| `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                     | No       | -                                         |
+| `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                            | No       | `chore: update .gitignore`                |
+| `rulesets-file`                   | Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories                      | No       | -                                         |
+| `delete-unmanaged-rulesets`       | Delete all other rulesets besides those being synced                                                                                        | No       | `false`                                   |
+| `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                   | No       | -                                         |
+| `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                 | No       | `chore: update pull request template`     |
+| `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                          | No       | -                                         |
+| `workflow-files-pr-title`         | Title for pull requests when updating workflow files                                                                                        | No       | `chore: sync workflow configuration`      |
+| `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                           | No       | -                                         |
+| `environments`                    | Comma-separated list of environment names to create (e.g., `production, staging, development`)                                              | No       | -                                         |
+| `environments-file`               | Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules) | No       | -                                         |
+| `delete-unmanaged-environments`   | Delete environments not included in the configured environments                                                                             | No       | `false`                                   |
+| `copilot-instructions-md`         | Path to a copilot-instructions.md file to sync to `.github/copilot-instructions.md` in target repositories                                  | No       | -                                         |
+| `copilot-instructions-pr-title`   | Title for pull requests when updating copilot-instructions.md                                                                               | No       | `chore: update copilot-instructions.md`   |
+| `codeowners`                      | Path to a CODEOWNERS file to sync to target repositories                                                                                    | No       | -                                         |
+| `codeowners-target-path`          | Target path for the CODEOWNERS file (`.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`)                                              | No       | `.github/CODEOWNERS`                      |
+| `codeowners-pr-title`             | Title for pull requests when updating CODEOWNERS                                                                                            | No       | `chore: update CODEOWNERS`                |
+| `package-json-file`               | Path to a package.json file to use as source for syncing scripts and/or engines                                                             | No       | -                                         |
+| `package-json-sync-scripts`       | Sync npm scripts from package-json-file to target repositories                                                                              | No       | `true`                                    |
+| `package-json-sync-engines`       | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                  | No       | `true`                                    |
+| `package-json-pr-title`           | Title for pull requests when updating package.json                                                                                          | No       | `chore: update package.json`              |
+| `dry-run`                         | Preview changes without applying them (logs what would be changed)                                                                          | No       | `false`                                   |
+| `write-job-summary`               | Write a summary table to the GitHub Actions job summary                                                                                     | No       | `true`                                    |
+| `summary-heading`                 | Custom heading for the GitHub Actions job summary                                                                                           | No       | `Bulk Repository Settings Update Results` |
 
 \* Repository selection: Use `repositories` (comma-separated list or `"all"`), `repositories-file`, or custom property filtering (`owner` + `custom-property-name` + `custom-property-value`)
 

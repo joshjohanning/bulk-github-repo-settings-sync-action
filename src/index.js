@@ -144,7 +144,8 @@ const FILE_PATH_CONFIG_KEYS = [
   'codeowners',
   'package-json-file',
   'pull-request-template',
-  'autolinks-file'
+  'autolinks-file',
+  'environments-file'
 ];
 
 /**
@@ -857,6 +858,7 @@ const SYNC_KIND_LABELS = Object.freeze({
   'pr-template-sync': 'PR template',
   'workflow-files-sync': 'workflow files',
   'autolinks-sync': 'autolinks',
+  'environments-sync': 'environments',
   'copilot-instructions-sync': 'copilot-instructions.md',
   'codeowners-sync': 'CODEOWNERS',
   'package-json-sync': 'package.json'
@@ -3446,6 +3448,922 @@ export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
 }
 
 /**
+ * Normalize an existing environment from the API response into a comparable format.
+ * Extracts wait_timer and reviewers from protection_rules.
+ * @param {Object} env - Environment object from the API
+ * @returns {Object} Normalized environment settings
+ */
+export function normalizeExistingEnvironment(env) {
+  const normalized = {
+    name: env.name,
+    wait_timer: 0,
+    prevent_self_review: false,
+    reviewers: [],
+    deployment_branch_policy: env.deployment_branch_policy ?? null
+  };
+
+  if (Array.isArray(env.protection_rules)) {
+    for (const rule of env.protection_rules) {
+      if (rule.type === 'wait_timer') {
+        normalized.wait_timer = rule.wait_timer ?? 0;
+      } else if (rule.type === 'required_reviewers') {
+        if (Array.isArray(rule.reviewers)) {
+          normalized.reviewers = rule.reviewers.map(r => ({
+            type: r.type,
+            id: r.reviewer?.id
+          }));
+        }
+        normalized.prevent_self_review = rule.prevent_self_review ?? false;
+      }
+    }
+  }
+
+  // Sort reviewers by type and id for consistent comparison
+  normalized.reviewers.sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+
+  return normalized;
+}
+
+/**
+ * Resolve a reviewer entry to include a numeric ID.
+ * If the reviewer has a `login` (User) or `slug` (Team), resolves to the numeric ID via API.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository/org owner
+ * @param {Object} reviewer - Reviewer object with type and either id, login, or slug
+ * @param {Map} [cache] - Optional cache for resolved reviewer IDs
+ * @returns {Promise<Object>} Reviewer with resolved id
+ */
+async function resolveReviewer(octokit, owner, reviewer, cache) {
+  if (reviewer.id !== undefined && reviewer.id !== null) {
+    const numId = Number(reviewer.id);
+    if (!Number.isFinite(numId) || numId <= 0) {
+      throw new Error(`Invalid reviewer id "${reviewer.id}": must be a positive number`);
+    }
+    return { type: reviewer.type, id: numId };
+  }
+
+  // Include owner in team cache key since team slugs are org-scoped
+  const cacheKey = reviewer.type === 'Team' ? `Team:${owner}:${reviewer.slug}` : `User:${reviewer.login}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+
+  if (reviewer.type === 'User' && reviewer.login) {
+    try {
+      const { data } = await octokit.rest.users.getByUsername({ username: reviewer.login });
+      const result = { type: 'User', id: data.id };
+      cache?.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      throw new Error(`Failed to resolve User login "${reviewer.login}": ${error.message}`);
+    }
+  }
+
+  if (reviewer.type === 'Team' && reviewer.slug) {
+    try {
+      const { data } = await octokit.rest.teams.getByName({ org: owner, team_slug: reviewer.slug });
+      const result = { type: 'Team', id: data.id };
+      cache?.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      throw new Error(`Failed to resolve Team slug "${reviewer.slug}" in org "${owner}": ${error.message}`);
+    }
+  }
+
+  throw new Error(
+    `Reviewer must have an "id", or "login" (for User) / "slug" (for Team). Got: ${JSON.stringify(reviewer)}`
+  );
+}
+
+/**
+ * Resolve all reviewers in an environment config, converting friendly names to IDs.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository/org owner
+ * @param {Array<Object>} reviewers - Array of reviewer objects
+ * @param {Map} [cache] - Optional cache for resolved reviewer IDs
+ * @returns {Promise<Array<Object>>} Reviewers with resolved IDs
+ */
+async function resolveReviewers(octokit, owner, reviewers, cache) {
+  if (!reviewers || reviewers.length === 0) return [];
+  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
+}
+
+/**
+ * Sync deployment protection rules for an environment.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {string} envName - Environment name
+ * @param {Array<Object>} desiredRules - Desired protection rules (each with `app` slug)
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Array<Object>>} Array of subResults for rule operations
+ */
+async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, desiredRules, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  if (!Array.isArray(desiredRules)) {
+    core.warning(`  ⚠️  Invalid deployment_protection_rules for ${envName}: expected an array`);
+    subResults.push(
+      createSubResult(
+        'environment-protection-rule',
+        SubResultStatus.WARNING,
+        `Invalid deployment_protection_rules for ${envName}`
+      )
+    );
+    return subResults;
+  }
+
+  // Get available apps for this environment (only needed when there are desired rules to resolve)
+  let availableApps = [];
+  if (desiredRules.length > 0) {
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps',
+        { owner, repo: repoName, environment_name: envName }
+      );
+      availableApps = data.available_custom_deployment_protection_rule_integrations ?? [];
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to list available deployment protection rule apps for ${envName}: ${error.message}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `Failed to list deployment protection rule apps for ${envName}`
+        )
+      );
+      return subResults;
+    }
+  }
+
+  // Resolve app slugs to integration IDs (deduplicate by slug)
+  const resolvedRules = [];
+  const seenSlugs = new Set();
+  for (const rule of desiredRules) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule) || typeof rule.app !== 'string' || !rule.app.trim()) {
+      core.warning(
+        `  ⚠️  Invalid deployment protection rule for ${envName}: expected an object with a non-empty "app" string`
+      );
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `Invalid deployment protection rule for ${envName}`
+        )
+      );
+      continue;
+    }
+    const appSlug = rule.app.trim();
+    if (seenSlugs.has(appSlug)) continue;
+    seenSlugs.add(appSlug);
+    const app = availableApps.find(a => a.slug === appSlug);
+    if (!app) {
+      core.warning(
+        `  ⚠️  Deployment protection rule app "${appSlug}" not found for environment ${envName}. ` +
+          `Available apps: ${availableApps.map(a => a.slug).join(', ') || 'none'}`
+      );
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `App "${appSlug}" not available for ${envName}`
+        )
+      );
+      continue;
+    }
+    resolvedRules.push({ integration_id: app.id, slug: appSlug });
+  }
+
+  // Get existing protection rules
+  let existingRules = [];
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+      { owner, repo: repoName, environment_name: envName }
+    );
+    existingRules = data.custom_deployment_protection_rules ?? [];
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to list deployment protection rules for ${envName}: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'environment-protection-rule',
+        SubResultStatus.WARNING,
+        `Failed to list deployment protection rules for ${envName}: ${error.message}`
+      )
+    );
+    return subResults;
+  }
+
+  const existingAppIds = new Set(existingRules.map(r => r.app?.id));
+  const desiredAppIds = new Set(resolvedRules.map(r => r.integration_id));
+
+  // Create missing rules
+  for (const rule of resolvedRules) {
+    if (!existingAppIds.has(rule.integration_id)) {
+      core.info(`  🛡️ ${wouldPrefix}Add deployment gate: ${rule.slug}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}add deployment gate "${rule.slug}" to ${envName}`
+        )
+      );
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules',
+            { owner, repo: repoName, environment_name: envName, integration_id: rule.integration_id }
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to add deployment gate "${rule.slug}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'environment-protection-rule',
+            SubResultStatus.WARNING,
+            `Failed to add deployment gate "${rule.slug}": ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
+  // Delete rules not in desired set (skip if all desired rules failed validation — avoids accidental delete-all)
+  const hasValidationFailures = subResults.some(s => s.status === SubResultStatus.WARNING);
+  if (desiredRules.length > 0 && resolvedRules.length === 0 && hasValidationFailures) {
+    core.warning(
+      `  ⚠️  All deployment protection rules for ${envName} failed validation — skipping deletion to avoid accidental removal`
+    );
+    return subResults;
+  }
+  for (const existing of existingRules) {
+    if (existing.app?.id && !desiredAppIds.has(existing.app.id)) {
+      const appSlug = existing.app?.slug ?? `ID ${existing.app?.id}`;
+      core.info(`  🗑️ ${wouldPrefix}Remove deployment gate: ${appSlug}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.CHANGED,
+          `${wouldPrefix}remove deployment gate "${appSlug}" from ${envName}`
+        )
+      );
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}',
+            { owner, repo: repoName, environment_name: envName, protection_rule_id: existing.id }
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to remove deployment gate "${appSlug}": ${error.message}`);
+          subResults[subResults.length - 1] = createSubResult(
+            'environment-protection-rule',
+            SubResultStatus.WARNING,
+            `Failed to remove deployment gate "${appSlug}": ${error.message}`
+          );
+        }
+      }
+    }
+  }
+
+  return subResults;
+}
+
+export function normalizeDesiredEnvironment(env) {
+  const normalized = {
+    name: env.name,
+    wait_timer: env.wait_timer ?? 0,
+    prevent_self_review: env.prevent_self_review ?? false,
+    reviewers: (env.reviewers ?? []).map(r => ({ type: r.type, id: r.id })),
+    deployment_branch_policy: env.deployment_branch_policy ?? null
+  };
+
+  // Sort reviewers by type and id for consistent comparison
+  normalized.reviewers.sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+
+  return normalized;
+}
+
+/**
+ * Compare two arrays of reviewer objects for equality.
+ * Assumes both arrays are already sorted by type and id.
+ * @param {Array} a - First reviewers array
+ * @param {Array} b - Second reviewers array
+ * @returns {boolean} True if reviewers are equal
+ */
+function reviewersEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].type !== b[i].type || a[i].id !== b[i].id) return false;
+  }
+  return true;
+}
+
+/**
+ * Sync custom deployment branch policies (name patterns) for an environment.
+ * Only runs when custom_branch_policies is true in the environment config.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {string} envName - Environment name
+ * @param {Array<string>} desiredPatterns - Desired branch/tag name patterns
+ * @param {boolean} dryRun - Preview mode
+ * @returns {Promise<Array<Object>>} Array of subResults
+ */
+async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, desiredPatterns, dryRun) {
+  const subResults = [];
+  const wouldPrefix = dryRun ? 'Would ' : '';
+
+  // Normalize desired patterns: validate strings, trim, filter empty, deduplicate
+  const normalizedPatterns = [];
+  const seenPatterns = new Set();
+  for (const pattern of desiredPatterns) {
+    if (typeof pattern !== 'string') {
+      core.warning(
+        `  ⚠️  Skipping invalid branch policy pattern for ${envName}: expected string but got ${pattern === null ? 'null' : typeof pattern}`
+      );
+      continue;
+    }
+    const trimmed = pattern.trim();
+    if (trimmed.length === 0 || seenPatterns.has(trimmed)) continue;
+    seenPatterns.add(trimmed);
+    normalizedPatterns.push(trimmed);
+  }
+
+  // Get existing branch policies
+  let existingPolicies = [];
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+      { owner, repo: repoName, environment_name: envName }
+    );
+    existingPolicies = data.branch_policies ?? [];
+  } catch (error) {
+    core.warning(`  ⚠️  Failed to list deployment branch policies for ${envName}: ${error.message}`);
+    subResults.push(
+      createSubResult(
+        'environment-branch-policy',
+        SubResultStatus.WARNING,
+        `Failed to list deployment branch policies for ${envName}`
+      )
+    );
+    return subResults;
+  }
+
+  const existingNames = new Set(existingPolicies.map(p => p.name));
+  const desiredNames = new Set(normalizedPatterns);
+
+  // Create missing policies
+  for (const pattern of normalizedPatterns) {
+    if (!existingNames.has(pattern)) {
+      core.info(`  🌿 ${wouldPrefix}Add branch policy: ${pattern} to ${envName}`);
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+            {
+              owner,
+              repo: repoName,
+              environment_name: envName,
+              name: pattern
+            }
+          );
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.CHANGED,
+              `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+            )
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to add branch policy "${pattern}" to ${envName}: ${error.message}`);
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.WARNING,
+              `Failed to add branch policy "${pattern}" to ${envName}`
+            )
+          );
+        }
+      } else {
+        subResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+          )
+        );
+      }
+    }
+  }
+
+  // Delete policies not in desired list (skip if all patterns were invalid — avoids accidental delete-all)
+  if (desiredPatterns.length > 0 && normalizedPatterns.length === 0) {
+    core.warning(
+      `  ⚠️  All branch name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`
+    );
+    return subResults;
+  }
+  for (const policy of existingPolicies) {
+    if (!desiredNames.has(policy.name)) {
+      core.info(`  🌿 ${wouldPrefix}Remove branch policy: ${policy.name} from ${envName}`);
+      if (!dryRun) {
+        try {
+          await octokit.request(
+            'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+            { owner, repo: repoName, environment_name: envName, branch_policy_id: policy.id }
+          );
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.CHANGED,
+              `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+            )
+          );
+        } catch (error) {
+          core.warning(`  ⚠️  Failed to remove branch policy "${policy.name}" from ${envName}: ${error.message}`);
+          subResults.push(
+            createSubResult(
+              'environment-branch-policy',
+              SubResultStatus.WARNING,
+              `Failed to remove branch policy "${policy.name}" from ${envName}`
+            )
+          );
+        }
+      } else {
+        subResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.CHANGED,
+            `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+          )
+        );
+      }
+    }
+  }
+
+  return subResults;
+}
+
+/**
+ * Compare two deployment branch policy objects for equality.
+ * @param {Object|null} a - First branch policy
+ * @param {Object|null} b - Second branch policy
+ * @returns {boolean} True if branch policies are equal
+ */
+function branchPoliciesEqual(a, b) {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return a.protected_branches === b.protected_branches && a.custom_branch_policies === b.custom_branch_policies;
+}
+
+/**
+ * Compare two normalized environments for equality.
+ * @param {Object} a - First normalized environment
+ * @param {Object} b - Second normalized environment
+ * @returns {boolean} True if environments have the same settings
+ */
+export function environmentsEqual(a, b) {
+  if (a.wait_timer !== b.wait_timer) return false;
+  if (a.prevent_self_review !== b.prevent_self_review) return false;
+  if (!reviewersEqual(a.reviewers, b.reviewers)) return false;
+  if (!branchPoliciesEqual(a.deployment_branch_policy, b.deployment_branch_policy)) return false;
+  return true;
+}
+
+/**
+ * Build PUT request parameters for creating or updating an environment.
+ * @param {string} owner - Repository owner
+ * @param {string} repoName - Repository name
+ * @param {Object} env - Environment config object
+ * @returns {Object} Request parameters
+ */
+function buildEnvironmentParams(owner, repoName, env) {
+  const params = {
+    owner,
+    repo: repoName,
+    environment_name: env.name,
+    wait_timer: env.wait_timer ?? 0,
+    prevent_self_review: env.prevent_self_review ?? false,
+    reviewers: env.reviewers ?? [],
+    deployment_branch_policy: env.deployment_branch_policy ?? null
+  };
+  return params;
+}
+
+/**
+ * Parse environments configuration from various input formats.
+ * Accepts a comma-separated string of names, a YAML/JSON file path, or both.
+ * @param {string} [environmentNames] - Comma-separated environment names (inline input)
+ * @param {string} [environmentsFilePath] - Path to YAML or JSON environments config file
+ * @returns {Array<Object>} Array of environment config objects (each with at least a name)
+ */
+export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) {
+  const environments = [];
+
+  // Parse inline environment names (simple comma-separated list, deduplicated)
+  if (environmentNames) {
+    const names = [
+      ...new Set(
+        environmentNames
+          .split(',')
+          .map(n => n.trim())
+          .filter(n => n.length > 0)
+      )
+    ];
+    for (const name of names) {
+      environments.push({ name, _nameOnly: true });
+    }
+  }
+
+  // Parse environments file (YAML or JSON)
+  if (environmentsFilePath) {
+    const fileContent = fs.readFileSync(environmentsFilePath, 'utf8');
+    let parsed;
+
+    // Try YAML first, fall back to JSON
+    try {
+      parsed = yaml.load(fileContent);
+    } catch (yamlError) {
+      try {
+        parsed = JSON.parse(fileContent);
+      } catch (jsonError) {
+        throw new Error(
+          `Failed to parse environments config file "${environmentsFilePath}" as YAML or JSON. ` +
+            `YAML error: ${yamlError.message}. JSON error: ${jsonError.message}`
+        );
+      }
+    }
+
+    const fileEnvs = Array.isArray(parsed?.environments) ? parsed.environments : Array.isArray(parsed) ? parsed : [];
+    if (fileEnvs.length === 0) {
+      throw new Error(
+        `Environments config file "${environmentsFilePath}" must contain an "environments" array or be a YAML/JSON array`
+      );
+    }
+
+    // Validate and normalize environment names from file
+    for (const env of fileEnvs) {
+      if (!env || typeof env !== 'object' || Array.isArray(env)) {
+        throw new Error(`Each entry in "${environmentsFilePath}" must be an object with a "name" field`);
+      }
+      if (!env.name || typeof env.name !== 'string') {
+        throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
+      }
+      env.name = env.name.trim();
+      if (env.name.length === 0) {
+        throw new Error(`Environment name in "${environmentsFilePath}" cannot be empty or whitespace`);
+      }
+    }
+
+    // Check for duplicate names within the file (after trimming)
+    const fileNames = fileEnvs.map(e => e.name);
+    const fileDuplicates = fileNames.filter((name, idx) => fileNames.indexOf(name) !== idx);
+    if (fileDuplicates.length > 0) {
+      throw new Error(
+        `Duplicate environment name(s) in "${environmentsFilePath}": ${[...new Set(fileDuplicates)].join(', ')}`
+      );
+    }
+
+    // File environments override inline ones with the same name
+    const inlineNames = new Set(environments.map(e => e.name));
+    for (const env of fileEnvs) {
+      if (inlineNames.has(env.name)) {
+        // Replace inline entry with richer file entry
+        const idx = environments.findIndex(e => e.name === env.name);
+        environments[idx] = env;
+      } else {
+        environments.push(env);
+      }
+    }
+  }
+
+  return environments;
+}
+
+/**
+ * Sync environments to target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Array<Object>} environmentsList - Array of environment config objects
+ * @param {boolean} deleteUnmanaged - Delete environments not in the config
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {Map} [reviewerCache] - Optional cache for resolved reviewer IDs
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncEnvironments(octokit, repo, environmentsList, deleteUnmanaged, dryRun, reviewerCache) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    // Validate each environment entry has a name
+    for (const env of environmentsList) {
+      if (!env.name || typeof env.name !== 'string') {
+        return {
+          repository: repo,
+          success: false,
+          error: 'Each environment must have a "name" field.',
+          dryRun
+        };
+      }
+    }
+
+    // Resolve reviewer friendly names to IDs
+    const resolvedEnvironments = [];
+    for (const env of environmentsList) {
+      const resolved = { ...env };
+      if (resolved.reviewers && !Array.isArray(resolved.reviewers)) {
+        return {
+          repository: repo,
+          success: false,
+          error: `Invalid reviewers for environment "${env.name}": expected an array`,
+          dryRun
+        };
+      }
+      if (Array.isArray(resolved.reviewers) && resolved.reviewers.length > 0) {
+        try {
+          resolved.reviewers = await resolveReviewers(octokit, owner, resolved.reviewers, reviewerCache);
+        } catch (error) {
+          return {
+            repository: repo,
+            success: false,
+            error: `Failed to resolve reviewers for environment "${env.name}": ${error.message}`,
+            dryRun
+          };
+        }
+      }
+      resolvedEnvironments.push(resolved);
+    }
+
+    // Get existing environments for the repository (paginated)
+    const existingEnvironments = [];
+    try {
+      let page = 1;
+      const perPage = 100;
+      let hasMore = true;
+      while (hasMore) {
+        const response = await octokit.request('GET /repos/{owner}/{repo}/environments', {
+          owner,
+          repo: repoName,
+          per_page: perPage,
+          page
+        });
+        const envs = response.data.environments ?? [];
+        existingEnvironments.push(...envs);
+        hasMore = envs.length === perPage;
+        page++;
+      }
+    } catch (error) {
+      if (error.status === 404) {
+        core.info(`  🌍 Repository ${repo} does not have environments accessible`);
+      } else {
+        throw error;
+      }
+    }
+
+    // Normalize environments for comparison
+    const normalizedExisting = new Map(existingEnvironments.map(env => [env.name, normalizeExistingEnvironment(env)]));
+
+    const environmentsToCreate = [];
+    const environmentsToUpdate = [];
+    const environmentsUnchanged = [];
+    const environmentsToDelete = [];
+
+    // Compare desired with existing
+    for (const desiredEnv of resolvedEnvironments) {
+      const normalizedDesired = normalizeDesiredEnvironment(desiredEnv);
+      const existing = normalizedExisting.get(desiredEnv.name);
+
+      if (!existing) {
+        environmentsToCreate.push(normalizedDesired);
+      } else if (desiredEnv._nameOnly) {
+        // Simple mode (name-only): don't update existing environments, just ensure they exist
+        environmentsUnchanged.push(normalizedDesired);
+      } else if (!environmentsEqual(normalizedDesired, existing)) {
+        environmentsToUpdate.push(normalizedDesired);
+      } else {
+        environmentsUnchanged.push(normalizedDesired);
+      }
+    }
+
+    // Find environments to delete (exist in repo but not in config)
+    if (deleteUnmanaged) {
+      const desiredNames = new Set(resolvedEnvironments.map(e => e.name));
+      for (const existingEnv of existingEnvironments) {
+        if (!desiredNames.has(existingEnv.name)) {
+          environmentsToDelete.push(existingEnv);
+        }
+      }
+    }
+
+    // Check for deployment protection rules on any desired environments
+    const envsWithProtectionRules = resolvedEnvironments.filter(e => e.deployment_protection_rules !== undefined);
+
+    // Check for custom branch patterns to sync (treat omitted patterns as empty = delete all existing)
+    const branchPolicySubResults = [];
+    const envsWithBranchPatterns = [];
+    for (const e of resolvedEnvironments) {
+      if (e.deployment_branch_policy?.custom_branch_policies !== true) continue;
+      if (e.branch_name_patterns !== undefined && !Array.isArray(e.branch_name_patterns)) {
+        core.warning(
+          `  ⚠️  Invalid branch_name_patterns for environment "${e.name}": expected an array. Skipping branch policy sync.`
+        );
+        branchPolicySubResults.push(
+          createSubResult(
+            'environment-branch-policy',
+            SubResultStatus.WARNING,
+            `Invalid branch_name_patterns for environment "${e.name}"`
+          )
+        );
+        continue;
+      }
+      envsWithBranchPatterns.push({
+        ...e,
+        branch_name_patterns: Array.isArray(e.branch_name_patterns) ? e.branch_name_patterns : []
+      });
+    }
+
+    // If no environment changes, no protection rules, and no branch patterns to sync, return early
+    if (
+      environmentsToCreate.length === 0 &&
+      environmentsToUpdate.length === 0 &&
+      environmentsToDelete.length === 0 &&
+      envsWithProtectionRules.length === 0 &&
+      envsWithBranchPatterns.length === 0
+    ) {
+      return {
+        repository: repo,
+        success: true,
+        environments: 'unchanged',
+        message: `All ${environmentsUnchanged.length} environment(s) are already up to date`,
+        environmentsUnchanged: environmentsUnchanged.length,
+        dryRun
+      };
+    }
+
+    if (dryRun) {
+      const message = [];
+      if (environmentsToCreate.length > 0) {
+        message.push(`Would create ${environmentsToCreate.length} environment(s)`);
+      }
+      if (environmentsToUpdate.length > 0) {
+        message.push(`Would update ${environmentsToUpdate.length} environment(s)`);
+      }
+      if (environmentsToDelete.length > 0) {
+        message.push(`Would delete ${environmentsToDelete.length} environment(s)`);
+      }
+      if (message.length > 0) {
+        core.info(`  🌍 Dry run: ${message.join(', ')}`);
+      }
+    }
+
+    if (!dryRun) {
+      // Create new environments
+      for (const env of environmentsToCreate) {
+        await octokit.request(
+          'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+          buildEnvironmentParams(owner, repoName, env)
+        );
+        core.info(`  🌍 Created environment: ${env.name}`);
+      }
+
+      // Update existing environments
+      for (const env of environmentsToUpdate) {
+        await octokit.request(
+          'PUT /repos/{owner}/{repo}/environments/{environment_name}',
+          buildEnvironmentParams(owner, repoName, env)
+        );
+        core.info(`  🌍 Updated environment: ${env.name}`);
+      }
+
+      // Delete unmanaged environments
+      for (const env of environmentsToDelete) {
+        await octokit.request('DELETE /repos/{owner}/{repo}/environments/{environment_name}', {
+          owner,
+          repo: repoName,
+          environment_name: env.name
+        });
+        core.info(`  🌍 Deleted environment: ${env.name}`);
+      }
+    }
+
+    // In dry-run, skip branch policy/protection rule sync for environments being created
+    // (they don't exist yet, so API calls would 404)
+    const envsToCreateNames = new Set(environmentsToCreate.map(e => e.name));
+
+    // Sync custom deployment branch policies for environments that use them
+    for (const env of envsWithBranchPatterns) {
+      if (dryRun && envsToCreateNames.has(env.name)) continue;
+      const policyResults = await syncDeploymentBranchPolicies(
+        octokit,
+        owner,
+        repoName,
+        env.name,
+        env.branch_name_patterns,
+        dryRun
+      );
+      branchPolicySubResults.push(...policyResults);
+    }
+
+    // Sync deployment protection rules for environments that define them
+    const protectionRuleSubResults = [];
+    for (const env of envsWithProtectionRules) {
+      if (dryRun && envsToCreateNames.has(env.name)) continue;
+      const ruleResults = await syncDeploymentProtectionRules(
+        octokit,
+        owner,
+        repoName,
+        env.name,
+        env.deployment_protection_rules ?? [],
+        dryRun
+      );
+      protectionRuleSubResults.push(...ruleResults);
+    }
+
+    const hasProtectionChanges = protectionRuleSubResults.some(s => s.status === SubResultStatus.CHANGED);
+    const hasProtectionWarnings = protectionRuleSubResults.some(s => s.status === SubResultStatus.WARNING);
+    const hasBranchPolicyChanges = branchPolicySubResults.some(s => s.status === SubResultStatus.CHANGED);
+    const hasBranchPolicyWarnings = branchPolicySubResults.some(s => s.status === SubResultStatus.WARNING);
+
+    // If nothing changed across environments, protection rules, or branch policies
+    if (
+      environmentsToCreate.length === 0 &&
+      environmentsToUpdate.length === 0 &&
+      environmentsToDelete.length === 0 &&
+      !hasProtectionChanges &&
+      !hasBranchPolicyChanges
+    ) {
+      return {
+        repository: repo,
+        success: true,
+        environments: 'unchanged',
+        message: `All ${resolvedEnvironments.length} environment(s) are already up to date`,
+        environmentsUnchanged: environmentsUnchanged.length,
+        protectionRuleSubResults,
+        branchPolicySubResults,
+        dryRun
+      };
+    }
+
+    const message = [];
+    if (environmentsToCreate.length > 0) {
+      message.push(`${dryRun ? 'Would create' : 'Created'} ${environmentsToCreate.length} environment(s)`);
+    }
+    if (environmentsToUpdate.length > 0) {
+      message.push(`${dryRun ? 'Would update' : 'Updated'} ${environmentsToUpdate.length} environment(s)`);
+    }
+    if (environmentsToDelete.length > 0) {
+      message.push(`${dryRun ? 'Would delete' : 'Deleted'} ${environmentsToDelete.length} environment(s)`);
+    }
+    if (hasProtectionChanges) {
+      message.push(`${dryRun ? 'Would update' : 'Updated'} deployment protection rules`);
+    }
+    if (hasProtectionWarnings) {
+      message.push(`Some deployment protection rule updates had warnings`);
+    }
+    if (hasBranchPolicyChanges) {
+      message.push(`${dryRun ? 'Would update' : 'Updated'} deployment branch policies`);
+    }
+    if (hasBranchPolicyWarnings) {
+      message.push(`Some deployment branch policy updates had warnings`);
+    }
+
+    return {
+      repository: repo,
+      success: true,
+      environments: dryRun ? 'would-update' : 'updated',
+      message: message.join(', '),
+      environmentsCreated: dryRun ? undefined : environmentsToCreate.map(e => e.name),
+      environmentsUpdated: dryRun ? undefined : environmentsToUpdate.map(e => e.name),
+      environmentsDeleted: dryRun ? undefined : environmentsToDelete.map(e => e.name),
+      environmentsWouldCreate: dryRun ? environmentsToCreate.map(e => e.name) : undefined,
+      environmentsWouldUpdate: dryRun ? environmentsToUpdate.map(e => e.name) : undefined,
+      environmentsWouldDelete: dryRun ? environmentsToDelete.map(e => e.name) : undefined,
+      environmentsUnchanged: environmentsUnchanged.length,
+      protectionRuleSubResults,
+      branchPolicySubResults,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync environments: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Sync copilot-instructions.md file to target repository
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
@@ -3627,6 +4545,19 @@ export async function run() {
     // Get autolinks settings
     const autolinksFile = core.getInput('autolinks-file');
 
+    // Get environments settings
+    const environmentNames = core.getInput('environments');
+    const environmentsFile = core.getInput('environments-file');
+    const deleteUnmanagedEnvironments = getBooleanInput('delete-unmanaged-environments');
+    let globalEnvironments = [];
+    if (environmentNames || environmentsFile) {
+      try {
+        globalEnvironments = parseEnvironmentsConfig(environmentNames, environmentsFile);
+      } catch (error) {
+        throw new Error(`Failed to parse environments config: ${error.message}`);
+      }
+    }
+
     // Get copilot instructions settings
     const copilotInstructionsMd = core.getInput('copilot-instructions-md');
     const copilotInstructionsPrTitle =
@@ -3669,12 +4600,13 @@ export async function run() {
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
       autolinksFile ||
+      globalEnvironments.length > 0 ||
       copilotInstructionsMd ||
       codeowners ||
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -3723,6 +4655,9 @@ export async function run() {
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
     }
+    if (globalEnvironments.length > 0) {
+      core.info(`Environments will be synced: ${globalEnvironments.map(e => e.name).join(', ')}`);
+    }
     if (copilotInstructionsMd) {
       core.info(`Copilot-instructions.md will be synced from: ${copilotInstructionsMd}`);
     }
@@ -3757,6 +4692,9 @@ export async function run() {
     let failureCount = 0;
     let changedCount = 0;
     let warningCount = 0;
+
+    // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
+    const reviewerCache = new Map();
 
     for (const repoConfig of repoList) {
       const repo = repoConfig.repo;
@@ -3903,6 +4841,47 @@ export async function run() {
       // Handle repo-specific autolinks-file
       const repoAutolinksFile =
         repoConfig['autolinks-file'] !== undefined ? repoConfig['autolinks-file'] : autolinksFile;
+
+      // Handle repo-specific environments
+      let repoEnvironments = globalEnvironments;
+      let repoHasExplicitEnvConfig = globalEnvironments.length > 0;
+      if (repoConfig['environments'] !== undefined || repoConfig['environments-file'] !== undefined) {
+        repoHasExplicitEnvConfig = true;
+        try {
+          const rawEnv = repoConfig['environments'];
+          let repoEnvNames = null;
+          if (rawEnv !== undefined && rawEnv !== null) {
+            if (typeof rawEnv === 'string') {
+              repoEnvNames = rawEnv;
+            } else if (Array.isArray(rawEnv)) {
+              repoEnvNames = rawEnv
+                .map(n => {
+                  if (typeof n !== 'string') {
+                    throw new Error('Repo-specific environments array must contain only string environment names');
+                  }
+                  return n.trim();
+                })
+                .filter(n => n.length > 0)
+                .join(',');
+            } else {
+              throw new Error('Repo-specific environments must be a string, an array of strings, or null');
+            }
+          }
+          const repoEnvFile = repoConfig['environments-file'] !== undefined ? repoConfig['environments-file'] : null;
+          repoEnvironments = parseEnvironmentsConfig(repoEnvNames, repoEnvFile);
+        } catch (error) {
+          core.warning(
+            `Failed to parse environments config for ${repo}: ${error.message}. Skipping environment sync for this repo.`
+          );
+          repoEnvironments = null;
+        }
+      }
+      const repoDeleteUnmanagedEnvironments = coerceBooleanConfig(
+        repoConfig['delete-unmanaged-environments'],
+        'delete-unmanaged-environments',
+        repo,
+        deleteUnmanagedEnvironments
+      );
 
       // Handle repo-specific copilot-instructions-md
       const repoCopilotInstructionsMd =
@@ -4175,6 +5154,57 @@ export async function run() {
           core.warning(`  ⚠️  ${autolinksResult.error}`);
           result.subResults.push(
             createSubResult('autolinks-sync', SubResultStatus.WARNING, 'Autolinks sync produced a warning')
+          );
+        }
+      }
+
+      // Sync environments if specified (delete-unmanaged requires explicit env config to prevent accidental mass deletion)
+      if (
+        repoEnvironments &&
+        (repoEnvironments.length > 0 || (repoDeleteUnmanagedEnvironments && repoHasExplicitEnvConfig))
+      ) {
+        core.info(`  🌍 Checking environments...`);
+        const environmentsResult = await syncEnvironments(
+          octokit,
+          repo,
+          repoEnvironments,
+          repoDeleteUnmanagedEnvironments,
+          dryRun,
+          reviewerCache
+        );
+
+        // Add environments result to the main result
+        result.environmentsSync = environmentsResult;
+
+        if (environmentsResult.success) {
+          core.info(`  🌍 ${environmentsResult.message}`);
+          if (environmentsResult.environments && environmentsResult.environments !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('environments-sync', SubResultStatus.CHANGED, environmentsResult.message, {
+                syncStatus: environmentsResult.environments
+              })
+            );
+          }
+          // Propagate protection rule and branch policy subResults
+          if (environmentsResult.protectionRuleSubResults) {
+            result.subResults.push(...environmentsResult.protectionRuleSubResults);
+          }
+          if (environmentsResult.branchPolicySubResults) {
+            result.subResults.push(...environmentsResult.branchPolicySubResults);
+          }
+          // Mark warnings from protection rules and branch policies
+          if (
+            environmentsResult.protectionRuleSubResults?.some(s => s.status === SubResultStatus.WARNING) ||
+            environmentsResult.branchPolicySubResults?.some(s => s.status === SubResultStatus.WARNING)
+          ) {
+            result.hasWarnings = true;
+          }
+        } else {
+          result.hasWarnings = true;
+          result.environmentsSyncWarning = environmentsResult.error;
+          core.warning(`  ⚠️  ${environmentsResult.error}`);
+          result.subResults.push(
+            createSubResult('environments-sync', SubResultStatus.WARNING, 'Environments sync produced a warning')
           );
         }
       }
