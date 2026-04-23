@@ -1822,7 +1822,12 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
 
     for (const pr of pulls) {
       // Safety check: only close PRs created by the same user/app running the action
-      if (authenticatedLogin && pr.user?.login !== authenticatedLogin) {
+      // If authenticatedLogin is unknown, skip stale PR cleanup entirely
+      if (!authenticatedLogin) {
+        core.debug(`  Skipping stale PR check — authenticated user unknown`);
+        return null;
+      }
+      if (pr.user?.login !== authenticatedLogin) {
         const message = `Found stale PR #${pr.number} on branch ${branchName} but it was created by ${pr.user?.login || 'unknown'}, not ${authenticatedLogin} — skipping auto-close.`;
         core.warning(`  ⚠️  ${message}`);
         lastResult = {
@@ -2069,7 +2074,7 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         dryRun
       };
 
-      // If stale PR was warned (has extra commits), attach warning info
+      // If stale PR was warned (author mismatch), attach warning info
       if (stalePrResult && stalePrResult.action === 'warned') {
         result.stalePrWarning = stalePrResult;
       }
@@ -2728,7 +2733,7 @@ export async function syncPackageJson(
         dryRun
       };
 
-      // If stale PR was warned (has extra commits), attach warning info
+      // If stale PR was warned (author mismatch), attach warning info
       if (stalePrResult && stalePrResult.action === 'warned') {
         result.stalePrWarning = stalePrResult;
       }

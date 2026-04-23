@@ -11854,7 +11854,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check for stale PRs'));
     });
 
-    test('should close PR when authenticatedLogin is empty (graceful degradation)', async () => {
+    test('should skip stale PR check when authenticatedLogin is empty', async () => {
       mockOctokit.rest.pulls.list.mockResolvedValue({
         data: [
           {
@@ -11865,14 +11865,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
           }
         ]
       });
-      mockOctokit.rest.issues.createComment.mockResolvedValue({});
-      mockOctokit.rest.pulls.update.mockResolvedValue({});
-      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
 
       const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, '');
 
-      expect(result.action).toBe('closed');
-      expect(result.prNumber).toBe(10);
+      expect(result).toBeNull();
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
     });
 
     test('should close all matching PRs from same author and delete branch', async () => {
@@ -11953,6 +11950,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 5,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/5',
             commits: 1
           }
@@ -11967,7 +11965,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'owner/repo',
         './dependabot.yml',
         'chore: update dependabot.yml',
-        false
+        false,
+        'bot-user'
       );
 
       expect(result.success).toBe(true);
@@ -12000,6 +11999,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 7,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/7',
             commits: 1
           }
@@ -12011,7 +12011,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         'owner/repo',
         './dependabot.yml',
         'chore: update dependabot.yml',
-        true
+        true,
+        'bot-user'
       );
 
       expect(result.success).toBe(true);
@@ -12104,6 +12105,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 15,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo/pull/15',
             commits: 1
           }
@@ -12120,7 +12122,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         true,
         false,
         'chore: update package.json',
-        false
+        false,
+        'bot-user'
       );
 
       expect(result.success).toBe(true);
