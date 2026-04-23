@@ -576,7 +576,7 @@ repos:
   - repo: owner/repo2
     environments-file: './config/environments/api-environments.yml'
   - repo: owner/repo3
-    # Skip environments sync for this repo by setting empty environments
+    # Skip environments sync for this repo (empty list + no delete-unmanaged)
     environments: ''
 ```
 

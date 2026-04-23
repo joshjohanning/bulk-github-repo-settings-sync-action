@@ -3565,24 +3565,26 @@ async function syncDeploymentProtectionRules(octokit, owner, repoName, envName, 
     return subResults;
   }
 
-  // Get available apps for this environment
+  // Get available apps for this environment (only needed when there are desired rules to resolve)
   let availableApps = [];
-  try {
-    const { data } = await octokit.request(
-      'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps',
-      { owner, repo: repoName, environment_name: envName }
-    );
-    availableApps = data.available_custom_deployment_protection_rule_integrations ?? [];
-  } catch (error) {
-    core.warning(`  ⚠️  Failed to list available deployment protection rule apps for ${envName}: ${error.message}`);
-    subResults.push(
-      createSubResult(
-        'environment-protection-rule',
-        SubResultStatus.WARNING,
-        `Failed to list deployment protection rule apps for ${envName}`
-      )
-    );
-    return subResults;
+  if (desiredRules.length > 0) {
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/apps',
+        { owner, repo: repoName, environment_name: envName }
+      );
+      availableApps = data.available_custom_deployment_protection_rule_integrations ?? [];
+    } catch (error) {
+      core.warning(`  ⚠️  Failed to list available deployment protection rule apps for ${envName}: ${error.message}`);
+      subResults.push(
+        createSubResult(
+          'environment-protection-rule',
+          SubResultStatus.WARNING,
+          `Failed to list deployment protection rule apps for ${envName}`
+        )
+      );
+      return subResults;
+    }
   }
 
   // Resolve app slugs to integration IDs (deduplicate by slug)
@@ -3980,6 +3982,9 @@ export function parseEnvironmentsConfig(environmentNames, environmentsFilePath) 
 
     // Validate and normalize environment names from file
     for (const env of fileEnvs) {
+      if (!env || typeof env !== 'object' || Array.isArray(env)) {
+        throw new Error(`Each entry in "${environmentsFilePath}" must be an object with a "name" field`);
+      }
       if (!env.name || typeof env.name !== 'string') {
         throw new Error(`Each environment in "${environmentsFilePath}" must have a "name" field`);
       }
