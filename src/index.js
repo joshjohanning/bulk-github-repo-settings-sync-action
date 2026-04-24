@@ -1817,7 +1817,8 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
       owner,
       repo: repoName,
       state: 'open',
-      head: `${owner}:${branchName}`
+      head: `${owner}:${branchName}`,
+      per_page: 100
     });
 
     if (pulls.length === 0) return null;
