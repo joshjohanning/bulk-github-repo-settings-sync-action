@@ -2557,6 +2557,7 @@ const gitignoreContentProcessor = {
  * @param {string} gitignorePath - Path to local .gitignore file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun, authenticatedLogin) {
@@ -2610,6 +2611,7 @@ function deepEqual(obj1, obj2) {
  * @param {boolean} syncEngines - Whether to sync the engines field
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncPackageJson(
@@ -3385,6 +3387,7 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
  * @param {string} templatePath - Path to local pull request template file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun, authenticatedLogin) {
@@ -3413,6 +3416,7 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
  * @param {Array<string>} workflowFilePaths - Array of local workflow file paths to sync
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun, authenticatedLogin) {
@@ -4563,6 +4567,7 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
  * @param {string} copilotInstructionsPath - Path to local copilot-instructions.md file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncCopilotInstructions(
