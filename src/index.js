@@ -1799,7 +1799,7 @@ export async function updateRepositorySettings(
  * @param {string} repo - Repository in "owner/repo" format
  * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
  * @param {boolean} dryRun - Preview mode without making actual changes
- * @param {string} authenticatedLogin - Login of the authenticated user/app running the action
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app. If empty, stale PR check is skipped.
  * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
  *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
  */
@@ -1935,6 +1935,8 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
  * @param {Object} [options.contentProcessor] - Optional processor for custom content handling (e.g., preserving repo-specific sections)
  * @param {Function} [options.contentProcessor.getComparableExisting] - (existingContent) => content to compare against source
  * @param {Function} [options.contentProcessor.getFinalContent] - (sourceContent, existingContent) => content to commit
+ * @param {Function} [options.contentTransformer] - Optional function to transform file content before syncing
+ * @param {string} [options.authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object with `success` boolean and `[resultKey]` status string.
  *   Possible status values:
