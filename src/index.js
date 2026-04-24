@@ -2466,6 +2466,7 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
  * @param {string} dependabotYmlPath - Path to local dependabot.yml file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
 export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun, authenticatedLogin) {
@@ -4598,6 +4599,7 @@ export async function syncCopilotInstructions(
  * @param {string} targetPath - Target path in the repository (.github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS)
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @param {Object} [templateVars] - Optional template variables for {{variable}} replacement
  * @returns {Promise<Object>} Result object
  */
