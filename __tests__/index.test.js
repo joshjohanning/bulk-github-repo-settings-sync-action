@@ -69,6 +69,13 @@ const mockOctokit = {
       list: jest.fn(),
       create: jest.fn(),
       update: jest.fn()
+    },
+    users: {
+      getAuthenticated: jest.fn(),
+      getByUsername: jest.fn()
+    },
+    teams: {
+      getByName: jest.fn()
     }
   },
   request: jest.fn(),
