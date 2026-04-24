@@ -76,6 +76,9 @@ const mockOctokit = {
     },
     teams: {
       getByName: jest.fn()
+    },
+    apps: {
+      getAuthenticated: jest.fn()
     }
   },
   request: jest.fn(),
