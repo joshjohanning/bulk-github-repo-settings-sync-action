@@ -59,12 +59,23 @@ const mockOctokit = {
     git: {
       getRef: jest.fn(),
       createRef: jest.fn(),
-      updateRef: jest.fn()
+      updateRef: jest.fn(),
+      deleteRef: jest.fn()
+    },
+    issues: {
+      createComment: jest.fn()
     },
     pulls: {
       list: jest.fn(),
       create: jest.fn(),
       update: jest.fn()
+    },
+    users: {
+      getAuthenticated: jest.fn(),
+      getByUsername: jest.fn()
+    },
+    teams: {
+      getByName: jest.fn()
     }
   },
   request: jest.fn(),
@@ -336,6 +347,7 @@ const {
   syncCopilotInstructions,
   syncCodeowners,
   syncPackageJson,
+  closeStaleActionPrs,
   escapeHtmlAttribute,
   formatPrLink,
   resetKnownRepoConfigKeysCache,
@@ -10519,6 +10531,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         '.github/CODEOWNERS',
         'chore: update CODEOWNERS',
         false,
+        '',
         { default_team: '@org/team-a', code_reviewers: '@org/leads' }
       );
 
@@ -10561,6 +10574,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         '.github/CODEOWNERS',
         'chore: update CODEOWNERS',
         false,
+        '',
         { default_team: '@org/team-a', code_reviewers: '@org/leads' }
       );
 
@@ -11288,6 +11302,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo1/pull/42'
           }
         ]
@@ -11428,6 +11443,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         data: [
           {
             number: 42,
+            user: { login: 'bot-user' },
             html_url: 'https://github.com/owner/repo1/pull/42'
           }
         ]
@@ -11697,6 +11713,435 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
       expect(repoRow[1]).toBe('\u2796 No changes');
       expect(repoRow[2]).toBe('No changes needed');
+    });
+  });
+
+  describe('closeStaleActionPrs', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+    });
+
+    test('should return null when no stale PRs exist', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(result).toBeNull();
+      expect(mockOctokit.rest.pulls.list).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        state: 'open',
+        head: 'owner:dependabot-yml-sync',
+        per_page: 100
+      });
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should close stale PR when source matches target', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(result).toEqual({
+        action: 'closed',
+        prNumber: 42,
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        message: 'Closed stale PR #42 (source matches target)'
+      });
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        issue_number: 42,
+        body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+      });
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        pull_number: 42,
+        state: 'closed'
+      });
+      expect(mockOctokit.rest.git.deleteRef).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        ref: 'heads/dependabot-yml-sync'
+      });
+    });
+
+    test('should warn instead of closing when PR author does not match', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            user: { login: 'other-user' },
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(result.action).toBe('warned');
+      expect(result.prNumber).toBe(42);
+      expect(result.message).toContain('other-user');
+      expect(result.message).toContain('bot-user');
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should report would-close in dry-run mode', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', true, 'bot-user');
+
+      expect(result).toEqual({
+        action: 'would-close',
+        prNumber: 42,
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        message: 'Would close stale PR #42 (source matches target)'
+      });
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    test('should handle branch deletion failure gracefully', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 42,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/42',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockRejectedValue(new Error('Branch not found'));
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(42);
+      // Should still succeed even if branch deletion fails
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalled();
+    });
+
+    test('should return null when API call fails', async () => {
+      mockOctokit.rest.pulls.list.mockRejectedValue(new Error('API error'));
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(result).toBeNull();
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Could not check for stale PRs'));
+    });
+
+    test('should skip stale PR check when authenticatedLogin is empty', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 10,
+            user: { login: 'any-user' },
+            html_url: 'https://github.com/owner/repo/pull/10',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, '');
+
+      expect(result).toBeNull();
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should close all matching PRs from same author and delete branch', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          { number: 10, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
+          { number: 11, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/11', commits: 1 }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.git.deleteRef).toHaveBeenCalled();
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(11);
+    });
+
+    test('should not delete branch when some PRs are from different authors', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          { number: 10, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo/pull/10', commits: 1 },
+          { number: 11, user: { login: 'human-user' }, html_url: 'https://github.com/owner/repo/pull/11', commits: 1 }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'bot-user');
+
+      // Should close PR #10 (bot-user) but warn on #11 (human-user)
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
+      // Prefer closed result over warned
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(10);
+    });
+  });
+
+  describe('syncDependabotYml - stale PR closing', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+    });
+
+    test('should close stale PR when content is unchanged and stale PR exists', async () => {
+      const content =
+        'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      // File exists with same content (unchanged)
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha-789',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      // Stale PR exists on the sync branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 5,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/5',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false,
+        'bot-user'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('stale-pr-closed');
+      expect(result.prNumber).toBe(5);
+      expect(result.message).toContain('Closed stale PR #5');
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 5, state: 'closed' })
+      );
+      expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith(expect.objectContaining({ issue_number: 5 }));
+    });
+
+    test('should report would-close in dry-run when content is unchanged and stale PR exists', async () => {
+      const content = 'version: 2\nupdates: []';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 7,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/7',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        true,
+        'bot-user'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('would-close-stale-pr');
+      expect(result.prNumber).toBe(7);
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should warn about stale PR from different author and return unchanged', async () => {
+      const content = 'version: 2\nupdates: []';
+
+      setMockFileContent(content);
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(content).toString('base64')
+        }
+      });
+
+      // Stale PR from a different user
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 8,
+            user: { login: 'other-user' },
+            html_url: 'https://github.com/owner/repo/pull/8',
+            commits: 1
+          }
+        ]
+      });
+
+      const result = await syncDependabotYml(
+        mockOctokit,
+        'owner/repo',
+        './dependabot.yml',
+        'chore: update dependabot.yml',
+        false,
+        'bot-user'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.dependabotYml).toBe('unchanged');
+      expect(result.stalePrWarning).toBeDefined();
+      expect(result.stalePrWarning.action).toBe('warned');
+      expect(result.stalePrWarning.prNumber).toBe(8);
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncPackageJson - stale PR closing', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.rest.repos.get.mockClear();
+      mockOctokit.rest.repos.getContent.mockClear();
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
+      mockOctokit.rest.git.getRef.mockClear();
+      mockOctokit.rest.git.createRef.mockClear();
+      mockOctokit.rest.git.updateRef.mockClear();
+      mockOctokit.rest.git.deleteRef.mockClear();
+      mockOctokit.rest.pulls.list.mockClear();
+      mockOctokit.rest.pulls.create.mockClear();
+      mockOctokit.rest.pulls.update.mockClear();
+      mockOctokit.rest.issues.createComment.mockClear();
+    });
+
+    test('should close stale PR when package.json is unchanged and stale PR exists', async () => {
+      const sourceJson = { name: 'test', scripts: { build: 'tsc' } };
+      const existingJson = { name: 'test', scripts: { build: 'tsc' } };
+
+      setMockFileContent(JSON.stringify(sourceJson));
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: { default_branch: 'main' }
+      });
+
+      mockOctokit.rest.repos.getContent.mockResolvedValue({
+        data: {
+          sha: 'file-sha',
+          content: Buffer.from(JSON.stringify(existingJson)).toString('base64')
+        }
+      });
+
+      // Stale PR exists on the sync branch
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 15,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo/pull/15',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await syncPackageJson(
+        mockOctokit,
+        'owner/repo',
+        './package.json',
+        true,
+        false,
+        'chore: update package.json',
+        false,
+        'bot-user'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.packageJson).toBe('stale-pr-closed');
+      expect(result.prNumber).toBe(15);
+      expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+        expect.objectContaining({ pull_number: 15, state: 'closed' })
+      );
     });
   });
 

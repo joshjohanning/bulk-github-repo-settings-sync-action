@@ -926,6 +926,20 @@ Output shows what would change:
   📦 Would create .github/dependabot.yml via PR
 ```
 
+### Stale Sync PR Cleanup
+
+When syncing files via pull request (dependabot.yml, .gitignore, workflow files, etc.), the action automatically closes stale PRs if the source file has been reverted to match the target. This prevents orphaned PRs from accumulating when configuration changes are rolled back.
+
+**How it works:**
+
+- When the action detects "no changes needed" (source matches target), it checks for open PRs on the sync branch
+- Only PRs created by the same user/app running the action are closed (PRs from other authors are skipped with a warning)
+- A comment is added explaining why the PR was closed, and the sync branch is deleted if no other open PRs remain on it
+- In dry-run mode, the action reports which PRs would be closed without taking action
+
+> [!NOTE]
+> This feature requires the token to have **pull-requests: write** and **issues: write** permissions (for adding the closing comment). GitHub App tokens and PATs with `repo` scope include both.
+
 ## Action Inputs
 
 | Input                             | Description                                                                                                                                 | Required | Default                                   |

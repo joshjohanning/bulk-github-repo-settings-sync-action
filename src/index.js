@@ -921,6 +921,10 @@ function formatSubResultSummary(subResult, dryRun) {
 
   if (syncStatus === 'pr-up-to-date') {
     return `${label} ${prRef} up-to-date (pending merge)`;
+  } else if (syncStatus === 'stale-pr-closed') {
+    return `Closed stale ${prRef} for ${label}`;
+  } else if (syncStatus === 'would-close-stale-pr') {
+    return `Would close stale ${prRef} for ${label}`;
   } else if (syncStatus === 'would-update-pr') {
     return `Would update existing ${prRef} for ${label}`;
   } else if (syncStatus.startsWith('would-')) {
@@ -1788,6 +1792,139 @@ export async function updateRepositorySettings(
 }
 
 /**
+ * Close stale PRs created by this action when the source file has been reverted to match the target.
+ * Searches for open PRs on the given sync branch and closes them with an explanatory comment.
+ * Only closes PRs created by the authenticated user/app to avoid closing unrelated PRs.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {string} branchName - Branch name used by the sync type (e.g., 'dependabot-yml-sync')
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app. If empty, stale PR check is skipped.
+ * @returns {Promise<{action: string, prNumber: number, prUrl: string, message: string}|null>}
+ *   Result object with action ('closed', 'would-close', or 'warned'), or null if no stale PR found.
+ */
+export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin) {
+  const [owner, repoName] = repo.split('/');
+
+  // If authenticatedLogin is unknown, skip stale PR cleanup entirely
+  if (!authenticatedLogin) {
+    core.debug(`  Skipping stale PR check — authenticated user unknown`);
+    return null;
+  }
+
+  try {
+    const { data: pulls } = await octokit.rest.pulls.list({
+      owner,
+      repo: repoName,
+      state: 'open',
+      head: `${owner}:${branchName}`,
+      per_page: 100
+    });
+
+    if (pulls.length === 0) return null;
+
+    // Process all matching stale PRs
+    let lastResult = null;
+    let closedResult = null;
+    let remainingOpenPrs = pulls.length;
+
+    for (const pr of pulls) {
+      // Safety check: only close PRs created by the same user/app running the action
+      if (pr.user?.login !== authenticatedLogin) {
+        const message = `Found stale PR #${pr.number} on branch ${branchName} but it was created by ${pr.user?.login || 'unknown'}, not ${authenticatedLogin} — skipping auto-close.`;
+        core.warning(`  ⚠️  ${message}`);
+        lastResult = {
+          action: 'warned',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        continue;
+      }
+
+      if (dryRun) {
+        const message = `Would close stale PR #${pr.number} (source matches target)`;
+        core.info(`  🔍 ${message}`);
+        const result = {
+          action: 'would-close',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        closedResult = result;
+        lastResult = result;
+        continue;
+      }
+
+      // Close the PR (per-PR error handling to preserve previous results)
+      try {
+        // Close the PR first (priority), then add comment (best-effort)
+        await octokit.rest.pulls.update({
+          owner,
+          repo: repoName,
+          pull_number: pr.number,
+          state: 'closed'
+        });
+
+        // Best-effort comment explaining why
+        try {
+          await octokit.rest.issues.createComment({
+            owner,
+            repo: repoName,
+            issue_number: pr.number,
+            body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+          });
+        } catch (commentError) {
+          core.debug(`  Could not add comment to PR #${pr.number}: ${commentError.message}`);
+        }
+
+        remainingOpenPrs--;
+        const message = `Closed stale PR #${pr.number} (source matches target)`;
+        core.info(`  🗑️  ${message}`);
+        const result = {
+          action: 'closed',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        closedResult = result;
+        lastResult = result;
+      } catch (error) {
+        const message = `Failed to close stale PR #${pr.number}: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        lastResult = {
+          action: 'warned',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+      }
+    }
+
+    // Clean up the branch only if no open PRs remain on it
+    if (!dryRun && remainingOpenPrs === 0) {
+      try {
+        await octokit.rest.git.deleteRef({
+          owner,
+          repo: repoName,
+          ref: `heads/${branchName}`
+        });
+        core.info(`  🗑️  Deleted branch ${branchName}`);
+      } catch (error) {
+        core.debug(`  Could not delete branch ${branchName}: ${error.message}`);
+      }
+    }
+
+    // Prefer closed/would-close result over warned
+    return closedResult || lastResult;
+  } catch (error) {
+    // Non-fatal error - don't fail the sync because of stale PR cleanup
+    core.warning(`  ⚠️  Could not check for stale PRs: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Generic function to sync one or more files to a target repository via pull request.
  * If an open PR already exists for the same branch, the function checks if the PR branch
  * content differs from the new source content. If different, it updates the PR branch with
@@ -1805,6 +1942,8 @@ export async function updateRepositorySettings(
  * @param {Object} [options.contentProcessor] - Optional processor for custom content handling (e.g., preserving repo-specific sections)
  * @param {Function} [options.contentProcessor.getComparableExisting] - (existingContent) => content to compare against source
  * @param {Function} [options.contentProcessor.getFinalContent] - (sourceContent, existingContent) => content to commit
+ * @param {Function} [options.contentTransformer] - Optional function to transform file content before syncing
+ * @param {string} [options.authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @param {boolean} dryRun - Preview mode without making actual changes
  * @returns {Promise<Object>} Result object with `success` boolean and `[resultKey]` status string.
  *   Possible status values:
@@ -1819,6 +1958,8 @@ export async function updateRepositorySettings(
  *   - 'would-create': Dry-run - would create new file(s)
  *   - 'would-update': Dry-run - would update existing file(s)
  *   - 'would-update-pr': Dry-run - would update existing PR branch
+ *   - 'stale-pr-closed': Source matches target and a stale PR was auto-closed
+ *   - 'would-close-stale-pr': Dry-run - would close a stale PR
  */
 export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
   const {
@@ -1830,7 +1971,8 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
     resultKey,
     fileDescription,
     contentProcessor,
-    contentTransformer
+    contentTransformer,
+    authenticatedLogin
   } = options;
 
   const [owner, repoName] = repo.split('/');
@@ -1927,12 +2069,29 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
       }
     }
 
-    // If no files need updates, return early
+    // If no files need updates, check for stale PRs and return
     if (filesToUpdate.length === 0) {
       const targetPaths = fileInfos.map(f => f.targetPath);
+
+      // Check for stale open PRs that should be closed (source reverted to match target)
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
+
+      if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
+        return {
+          repository: repo,
+          success: true,
+          [resultKey]: stalePrResult.action === 'closed' ? 'stale-pr-closed' : 'would-close-stale-pr',
+          message: stalePrResult.message,
+          prNumber: stalePrResult.prNumber,
+          prUrl: stalePrResult.prUrl,
+          filesProcessed: targetPaths,
+          dryRun
+        };
+      }
+
       const message =
         fileInfos.length === 1 ? `${targetPaths[0]} is already up to date` : 'All files are already up to date';
-      return {
+      const result = {
         repository: repo,
         success: true,
         [resultKey]: 'unchanged',
@@ -1940,6 +2099,13 @@ export async function syncFilesViaPullRequest(octokit, repo, options, dryRun) {
         filesProcessed: targetPaths,
         dryRun
       };
+
+      // If stale PR was warned (author mismatch), attach warning info
+      if (stalePrResult && stalePrResult.action === 'warned') {
+        result.stalePrWarning = stalePrResult;
+      }
+
+      return result;
     }
 
     // Check if there's already an open PR for this update
@@ -2309,9 +2475,10 @@ export async function syncFileViaPullRequest(octokit, repo, options, dryRun) {
  * @param {string} dependabotYmlPath - Path to local dependabot.yml file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun) {
+export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -2323,7 +2490,8 @@ export async function syncDependabotYml(octokit, repo, dependabotYmlPath, prTitl
       prBodyCreate: `This PR adds \`.github/dependabot.yml\` to enable Dependabot.\n\n**Changes:**\n- Added dependabot configuration`,
       prBodyUpdate: `This PR updates \`.github/dependabot.yml\` to the latest version.\n\n**Changes:**\n- Updated dependabot configuration`,
       resultKey: 'dependabotYml',
-      fileDescription: 'dependabot.yml'
+      fileDescription: 'dependabot.yml',
+      authenticatedLogin
     },
     dryRun
   );
@@ -2398,9 +2566,10 @@ const gitignoreContentProcessor = {
  * @param {string} gitignorePath - Path to local .gitignore file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun) {
+export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -2413,6 +2582,7 @@ export async function syncGitignore(octokit, repo, gitignorePath, prTitle, dryRu
       prBodyUpdate: `This PR updates \`.gitignore\` to the latest version.\n\n**Changes:**\n- Updated .gitignore configuration\n- Repository-specific entries have been preserved`,
       resultKey: 'gitignore',
       fileDescription: '.gitignore',
+      authenticatedLogin,
       contentProcessor: gitignoreContentProcessor
     },
     dryRun
@@ -2450,9 +2620,19 @@ function deepEqual(obj1, obj2) {
  * @param {boolean} syncEngines - Whether to sync the engines field
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncPackageJson(octokit, repo, packageJsonPath, syncScripts, syncEngines, prTitle, dryRun) {
+export async function syncPackageJson(
+  octokit,
+  repo,
+  packageJsonPath,
+  syncScripts,
+  syncEngines,
+  prTitle,
+  dryRun,
+  authenticatedLogin
+) {
   const [owner, repoName] = repo.split('/');
   const targetPath = 'package.json';
   const branchName = 'package-json-sync';
@@ -2557,15 +2737,37 @@ export async function syncPackageJson(octokit, repo, packageJsonPath, syncScript
       }
     }
 
-    // If no changes needed, return early
+    // If no changes needed, check for stale PRs and return
     if (changes.length === 0) {
-      return {
+      // Check for stale open PRs that should be closed (source reverted to match target)
+      const stalePrResult = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
+
+      if (stalePrResult && (stalePrResult.action === 'closed' || stalePrResult.action === 'would-close')) {
+        return {
+          repository: repo,
+          success: true,
+          packageJson: stalePrResult.action === 'closed' ? 'stale-pr-closed' : 'would-close-stale-pr',
+          message: stalePrResult.message,
+          prNumber: stalePrResult.prNumber,
+          prUrl: stalePrResult.prUrl,
+          dryRun
+        };
+      }
+
+      const result = {
         repository: repo,
         success: true,
         packageJson: 'unchanged',
         message: `${targetPath} is already up to date`,
         dryRun
       };
+
+      // If stale PR was warned (author mismatch), attach warning info
+      if (stalePrResult && stalePrResult.action === 'warned') {
+        result.stalePrWarning = stalePrResult;
+      }
+
+      return result;
     }
 
     // Check if there's already an open PR for this update
@@ -3194,9 +3396,10 @@ export async function syncRepositoryRuleset(octokit, repo, rulesetFilePath, dele
  * @param {string} templatePath - Path to local pull request template file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun) {
+export async function syncPullRequestTemplate(octokit, repo, templatePath, prTitle, dryRun, authenticatedLogin) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -3208,7 +3411,8 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
       prBodyCreate: `This PR adds \`.github/pull_request_template.md\` to standardize pull requests.\n\n**Changes:**\n- Added pull request template`,
       prBodyUpdate: `This PR updates \`.github/pull_request_template.md\` to the latest version.\n\n**Changes:**\n- Updated pull request template`,
       resultKey: 'pullRequestTemplate',
-      fileDescription: 'pull request template'
+      fileDescription: 'pull request template',
+      authenticatedLogin
     },
     dryRun
   );
@@ -3221,9 +3425,10 @@ export async function syncPullRequestTemplate(octokit, repo, templatePath, prTit
  * @param {Array<string>} workflowFilePaths - Array of local workflow file paths to sync
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun) {
+export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitle, dryRun, authenticatedLogin) {
   // Validate that workflow files array is non-empty
   if (!workflowFilePaths || workflowFilePaths.length === 0) {
     return {
@@ -3250,7 +3455,8 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
       prBodyCreate: 'This PR adds workflow files.',
       prBodyUpdate: 'This PR syncs workflow files to the latest versions.',
       resultKey: 'workflowFiles',
-      fileDescription: 'workflow files'
+      fileDescription: 'workflow files',
+      authenticatedLogin
     },
     dryRun
   );
@@ -4370,9 +4576,17 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
  * @param {string} copilotInstructionsPath - Path to local copilot-instructions.md file
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @returns {Promise<Object>} Result object
  */
-export async function syncCopilotInstructions(octokit, repo, copilotInstructionsPath, prTitle, dryRun) {
+export async function syncCopilotInstructions(
+  octokit,
+  repo,
+  copilotInstructionsPath,
+  prTitle,
+  dryRun,
+  authenticatedLogin
+) {
   return syncFileViaPullRequest(
     octokit,
     repo,
@@ -4384,7 +4598,8 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
       prBodyCreate: `This PR adds \`.github/copilot-instructions.md\` to configure GitHub Copilot.\n\n**Changes:**\n- Added Copilot instructions`,
       prBodyUpdate: `This PR updates \`.github/copilot-instructions.md\` to the latest version.\n\n**Changes:**\n- Updated Copilot instructions`,
       resultKey: 'copilotInstructions',
-      fileDescription: 'copilot-instructions.md'
+      fileDescription: 'copilot-instructions.md',
+      authenticatedLogin
     },
     dryRun
   );
@@ -4398,10 +4613,20 @@ export async function syncCopilotInstructions(octokit, repo, copilotInstructions
  * @param {string} targetPath - Target path in the repository (.github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS)
  * @param {string} prTitle - Title for the pull request
  * @param {boolean} dryRun - Preview mode without making actual changes
+ * @param {string} [authenticatedLogin] - Login of the authenticated user/app for stale PR matching
  * @param {Object} [templateVars] - Optional template variables for {{variable}} replacement
  * @returns {Promise<Object>} Result object
  */
-export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, prTitle, dryRun, templateVars = null) {
+export async function syncCodeowners(
+  octokit,
+  repo,
+  codeownersPath,
+  targetPath,
+  prTitle,
+  dryRun,
+  authenticatedLogin,
+  templateVars = null
+) {
   // Validate target path
   const validPaths = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
   if (!validPaths.includes(targetPath)) {
@@ -4434,6 +4659,7 @@ export async function syncCodeowners(octokit, repo, codeownersPath, targetPath, 
       prBodyUpdate: `This PR updates \`${targetPath}\` to the latest version.\n\n**Changes:**\n- Updated CODEOWNERS file`,
       resultKey: 'codeowners',
       fileDescription: 'CODEOWNERS',
+      authenticatedLogin,
       contentTransformer
     },
     dryRun
@@ -4615,6 +4841,16 @@ export async function run() {
       auth: githubToken,
       baseUrl: githubApiUrl
     });
+
+    // Get authenticated user/app login for stale PR author matching
+    let authenticatedLogin = '';
+    try {
+      const { data: authUser } = await octokit.rest.users.getAuthenticated();
+      authenticatedLogin = authUser.login;
+      core.debug(`Authenticated as: ${authenticatedLogin}`);
+    } catch (error) {
+      core.debug(`Could not determine authenticated user: ${error.message}`);
+    }
 
     // Parse repository list
     const repoList = await parseRepositories(
@@ -4970,7 +5206,14 @@ export async function run() {
       // Sync dependabot.yml if specified
       if (repoDependabotYml) {
         core.info(`  📦 Checking dependabot.yml...`);
-        const dependabotResult = await syncDependabotYml(octokit, repo, repoDependabotYml, dependabotPrTitle, dryRun);
+        const dependabotResult = await syncDependabotYml(
+          octokit,
+          repo,
+          repoDependabotYml,
+          dependabotPrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add dependabot result to the main result
         result.dependabotSync = dependabotResult;
@@ -4989,6 +5232,15 @@ export async function run() {
               })
             );
           }
+          if (dependabotResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('dependabot-sync', SubResultStatus.WARNING, dependabotResult.stalePrWarning.message, {
+                prNumber: dependabotResult.stalePrWarning.prNumber,
+                prUrl: dependabotResult.stalePrWarning.prUrl
+              })
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.dependabotSyncWarning = dependabotResult.error;
@@ -5002,7 +5254,14 @@ export async function run() {
       // Sync .gitignore if specified
       if (repoGitignore) {
         core.info(`  📝 Checking .gitignore...`);
-        const gitignoreResult = await syncGitignore(octokit, repo, repoGitignore, gitignorePrTitle, dryRun);
+        const gitignoreResult = await syncGitignore(
+          octokit,
+          repo,
+          repoGitignore,
+          gitignorePrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add gitignore result to the main result
         result.gitignoreSync = gitignoreResult;
@@ -5018,6 +5277,15 @@ export async function run() {
                 syncStatus: gitignoreResult.gitignore,
                 prNumber: gitignoreResult.prNumber,
                 prUrl: gitignoreResult.prUrl
+              })
+            );
+          }
+          if (gitignoreResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('gitignore-sync', SubResultStatus.WARNING, gitignoreResult.stalePrWarning.message, {
+                prNumber: gitignoreResult.stalePrWarning.prNumber,
+                prUrl: gitignoreResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5069,7 +5337,8 @@ export async function run() {
           repo,
           repoPullRequestTemplate,
           pullRequestTemplatePrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add pull request template result to the main result
@@ -5089,6 +5358,15 @@ export async function run() {
               })
             );
           }
+          if (templateResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('pr-template-sync', SubResultStatus.WARNING, templateResult.stalePrWarning.message, {
+                prNumber: templateResult.stalePrWarning.prNumber,
+                prUrl: templateResult.stalePrWarning.prUrl
+              })
+            );
+          }
         } else {
           result.hasWarnings = true;
           result.pullRequestTemplateSyncWarning = templateResult.error;
@@ -5102,7 +5380,14 @@ export async function run() {
       // Sync workflow files if specified
       if (repoWorkflowFiles && repoWorkflowFiles.length > 0) {
         core.info(`  🔧 Checking workflow files...`);
-        const workflowResult = await syncWorkflowFiles(octokit, repo, repoWorkflowFiles, workflowFilesPrTitle, dryRun);
+        const workflowResult = await syncWorkflowFiles(
+          octokit,
+          repo,
+          repoWorkflowFiles,
+          workflowFilesPrTitle,
+          dryRun,
+          authenticatedLogin
+        );
 
         // Add workflow files result to the main result
         result.workflowFilesSync = workflowResult;
@@ -5118,6 +5403,15 @@ export async function run() {
                 syncStatus: workflowResult.workflowFiles,
                 prNumber: workflowResult.prNumber,
                 prUrl: workflowResult.prUrl
+              })
+            );
+          }
+          if (workflowResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('workflow-files-sync', SubResultStatus.WARNING, workflowResult.stalePrWarning.message, {
+                prNumber: workflowResult.stalePrWarning.prNumber,
+                prUrl: workflowResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5217,7 +5511,8 @@ export async function run() {
           repo,
           repoCopilotInstructionsMd,
           copilotInstructionsPrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add copilot instructions result to the main result
@@ -5235,6 +5530,20 @@ export async function run() {
                 prNumber: copilotResult.prNumber,
                 prUrl: copilotResult.prUrl
               })
+            );
+          }
+          if (copilotResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult(
+                'copilot-instructions-sync',
+                SubResultStatus.WARNING,
+                copilotResult.stalePrWarning.message,
+                {
+                  prNumber: copilotResult.stalePrWarning.prNumber,
+                  prUrl: copilotResult.stalePrWarning.prUrl
+                }
+              )
             );
           }
         } else {
@@ -5265,6 +5574,7 @@ export async function run() {
           repoCodeownersTargetPath,
           codeownersPrTitle,
           dryRun,
+          authenticatedLogin,
           repoCodeownersVars
         );
 
@@ -5282,6 +5592,15 @@ export async function run() {
                 syncStatus: codeownersResult.codeowners,
                 prNumber: codeownersResult.prNumber,
                 prUrl: codeownersResult.prUrl
+              })
+            );
+          }
+          if (codeownersResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('codeowners-sync', SubResultStatus.WARNING, codeownersResult.stalePrWarning.message, {
+                prNumber: codeownersResult.stalePrWarning.prNumber,
+                prUrl: codeownersResult.stalePrWarning.prUrl
               })
             );
           }
@@ -5311,7 +5630,8 @@ export async function run() {
           repoSyncScripts,
           repoSyncEngines,
           packageJsonPrTitle,
-          dryRun
+          dryRun,
+          authenticatedLogin
         );
 
         // Add package.json result to the main result
@@ -5333,6 +5653,15 @@ export async function run() {
                 syncStatus: packageJsonResult.packageJson,
                 prNumber: packageJsonResult.prNumber,
                 prUrl: packageJsonResult.prUrl
+              })
+            );
+          }
+          if (packageJsonResult.stalePrWarning) {
+            result.hasWarnings = true;
+            result.subResults.push(
+              createSubResult('package-json-sync', SubResultStatus.WARNING, packageJsonResult.stalePrWarning.message, {
+                prNumber: packageJsonResult.stalePrWarning.prNumber,
+                prUrl: packageJsonResult.stalePrWarning.prUrl
               })
             );
           }
