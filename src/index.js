@@ -1858,19 +1858,25 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
 
       // Close the PR (per-PR error handling to preserve previous results)
       try {
-        await octokit.rest.issues.createComment({
-          owner,
-          repo: repoName,
-          issue_number: pr.number,
-          body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
-        });
-
+        // Close the PR first (priority), then add comment (best-effort)
         await octokit.rest.pulls.update({
           owner,
           repo: repoName,
           pull_number: pr.number,
           state: 'closed'
         });
+
+        // Best-effort comment explaining why
+        try {
+          await octokit.rest.issues.createComment({
+            owner,
+            repo: repoName,
+            issue_number: pr.number,
+            body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+          });
+        } catch (commentError) {
+          core.debug(`  Could not add comment to PR #${pr.number}: ${commentError.message}`);
+        }
 
         remainingOpenPrs--;
         const message = `Closed stale PR #${pr.number} (source matches target)`;

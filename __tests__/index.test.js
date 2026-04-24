@@ -11728,7 +11728,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         owner: 'owner',
         repo: 'repo',
         state: 'open',
-        head: 'owner:dependabot-yml-sync'
+        head: 'owner:dependabot-yml-sync',
+        per_page: 100
       });
       expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();

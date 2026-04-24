@@ -938,7 +938,7 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 - In dry-run mode, the action reports which PRs would be closed without taking action
 
 > [!NOTE]
-> This feature requires the token to have **pull requests: write** and **issues: write** permissions (for adding the closing comment). GitHub App tokens and PATs with `repo` scope include both.
+> This feature requires the token to have **pull-requests: write** and **issues: write** permissions (for adding the closing comment). GitHub App tokens and PATs with `repo` scope include both.
 
 ## Action Inputs
 
