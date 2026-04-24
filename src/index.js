@@ -4848,8 +4848,16 @@ export async function run() {
       const { data: authUser } = await octokit.rest.users.getAuthenticated();
       authenticatedLogin = authUser.login;
       core.debug(`Authenticated as: ${authenticatedLogin}`);
-    } catch (error) {
-      core.debug(`Could not determine authenticated user: ${error.message}`);
+    } catch (userError) {
+      // GitHub App installation tokens don't support users.getAuthenticated
+      // Try the app endpoint to get the bot login ({app-slug}[bot])
+      try {
+        const { data: app } = await octokit.rest.apps.getAuthenticated();
+        authenticatedLogin = `${app.slug}[bot]`;
+        core.debug(`Authenticated as GitHub App: ${authenticatedLogin}`);
+      } catch (appError) {
+        core.debug(`Could not determine authenticated user (${userError.message}) or app (${appError.message})`);
+      }
     }
 
     // Parse repository list

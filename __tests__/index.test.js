@@ -76,6 +76,9 @@ const mockOctokit = {
     },
     teams: {
       getByName: jest.fn()
+    },
+    apps: {
+      getAuthenticated: jest.fn()
     }
   },
   request: jest.fn(),
@@ -11878,6 +11881,27 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result).toBeNull();
       expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+    });
+
+    test('should close PR when authenticatedLogin is a GitHub App bot login', async () => {
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 10,
+            user: { login: 'my-app[bot]' },
+            html_url: 'https://github.com/owner/repo/pull/10',
+            commits: 1
+          }
+        ]
+      });
+      mockOctokit.rest.issues.createComment.mockResolvedValue({});
+      mockOctokit.rest.pulls.update.mockResolvedValue({});
+      mockOctokit.rest.git.deleteRef.mockResolvedValue({});
+
+      const result = await closeStaleActionPrs(mockOctokit, 'owner/repo', 'dependabot-yml-sync', false, 'my-app[bot]');
+
+      expect(result.action).toBe('closed');
+      expect(result.prNumber).toBe(10);
     });
 
     test('should close all matching PRs from same author and delete branch', async () => {
