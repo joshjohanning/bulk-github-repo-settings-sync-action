@@ -1855,33 +1855,43 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
         continue;
       }
 
-      // Add comment explaining why the PR is being closed
-      await octokit.rest.issues.createComment({
-        owner,
-        repo: repoName,
-        issue_number: pr.number,
-        body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
-      });
+      // Close the PR (per-PR error handling to preserve previous results)
+      try {
+        await octokit.rest.issues.createComment({
+          owner,
+          repo: repoName,
+          issue_number: pr.number,
+          body: 'Closing: the source file has been reverted to match the current target. This PR is no longer needed.'
+        });
 
-      // Close the PR
-      await octokit.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: pr.number,
-        state: 'closed'
-      });
+        await octokit.rest.pulls.update({
+          owner,
+          repo: repoName,
+          pull_number: pr.number,
+          state: 'closed'
+        });
 
-      remainingOpenPrs--;
-      const message = `Closed stale PR #${pr.number} (source matches target)`;
-      core.info(`  🗑️  ${message}`);
-      const result = {
-        action: 'closed',
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        message
-      };
-      closedResult = result;
-      lastResult = result;
+        remainingOpenPrs--;
+        const message = `Closed stale PR #${pr.number} (source matches target)`;
+        core.info(`  🗑️  ${message}`);
+        const result = {
+          action: 'closed',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+        closedResult = result;
+        lastResult = result;
+      } catch (error) {
+        const message = `Failed to close stale PR #${pr.number}: ${error.message}`;
+        core.warning(`  ⚠️  ${message}`);
+        lastResult = {
+          action: 'warned',
+          prNumber: pr.number,
+          prUrl: pr.html_url,
+          message
+        };
+      }
     }
 
     // Clean up the branch only if no open PRs remain on it
