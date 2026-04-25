@@ -4845,19 +4845,11 @@ export async function run() {
     // Get authenticated user/app login for stale PR author matching
     let authenticatedLogin = '';
     try {
-      const { data: authUser } = await octokit.rest.users.getAuthenticated();
-      authenticatedLogin = authUser.login;
+      const { viewer } = await octokit.graphql('{ viewer { login } }');
+      authenticatedLogin = viewer.login;
       core.debug(`Authenticated as: ${authenticatedLogin}`);
-    } catch (userError) {
-      // GitHub App installation tokens don't support users.getAuthenticated
-      // Try the app endpoint to get the bot login ({app-slug}[bot])
-      try {
-        const { data: app } = await octokit.rest.apps.getAuthenticated();
-        authenticatedLogin = `${app.slug}[bot]`;
-        core.debug(`Authenticated as GitHub App: ${authenticatedLogin}`);
-      } catch (appError) {
-        core.debug(`Could not determine authenticated user (${userError.message}) or app (${appError.message})`);
-      }
+    } catch (error) {
+      core.debug(`Could not determine authenticated user: ${error.message}`);
     }
 
     // Parse repository list

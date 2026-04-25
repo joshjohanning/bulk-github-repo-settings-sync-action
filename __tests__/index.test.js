@@ -82,7 +82,8 @@ const mockOctokit = {
     }
   },
   request: jest.fn(),
-  paginate: jest.fn()
+  paginate: jest.fn(),
+  graphql: jest.fn()
 };
 
 // Mock fs module - use a real implementation that tracks test content
