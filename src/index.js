@@ -131,6 +131,22 @@ export function replaceTemplateVariables(content, vars) {
   return result;
 }
 
+function getValidSquashMergeCommitTitle(currentTitle, message) {
+  if (message === 'COMMIT_MESSAGES') {
+    return currentTitle === 'COMMIT_OR_PR_TITLE' ? currentTitle : 'PR_TITLE';
+  }
+
+  return 'PR_TITLE';
+}
+
+function getValidMergeCommitTitle(currentTitle, message) {
+  if (message === 'PR_TITLE') {
+    return currentTitle === 'MERGE_MESSAGE' ? currentTitle : 'PR_TITLE';
+  }
+
+  return 'PR_TITLE';
+}
+
 /**
  * File-path config keys that should be resolved against base-path.
  * @type {string[]}
@@ -1098,8 +1114,8 @@ export async function updateRepositorySettings(
     const changes = [];
     const currentSettings = {};
 
-    // Only add settings that are explicitly set (not null) and track changes
-    if (settings.allow_squash_merge !== null) {
+    // Only add settings that are explicitly set (not null/undefined) and track changes
+    if (settings.allow_squash_merge != null) {
       updateParams.allow_squash_merge = settings.allow_squash_merge;
       currentSettings.allow_squash_merge = currentRepo.allow_squash_merge;
       if (currentRepo.allow_squash_merge !== settings.allow_squash_merge) {
@@ -1110,7 +1126,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.squash_merge_commit_title !== null) {
+    if (settings.squash_merge_commit_title != null) {
       updateParams.squash_merge_commit_title = settings.squash_merge_commit_title;
       currentSettings.squash_merge_commit_title = currentRepo.squash_merge_commit_title;
       if (currentRepo.squash_merge_commit_title !== settings.squash_merge_commit_title) {
@@ -1121,11 +1137,14 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.squash_merge_commit_message !== null) {
+    if (settings.squash_merge_commit_message != null) {
       updateParams.squash_merge_commit_message = settings.squash_merge_commit_message;
-      // GitHub API requires squash_merge_commit_title when squash_merge_commit_message is set
+      // GitHub API requires a title/message combination that is valid for squash commits.
       if (!updateParams.squash_merge_commit_title) {
-        updateParams.squash_merge_commit_title = currentRepo.squash_merge_commit_title;
+        updateParams.squash_merge_commit_title = getValidSquashMergeCommitTitle(
+          currentRepo.squash_merge_commit_title,
+          settings.squash_merge_commit_message
+        );
       }
       currentSettings.squash_merge_commit_message = currentRepo.squash_merge_commit_message;
       if (currentRepo.squash_merge_commit_message !== settings.squash_merge_commit_message) {
@@ -1136,7 +1155,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.allow_merge_commit !== null) {
+    if (settings.allow_merge_commit != null) {
       updateParams.allow_merge_commit = settings.allow_merge_commit;
       currentSettings.allow_merge_commit = currentRepo.allow_merge_commit;
       if (currentRepo.allow_merge_commit !== settings.allow_merge_commit) {
@@ -1147,7 +1166,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.merge_commit_title !== null) {
+    if (settings.merge_commit_title != null) {
       updateParams.merge_commit_title = settings.merge_commit_title;
       currentSettings.merge_commit_title = currentRepo.merge_commit_title;
       if (currentRepo.merge_commit_title !== settings.merge_commit_title) {
@@ -1158,11 +1177,14 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.merge_commit_message !== null) {
+    if (settings.merge_commit_message != null) {
       updateParams.merge_commit_message = settings.merge_commit_message;
-      // GitHub API requires merge_commit_title when merge_commit_message is set
+      // GitHub API requires a title/message combination that is valid for merge commits.
       if (!updateParams.merge_commit_title) {
-        updateParams.merge_commit_title = currentRepo.merge_commit_title;
+        updateParams.merge_commit_title = getValidMergeCommitTitle(
+          currentRepo.merge_commit_title,
+          settings.merge_commit_message
+        );
       }
       currentSettings.merge_commit_message = currentRepo.merge_commit_message;
       if (currentRepo.merge_commit_message !== settings.merge_commit_message) {
@@ -1173,7 +1195,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.allow_rebase_merge !== null) {
+    if (settings.allow_rebase_merge != null) {
       updateParams.allow_rebase_merge = settings.allow_rebase_merge;
       currentSettings.allow_rebase_merge = currentRepo.allow_rebase_merge;
       if (currentRepo.allow_rebase_merge !== settings.allow_rebase_merge) {
@@ -1184,7 +1206,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.allow_auto_merge !== null) {
+    if (settings.allow_auto_merge != null) {
       updateParams.allow_auto_merge = settings.allow_auto_merge;
       currentSettings.allow_auto_merge = currentRepo.allow_auto_merge;
       if (currentRepo.allow_auto_merge !== settings.allow_auto_merge) {
@@ -1195,7 +1217,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.delete_branch_on_merge !== null) {
+    if (settings.delete_branch_on_merge != null) {
       updateParams.delete_branch_on_merge = settings.delete_branch_on_merge;
       currentSettings.delete_branch_on_merge = currentRepo.delete_branch_on_merge;
       if (currentRepo.delete_branch_on_merge !== settings.delete_branch_on_merge) {
@@ -1206,7 +1228,7 @@ export async function updateRepositorySettings(
         });
       }
     }
-    if (settings.allow_update_branch !== null) {
+    if (settings.allow_update_branch != null) {
       updateParams.allow_update_branch = settings.allow_update_branch;
       currentSettings.allow_update_branch = currentRepo.allow_update_branch;
       if (currentRepo.allow_update_branch !== settings.allow_update_branch) {
@@ -4812,14 +4834,14 @@ export async function run() {
 
     // Check if any settings are specified
     // Skip this check if repositoriesFile is provided (rules-based configs define settings in file)
-    const hasSecuritySettings = Object.values(securitySettings).some(value => value !== null);
+    const hasSecuritySettings = Object.values(securitySettings).some(value => value != null);
     const hasSettings =
       repositoriesFile ||
-      Object.values(settings).some(value => value !== null) ||
-      enableCodeScanning !== null ||
-      immutableReleases !== null ||
+      Object.values(settings).some(value => value != null) ||
+      enableCodeScanning != null ||
+      immutableReleases != null ||
       hasSecuritySettings ||
-      topics !== null ||
+      topics != null ||
       dependabotYml ||
       gitignore ||
       rulesetsFiles.length > 0 ||

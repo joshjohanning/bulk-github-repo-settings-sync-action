@@ -3067,6 +3067,100 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
     });
 
+    test('should choose a valid squash title when only squash message is updated', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          permissions: { admin: true, push: true, pull: true },
+          allow_squash_merge: true,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          squash_merge_commit_message: 'COMMIT_MESSAGES',
+          allow_merge_commit: true,
+          merge_commit_title: 'MERGE_MESSAGE',
+          merge_commit_message: 'PR_TITLE'
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: null,
+        squash_merge_commit_title: null,
+        squash_merge_commit_message: 'BLANK',
+        allow_merge_commit: null,
+        merge_commit_title: null,
+        merge_commit_message: null,
+        allow_rebase_merge: null,
+        allow_auto_merge: null,
+        delete_branch_on_merge: null,
+        allow_update_branch: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        squash_merge_commit_title: 'PR_TITLE',
+        squash_merge_commit_message: 'BLANK'
+      });
+    });
+
+    test('should choose a valid merge title when only merge message is updated', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          permissions: { admin: true, push: true, pull: true },
+          allow_squash_merge: true,
+          squash_merge_commit_title: 'COMMIT_OR_PR_TITLE',
+          squash_merge_commit_message: 'COMMIT_MESSAGES',
+          allow_merge_commit: true,
+          merge_commit_title: 'MERGE_MESSAGE',
+          merge_commit_message: 'PR_TITLE'
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const settings = {
+        allow_squash_merge: null,
+        squash_merge_commit_title: null,
+        squash_merge_commit_message: null,
+        allow_merge_commit: null,
+        merge_commit_title: null,
+        merge_commit_message: 'BLANK',
+        allow_rebase_merge: null,
+        allow_auto_merge: null,
+        delete_branch_on_merge: null,
+        allow_update_branch: null
+      };
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        settings,
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        merge_commit_title: 'PR_TITLE',
+        merge_commit_message: 'BLANK'
+      });
+    });
+
     test('should handle invalid repository format', async () => {
       const settings = { allow_squash_merge: true };
       const result = await updateRepositorySettings(
