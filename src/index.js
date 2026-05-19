@@ -1380,9 +1380,23 @@ export async function updateRepositorySettings(
       currentSettings[field.key] = currentRepo[field.key];
 
       if (field.requiredCompanionField && !updateParams[field.requiredCompanionField]) {
-        updateParams[field.requiredCompanionField] = field.deriveCompanion
-          ? field.deriveCompanion(currentRepo[field.requiredCompanionField], desiredValue)
-          : currentRepo[field.requiredCompanionField];
+        const companionKey = field.requiredCompanionField;
+        const currentCompanionValue = currentRepo[companionKey];
+        const derivedCompanionValue = field.deriveCompanion
+          ? field.deriveCompanion(currentCompanionValue, desiredValue)
+          : currentCompanionValue;
+        updateParams[companionKey] = derivedCompanionValue;
+
+        if (!(companionKey in currentSettings)) {
+          currentSettings[companionKey] = currentCompanionValue;
+          if (currentCompanionValue !== derivedCompanionValue) {
+            changes.push({
+              setting: companionKey,
+              from: currentCompanionValue,
+              to: derivedCompanionValue
+            });
+          }
+        }
       }
 
       if (currentRepo[field.key] !== desiredValue) {
