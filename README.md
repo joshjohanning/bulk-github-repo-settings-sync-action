@@ -1024,14 +1024,18 @@ The `squash-merge-commit-title`/`squash-merge-commit-message` and `merge-commit-
 
 ## Action Outputs
 
-| Output                   | Description                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------- |
-| `updated-repositories`   | Number of repositories successfully processed (changed + unchanged)                                |
-| `changed-repositories`   | Number of repositories with reportable changes or pending sync PRs (or would have in dry-run mode) |
-| `unchanged-repositories` | Number of repositories with no reportable changes (may include warnings)                           |
-| `failed-repositories`    | Number of repositories that failed to update                                                       |
-| `warning-repositories`   | Number of repositories that emitted warnings                                                       |
-| `results`                | JSON array of update results for each repository                                                   |
+| Output                   | Description                                                                                                                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `updated-repositories`   | Number of repositories successfully processed (changed + pending + unchanged)                                                                                                    |
+| `changed-repositories`   | Number of repositories with reportable changes made this run (or would have in dry-run mode). Repos with only pending sync PRs are counted under `pending-repositories` instead. |
+| `pending-repositories`   | Number of repositories with an open sync PR that is already up-to-date and just needs merging (no action was taken this run)                                                     |
+| `unchanged-repositories` | Number of repositories with no reportable changes (may include warnings)                                                                                                         |
+| `failed-repositories`    | Number of repositories that failed to update                                                                                                                                     |
+| `warning-repositories`   | Number of repositories that emitted warnings                                                                                                                                     |
+| `results`                | JSON array of update results for each repository                                                                                                                                 |
+
+> [!NOTE]
+> As of `v2.10.0`, repositories whose only "change" is an open sync PR that is already up-to-date are reported under `pending-repositories` instead of `changed-repositories`. The `results` JSON also includes a new `'pending'` value in `subResults[].status` for the same scenario. Consumers filtering `subResults` by `status === 'changed'` will no longer match these entries (filter on `'changed'` or `'pending'` if you want both).
 
 ## Authentication
 

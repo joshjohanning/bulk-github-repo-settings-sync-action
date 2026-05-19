@@ -195,9 +195,11 @@ inputs:
 
 outputs:
   updated-repositories:
-    description: 'Number of repositories successfully processed (changed + unchanged)'
+    description: 'Number of repositories successfully processed (changed + pending + unchanged)'
   changed-repositories:
-    description: 'Number of repositories with reportable changes or pending sync PRs (or would have in dry-run mode)'
+    description: 'Number of repositories with reportable changes made this run (or would have in dry-run mode). Repos with only pending sync PRs are counted under pending-repositories instead.'
+  pending-repositories:
+    description: 'Number of repositories with an open sync PR that is already up-to-date and just needs merging (no action was taken this run)'
   unchanged-repositories:
     description: 'Number of repositories with no reportable changes (may include warnings)'
   failed-repositories:

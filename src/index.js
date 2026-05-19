@@ -858,6 +858,7 @@ export async function parseRepositories(
  */
 const SubResultStatus = Object.freeze({
   CHANGED: 'changed',
+  PENDING: 'pending',
   WARNING: 'warning'
 });
 
@@ -894,6 +895,19 @@ function createSubResult(kind, status, message, extra) {
   if (extra?.prNumber) sub.prNumber = extra.prNumber;
   if (extra?.prUrl) sub.prUrl = extra.prUrl;
   return sub;
+}
+
+/**
+ * Derive a sub-result status from a sync helper's reported syncStatus.
+ * `pr-up-to-date` means an open sync PR already has the latest content — nothing
+ * was actioned this run, so it's reported as PENDING (just needs merging) rather
+ * than CHANGED. All other non-'unchanged' sync statuses represent real actions
+ * (commits pushed, PRs created/updated, stale PRs closed) and remain CHANGED.
+ * @param {string|undefined} syncStatus - Sync helper status (e.g. 'pr-up-to-date', 'pr-created')
+ * @returns {string} SubResultStatus.PENDING or SubResultStatus.CHANGED
+ */
+function statusForSync(syncStatus) {
+  return syncStatus === 'pr-up-to-date' ? SubResultStatus.PENDING : SubResultStatus.CHANGED;
 }
 
 /**
@@ -4569,6 +4583,22 @@ function hasRepositoryChanges(result) {
 }
 
 /**
+ * Check if a repository result is pending — has at least one PENDING sub-result
+ * (an open sync PR already up-to-date, just needing merge) and no real CHANGED
+ * sub-results from this run. A repo with both CHANGED and PENDING sub-results
+ * is classified as changed, not pending.
+ * @param {Object} result - Repository update result object
+ * @returns {boolean} True if pending and not changed
+ */
+function hasRepositoryPending(result) {
+  if (!result.subResults || result.subResults.length === 0) return false;
+  const hasPending = result.subResults.some(s => s.status === SubResultStatus.PENDING);
+  if (!hasPending) return false;
+  const hasChanged = result.subResults.some(s => s.status === SubResultStatus.CHANGED);
+  return !hasChanged;
+}
+
+/**
  * Main action logic
  */
 export async function run() {
@@ -4817,6 +4847,7 @@ export async function run() {
     let successCount = 0;
     let failureCount = 0;
     let changedCount = 0;
+    let pendingCount = 0;
     let warningCount = 0;
 
     // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
@@ -5115,11 +5146,16 @@ export async function run() {
           }
           if (dependabotResult.dependabotYml && dependabotResult.dependabotYml !== 'unchanged') {
             result.subResults.push(
-              createSubResult('dependabot-sync', SubResultStatus.CHANGED, dependabotResult.message, {
-                syncStatus: dependabotResult.dependabotYml,
-                prNumber: dependabotResult.prNumber,
-                prUrl: dependabotResult.prUrl
-              })
+              createSubResult(
+                'dependabot-sync',
+                statusForSync(dependabotResult.dependabotYml),
+                dependabotResult.message,
+                {
+                  syncStatus: dependabotResult.dependabotYml,
+                  prNumber: dependabotResult.prNumber,
+                  prUrl: dependabotResult.prUrl
+                }
+              )
             );
           }
           if (dependabotResult.stalePrWarning) {
@@ -5163,7 +5199,7 @@ export async function run() {
           }
           if (gitignoreResult.gitignore && gitignoreResult.gitignore !== 'unchanged') {
             result.subResults.push(
-              createSubResult('gitignore-sync', SubResultStatus.CHANGED, gitignoreResult.message, {
+              createSubResult('gitignore-sync', statusForSync(gitignoreResult.gitignore), gitignoreResult.message, {
                 syncStatus: gitignoreResult.gitignore,
                 prNumber: gitignoreResult.prNumber,
                 prUrl: gitignoreResult.prUrl
@@ -5241,11 +5277,16 @@ export async function run() {
           }
           if (templateResult.pullRequestTemplate && templateResult.pullRequestTemplate !== 'unchanged') {
             result.subResults.push(
-              createSubResult('pr-template-sync', SubResultStatus.CHANGED, templateResult.message, {
-                syncStatus: templateResult.pullRequestTemplate,
-                prNumber: templateResult.prNumber,
-                prUrl: templateResult.prUrl
-              })
+              createSubResult(
+                'pr-template-sync',
+                statusForSync(templateResult.pullRequestTemplate),
+                templateResult.message,
+                {
+                  syncStatus: templateResult.pullRequestTemplate,
+                  prNumber: templateResult.prNumber,
+                  prUrl: templateResult.prUrl
+                }
+              )
             );
           }
           if (templateResult.stalePrWarning) {
@@ -5289,11 +5330,16 @@ export async function run() {
           }
           if (workflowResult.workflowFiles && workflowResult.workflowFiles !== 'unchanged') {
             result.subResults.push(
-              createSubResult('workflow-files-sync', SubResultStatus.CHANGED, workflowResult.message, {
-                syncStatus: workflowResult.workflowFiles,
-                prNumber: workflowResult.prNumber,
-                prUrl: workflowResult.prUrl
-              })
+              createSubResult(
+                'workflow-files-sync',
+                statusForSync(workflowResult.workflowFiles),
+                workflowResult.message,
+                {
+                  syncStatus: workflowResult.workflowFiles,
+                  prNumber: workflowResult.prNumber,
+                  prUrl: workflowResult.prUrl
+                }
+              )
             );
           }
           if (workflowResult.stalePrWarning) {
@@ -5415,11 +5461,16 @@ export async function run() {
           }
           if (copilotResult.copilotInstructions && copilotResult.copilotInstructions !== 'unchanged') {
             result.subResults.push(
-              createSubResult('copilot-instructions-sync', SubResultStatus.CHANGED, copilotResult.message, {
-                syncStatus: copilotResult.copilotInstructions,
-                prNumber: copilotResult.prNumber,
-                prUrl: copilotResult.prUrl
-              })
+              createSubResult(
+                'copilot-instructions-sync',
+                statusForSync(copilotResult.copilotInstructions),
+                copilotResult.message,
+                {
+                  syncStatus: copilotResult.copilotInstructions,
+                  prNumber: copilotResult.prNumber,
+                  prUrl: copilotResult.prUrl
+                }
+              )
             );
           }
           if (copilotResult.stalePrWarning) {
@@ -5478,7 +5529,7 @@ export async function run() {
           }
           if (codeownersResult.codeowners && codeownersResult.codeowners !== 'unchanged') {
             result.subResults.push(
-              createSubResult('codeowners-sync', SubResultStatus.CHANGED, codeownersResult.message, {
+              createSubResult('codeowners-sync', statusForSync(codeownersResult.codeowners), codeownersResult.message, {
                 syncStatus: codeownersResult.codeowners,
                 prNumber: codeownersResult.prNumber,
                 prUrl: codeownersResult.prUrl
@@ -5539,11 +5590,16 @@ export async function run() {
           }
           if (packageJsonResult.packageJson && packageJsonResult.packageJson !== 'unchanged') {
             result.subResults.push(
-              createSubResult('package-json-sync', SubResultStatus.CHANGED, packageJsonResult.message, {
-                syncStatus: packageJsonResult.packageJson,
-                prNumber: packageJsonResult.prNumber,
-                prUrl: packageJsonResult.prUrl
-              })
+              createSubResult(
+                'package-json-sync',
+                statusForSync(packageJsonResult.packageJson),
+                packageJsonResult.message,
+                {
+                  syncStatus: packageJsonResult.packageJson,
+                  prNumber: packageJsonResult.prNumber,
+                  prUrl: packageJsonResult.prUrl
+                }
+              )
             );
           }
           if (packageJsonResult.stalePrWarning) {
@@ -5575,18 +5631,25 @@ export async function run() {
           warningCount++;
         }
         const repoHasChanges = hasRepositoryChanges(result);
+        const repoHasPending = !repoHasChanges && hasRepositoryPending(result);
         if (repoHasChanges) {
           changedCount++;
+        } else if (repoHasPending) {
+          pendingCount++;
         }
         if (dryRun) {
           if (repoHasChanges) {
             core.info(`🔍 Would update ${repo}`);
+          } else if (repoHasPending) {
+            core.info(`🔄 Pending sync PR(s) for ${repo}`);
           } else {
             core.info(`✅ No changes needed in ${repo}`);
           }
         } else {
           if (repoHasChanges) {
             core.info(`✅ Successfully updated ${repo}`);
+          } else if (repoHasPending) {
+            core.info(`🔄 Pending sync PR(s) for ${repo}`);
           } else {
             core.info(`✅ No changes needed in ${repo}`);
           }
@@ -5752,9 +5815,10 @@ export async function run() {
     }
 
     // Set outputs
-    const unchangedCount = successCount - changedCount;
+    const unchangedCount = successCount - changedCount - pendingCount;
     core.setOutput('updated-repositories', successCount.toString());
     core.setOutput('changed-repositories', changedCount.toString());
+    core.setOutput('pending-repositories', pendingCount.toString());
     core.setOutput('unchanged-repositories', unchangedCount.toString());
     core.setOutput('failed-repositories', failureCount.toString());
     core.setOutput('warning-repositories', warningCount.toString());
@@ -5774,6 +5838,7 @@ export async function run() {
           }
 
           const hasChanges = hasRepositoryChanges(r);
+          const isPending = !hasChanges && hasRepositoryPending(r);
           let status;
           let details;
 
@@ -5783,6 +5848,8 @@ export async function run() {
             status = '⚠️ Warning';
           } else if (hasChanges) {
             status = '✅ Changed';
+          } else if (isPending) {
+            status = '🔄 Pending';
           } else {
             status = '➖ No changes';
           }
@@ -5791,7 +5858,12 @@ export async function run() {
             details = 'Repository is archived';
           } else if (r.subResults && r.subResults.length > 0) {
             const messages = r.subResults
-              .filter(s => s.status === SubResultStatus.WARNING || s.status === SubResultStatus.CHANGED)
+              .filter(
+                s =>
+                  s.status === SubResultStatus.WARNING ||
+                  s.status === SubResultStatus.CHANGED ||
+                  s.status === SubResultStatus.PENDING
+              )
               .map(s => formatSubResultSummary(s, dryRun));
             details = messages.length > 0 ? messages.join('; ') : 'No changes needed';
           } else {
@@ -5814,6 +5886,7 @@ export async function run() {
         summaryBuilder
           .addRaw(`\n**Total Repositories:** ${repoList.length}`)
           .addRaw(`\n**Changed:** ${changedCount}`)
+          .addRaw(`\n**Pending:** ${pendingCount}`)
           .addRaw(`\n**Unchanged:** ${unchangedCount}`)
           .addRaw(`\n**Warnings:** ${warningCount}`)
           .addRaw(`\n**Failed:** ${failureCount}\n\n`)
@@ -5825,6 +5898,7 @@ export async function run() {
         core.info(heading);
         core.info(`Total Repositories: ${repoList.length}`);
         core.info(`Changed: ${changedCount}`);
+        core.info(`Pending: ${pendingCount}`);
         core.info(`Unchanged: ${unchangedCount}`);
         core.info(`Warnings: ${warningCount}`);
         core.info(`Failed: ${failureCount}`);
@@ -5835,14 +5909,20 @@ export async function run() {
             core.info(`  ${result.repository}: ⚠️ Warning`);
           } else {
             const hasChanges = hasRepositoryChanges(result);
-            const details = dryRun
-              ? hasChanges
-                ? 'Would update'
-                : 'No changes needed'
-              : hasChanges
-                ? 'Updated'
-                : 'No changes needed';
-            core.info(`  ${result.repository}: ${hasChanges ? '✅' : '➖'} ${details}`);
+            const isPending = !hasChanges && hasRepositoryPending(result);
+            let icon;
+            let details;
+            if (hasChanges) {
+              icon = '✅';
+              details = dryRun ? 'Would update' : 'Updated';
+            } else if (isPending) {
+              icon = '🔄';
+              details = 'Pending sync PR(s)';
+            } else {
+              icon = '➖';
+              details = 'No changes needed';
+            }
+            core.info(`  ${result.repository}: ${icon} ${details}`);
           }
         }
       }
