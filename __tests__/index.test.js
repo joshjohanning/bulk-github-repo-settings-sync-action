@@ -3112,6 +3112,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         squash_merge_commit_title: 'PR_TITLE',
         squash_merge_commit_message: 'BLANK'
       });
+      expect(result.currentSettings).toMatchObject({
+        squash_merge_commit_message: 'COMMIT_MESSAGES',
+        squash_merge_commit_title: 'COMMIT_OR_PR_TITLE'
+      });
+      expect(result.changes).toEqual(
+        expect.arrayContaining([
+          { setting: 'squash_merge_commit_message', from: 'COMMIT_MESSAGES', to: 'BLANK' },
+          { setting: 'squash_merge_commit_title', from: 'COMMIT_OR_PR_TITLE', to: 'PR_TITLE' }
+        ])
+      );
     });
 
     test('should choose a valid merge title when only merge message is updated', async () => {
@@ -3159,6 +3169,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
         merge_commit_title: 'PR_TITLE',
         merge_commit_message: 'BLANK'
       });
+      expect(result.currentSettings).toMatchObject({
+        merge_commit_message: 'PR_TITLE',
+        merge_commit_title: 'MERGE_MESSAGE'
+      });
+      expect(result.changes).toEqual(
+        expect.arrayContaining([
+          { setting: 'merge_commit_message', from: 'PR_TITLE', to: 'BLANK' },
+          { setting: 'merge_commit_title', from: 'MERGE_MESSAGE', to: 'PR_TITLE' }
+        ])
+      );
     });
 
     test('should handle invalid repository format', async () => {
