@@ -331,6 +331,8 @@ repos:
 - Updates the ruleset if a ruleset with the same name already exists
 - Rulesets are identified by the `name` field in each JSON configuration
 - Each JSON file should contain a valid ruleset configuration matching the [GitHub Rulesets API schema](https://docs.github.com/en/rest/repos/rules)
+- Ruleset JSON is passed through to the GitHub API as-is (read-only fields like `id`, `source`, `source_type`, `created_at`, `updated_at`, `_links`, and `current_user_can_bypass` are stripped automatically), so any rule type or parameter supported by the API will sync — no action update required when GitHub adds new ones
+- All `target` values supported by the API work: `branch` (default), `tag`, and `push`. It's recommended to set `target` explicitly in each ruleset JSON file to avoid ambiguity
 
 **Example Ruleset JSON (`ci-ruleset.json`):**
 
