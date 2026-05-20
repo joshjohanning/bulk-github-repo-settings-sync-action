@@ -11579,6 +11579,155 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(repoRow[2]).toContain('up-to-date (pending merge)');
       expect(repoRow[2]).toContain('<a href="https://github.com/owner/repo1/pull/42">PR #42</a>');
     });
+
+    test('should classify pure pr-up-to-date repos as pending (not changed)', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'dependabot-yml': './dependabot.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      const sourceContent = 'version: 2\nupdates: []';
+      setMockFileContent(sourceContent);
+
+      const oldDefaultBranchContent = 'version: 2\nupdates: [old]';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'dependabot-yml-sync') {
+          return {
+            data: {
+              content: Buffer.from(sourceContent).toString('base64'),
+              sha: 'pr-branch-sha'
+            }
+          };
+        }
+        return {
+          data: {
+            content: Buffer.from(oldDefaultBranchContent).toString('base64'),
+            sha: 'default-branch-sha'
+          }
+        };
+      });
+
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 77,
+            user: { login: 'bot-user' },
+            html_url: 'https://github.com/owner/repo1/pull/77'
+          }
+        ]
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('pending-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+
+      // Summary table shows 🔄 Pending status
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow[1]).toBe('🔄 Pending');
+    });
+
+    test('should classify mixed repo (real change + pr-up-to-date) as changed, not pending', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'dependabot-yml': './dependabot.yml',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+
+      // Settings differ → real CHANGED sub-result
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: false,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const sourceContent = 'version: 2\nupdates: []';
+      setMockFileContent(sourceContent);
+      const oldDefaultBranchContent = 'version: 2\nupdates: [old]';
+      mockOctokit.rest.repos.getContent.mockImplementation(async ({ ref }) => {
+        if (ref === 'dependabot-yml-sync') {
+          return {
+            data: { content: Buffer.from(sourceContent).toString('base64'), sha: 'pr-branch-sha' }
+          };
+        }
+        return {
+          data: { content: Buffer.from(oldDefaultBranchContent).toString('base64'), sha: 'default-branch-sha' }
+        };
+      });
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 88, user: { login: 'bot-user' }, html_url: 'https://github.com/owner/repo1/pull/88' }]
+      });
+
+      await run();
+
+      // Mixed → counted as changed, not pending
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('pending-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '0');
+
+      const tableCall = mockCore.summary.addTable.mock.calls[0][0];
+      const repoRow = tableCall.find(row => row[0] === 'owner/repo1');
+      expect(repoRow[1]).toBe('✅ Changed');
+    });
+
+    test('should set pending-repositories output to 0 when no pending repos', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'allow-squash-merge': 'true'
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false
+        }
+      });
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('pending-repositories', '0');
+    });
   });
 
   describe('would-update-pr status handling in summary', () => {
