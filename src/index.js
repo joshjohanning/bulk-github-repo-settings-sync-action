@@ -903,7 +903,7 @@ function createSubResult(kind, status, message, extra) {
  * was actioned this run, so it's reported as PENDING (just needs merging) rather
  * than CHANGED. All other non-'unchanged' sync statuses represent real actions
  * (commits pushed, PRs created/updated, stale PRs closed) and remain CHANGED.
- * @param {string|undefined} syncStatus - Sync helper status (e.g. 'pr-up-to-date', 'pr-created')
+ * @param {string|undefined} syncStatus - Sync helper status (e.g. 'pr-up-to-date', 'created')
  * @returns {string} SubResultStatus.PENDING or SubResultStatus.CHANGED
  */
 function statusForSync(syncStatus) {
