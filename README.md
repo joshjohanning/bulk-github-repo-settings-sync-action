@@ -142,7 +142,7 @@ Use in workflow:
 **Also supports:**
 
 - Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
-- All org repos: `repositories: 'all'` with `owner: 'my-org'`
+- All accessible repositories owned by an organization or user: `repositories: 'all'` with `owner: 'my-org'` (includes private user repositories accessible to the token)
 - Custom property filtering: `custom-property-name` and `custom-property-value` (comma-separated for multiple values) with `owner` (organizations only)
 
 ---
