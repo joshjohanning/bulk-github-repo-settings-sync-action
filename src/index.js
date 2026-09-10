@@ -967,7 +967,8 @@ const REPOSITORY_SETTING_FIELDS = Object.freeze([
   { key: 'allow_rebase_merge' },
   { key: 'allow_auto_merge' },
   { key: 'delete_branch_on_merge' },
-  { key: 'allow_update_branch' }
+  { key: 'allow_update_branch' },
+  { key: 'has_wiki' }
 ]);
 
 /**
@@ -1357,7 +1358,8 @@ export async function updateRepositorySettings(
       'allow_rebase_merge',
       'delete_branch_on_merge',
       'allow_auto_merge',
-      'allow_update_branch'
+      'allow_update_branch',
+      'has_wiki'
     ];
     const allSettingsUndefined = settingsFields.every(field => currentRepo[field] === undefined);
     if (allSettingsUndefined) {
@@ -4623,7 +4625,8 @@ export async function run() {
       allow_rebase_merge: getBooleanInput('allow-rebase-merge'),
       allow_auto_merge: getBooleanInput('allow-auto-merge'),
       delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
-      allow_update_branch: getBooleanInput('allow-update-branch')
+      allow_update_branch: getBooleanInput('allow-update-branch'),
+      has_wiki: getBooleanInput('has-wiki')
     };
 
     // Handle code-scanning with deprecated alias support
@@ -4922,7 +4925,8 @@ export async function run() {
           'allow-update-branch',
           repo,
           settings.allow_update_branch
-        )
+        ),
+        has_wiki: coerceBooleanConfig(repoConfig['has-wiki'], 'has-wiki', repo, settings.has_wiki)
       };
 
       // Handle repo-specific code scanning (support both new and deprecated input names)
