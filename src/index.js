@@ -1349,9 +1349,7 @@ export async function updateRepositorySettings(
       };
     }
 
-    // Check if we can read the repository settings
-    // If allow_squash_merge is undefined, it means we can't read the settings (likely not installed on repo)
-    // Check for multiple critical settings fields to robustly determine if settings are readable
+    // Check multiple critical fields to determine whether repository settings are readable.
     const settingsFields = [
       'allow_squash_merge',
       'allow_merge_commit',

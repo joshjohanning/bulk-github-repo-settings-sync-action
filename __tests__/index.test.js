@@ -228,6 +228,7 @@ const mockActionYmlParsed = {
     'allow-auto-merge': { description: 'Allow auto merge' },
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
+    'has-wiki': { description: 'Repository wiki' },
     'immutable-releases': { description: 'Immutable releases' },
     'code-scanning': { description: 'Code scanning' },
     'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
