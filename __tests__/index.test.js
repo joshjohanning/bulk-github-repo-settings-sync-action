@@ -34,6 +34,7 @@ const mockOctokit = {
     repos: {
       get: jest.fn(),
       update: jest.fn(),
+      listForAuthenticatedUser: jest.fn(),
       listForUser: jest.fn(),
       listForOrg: jest.fn(),
       replaceAllTopics: jest.fn(),
@@ -78,7 +79,8 @@ const mockOctokit = {
       getByName: jest.fn()
     },
     apps: {
-      getAuthenticated: jest.fn()
+      getAuthenticated: jest.fn(),
+      listReposAccessibleToInstallation: jest.fn()
     }
   },
   request: jest.fn(),
@@ -384,8 +386,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       }
     });
     mockOctokit.rest.repos.update.mockClear();
-    mockOctokit.rest.repos.listForUser.mockClear();
-    mockOctokit.rest.repos.listForOrg.mockClear();
+    mockOctokit.rest.repos.listForAuthenticatedUser.mockReset();
+    mockOctokit.rest.repos.listForUser.mockReset();
+    mockOctokit.rest.repos.listForOrg.mockReset();
     mockOctokit.rest.repos.replaceAllTopics.mockClear();
     mockOctokit.rest.repos.getContent.mockClear();
     mockOctokit.rest.repos.createOrUpdateFileContents.mockClear();
@@ -397,12 +400,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
     mockOctokit.rest.repos.listAutolinks.mockClear();
     mockOctokit.rest.repos.createAutolink.mockClear();
     mockOctokit.rest.repos.deleteAutolink.mockClear();
+    mockOctokit.rest.apps.listReposAccessibleToInstallation.mockReset();
     mockOctokit.rest.codeScanning.updateDefaultSetup.mockClear();
     mockOctokit.rest.codeScanning.getDefaultSetup.mockReset();
     const error404 = new Error('Not found');
     error404.status = 404;
     mockOctokit.rest.codeScanning.getDefaultSetup.mockRejectedValue(error404);
-    mockOctokit.rest.orgs.get.mockClear();
+    mockOctokit.rest.orgs.get.mockReset();
     mockOctokit.rest.git.getRef.mockClear();
     mockOctokit.rest.git.createRef.mockClear();
     mockOctokit.rest.git.updateRef.mockClear();
@@ -602,37 +606,134 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test('should fetch all repositories for owner', async () => {
-      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not an org'));
-      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockResolvedValueOnce({
         data: [
-          { full_name: 'owner/repo1', owner: { login: 'owner' } },
+          { full_name: 'owner/repo1', owner: { login: 'owner' }, private: true },
           { full_name: 'owner/repo2', owner: { login: 'owner' } }
         ]
-      });
-      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
-        data: []
       });
 
       const result = await parseRepositories('all', '', 'owner', mockOctokit);
       expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'owner/repo2' }]);
-      expect(mockOctokit.rest.repos.listForUser).toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.listForAuthenticatedUser).toHaveBeenCalledWith({
+        visibility: 'all',
+        per_page: 100,
+        page: 1
+      });
+      expect(mockOctokit.rest.repos.listForUser).not.toHaveBeenCalled();
     });
 
     test('should only include repositories owned by the user when fetching all repositories for owner', async () => {
-      mockOctokit.rest.orgs.get.mockRejectedValue(new Error('Not an org'));
-      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockResolvedValueOnce({
         data: [
-          { full_name: 'owner/repo1', owner: { login: 'owner' } },
+          { full_name: 'owner/repo1', owner: { login: 'owner' }, private: true },
           { full_name: 'other/repo2', owner: { login: 'other' } },
           { full_name: 'OWNER/repo3', owner: { login: 'OWNER' } }
         ]
       });
-      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
-        data: []
-      });
 
       const result = await parseRepositories('all', '', 'owner', mockOctokit);
       expect(result).toEqual([{ repo: 'owner/repo1' }, { repo: 'OWNER/repo3' }]);
+    });
+
+    test('should paginate authenticated user repositories', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        full_name: `owner/repo${index + 1}`,
+        owner: { login: 'owner' },
+        private: true
+      }));
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockResolvedValueOnce({ data: firstPage }).mockResolvedValueOnce({
+        data: [{ full_name: 'owner/repo101', owner: { login: 'owner' }, private: true }]
+      });
+
+      const result = await parseRepositories('all', '', 'owner', mockOctokit);
+
+      expect(result).toHaveLength(101);
+      expect(result.at(-1)).toEqual({ repo: 'owner/repo101' });
+      expect(mockOctokit.rest.repos.listForAuthenticatedUser).toHaveBeenNthCalledWith(2, {
+        visibility: 'all',
+        per_page: 100,
+        page: 2
+      });
+    });
+
+    test('should fetch private user repositories with a GitHub App installation token', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({
+        status: 403,
+        message: 'Resource not accessible by integration'
+      });
+      mockOctokit.rest.apps.listReposAccessibleToInstallation.mockResolvedValueOnce({
+        data: {
+          repositories: [
+            { full_name: 'owner/private-repo', owner: { login: 'owner' }, private: true },
+            { full_name: 'other/shared-repo', owner: { login: 'other' }, private: true }
+          ]
+        }
+      });
+
+      const result = await parseRepositories('all', '', 'owner', mockOctokit);
+
+      expect(result).toEqual([{ repo: 'owner/private-repo' }]);
+      expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenCalledWith({
+        per_page: 100,
+        page: 1
+      });
+    });
+
+    test('should paginate repositories accessible to a GitHub App installation', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({
+        status: 403,
+        message: 'Resource not accessible by integration'
+      });
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        full_name: `owner/private-repo${index + 1}`,
+        owner: { login: 'owner' },
+        private: true
+      }));
+      mockOctokit.rest.apps.listReposAccessibleToInstallation
+        .mockResolvedValueOnce({ data: { repositories: firstPage } })
+        .mockResolvedValueOnce({
+          data: {
+            repositories: [{ full_name: 'owner/private-repo101', owner: { login: 'owner' }, private: true }]
+          }
+        });
+
+      const result = await parseRepositories('all', '', 'owner', mockOctokit);
+
+      expect(result).toHaveLength(101);
+      expect(result.at(-1)).toEqual({ repo: 'owner/private-repo101' });
+      expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).toHaveBeenNthCalledWith(2, {
+        per_page: 100,
+        page: 2
+      });
+      expect(mockOctokit.rest.repos.listForAuthenticatedUser).toHaveBeenCalledTimes(1);
+    });
+
+    test('should not use the installation endpoint for non-forbidden authenticated user errors', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({
+        status: 500,
+        message: 'Server error'
+      });
+
+      await expect(parseRepositories('all', '', 'owner', mockOctokit)).rejects.toThrow(
+        'Failed to fetch repositories for owner: Server error'
+      );
+      expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).not.toHaveBeenCalled();
+    });
+
+    test('should surface organization lookup failures other than not found', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 403, message: 'Forbidden' });
+
+      await expect(parseRepositories('all', '', 'owner', mockOctokit)).rejects.toThrow(
+        'Failed to fetch repositories for owner: Forbidden'
+      );
+      expect(mockOctokit.rest.repos.listForAuthenticatedUser).not.toHaveBeenCalled();
     });
 
     test('should fetch all repositories for organization', async () => {
@@ -1327,9 +1428,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should only include repositories owned by the user for all selector', async () => {
       mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
-      mockOctokit.rest.repos.listForUser.mockResolvedValueOnce({
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockResolvedValueOnce({
         data: [
-          { full_name: 'my-user/repo1', owner: { login: 'my-user' }, fork: false },
+          { full_name: 'my-user/repo1', owner: { login: 'my-user' }, fork: false, private: true },
           { full_name: 'other/repo2', owner: { login: 'other' }, fork: false },
           { full_name: 'MY-USER/repo3', owner: { login: 'MY-USER' }, fork: false }
         ]
@@ -1355,6 +1456,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
         { repo: 'my-user/repo1', 'delete-branch-on-merge': true },
         { repo: 'MY-USER/repo3', 'delete-branch-on-merge': true }
       ]);
+      expect(mockOctokit.rest.repos.listForAuthenticatedUser).toHaveBeenCalledWith({
+        visibility: 'all',
+        per_page: 100,
+        page: 1
+      });
+      expect(mockOctokit.rest.repos.listForUser).not.toHaveBeenCalled();
     });
 
     test('should filter all selector by fork status', async () => {

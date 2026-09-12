@@ -142,7 +142,8 @@ Use in workflow:
 **Also supports:**
 
 - Comma-separated list: `repositories: 'owner/repo1,owner/repo2'`
-- All org repos: `repositories: 'all'` with `owner: 'my-org'`
+- All organization repositories: `repositories: 'all'` with `owner: 'my-org'`
+- All user-owned repositories: `repositories: 'all'` with `owner: 'my-user'` (includes private repositories accessible to a user token or GitHub App installation token)
 - Custom property filtering: `custom-property-name` and `custom-property-value` (comma-separated for multiple values) with `owner` (organizations only)
 
 ---
