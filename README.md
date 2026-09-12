@@ -57,7 +57,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
     allow-squash-merge: true
     allow-merge-commit: false
     delete-branch-on-merge: true
-    has-wiki: false
+    wiki: false
     immutable-releases: true
     code-scanning: true
     secret-scanning: true
@@ -964,7 +964,7 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 | `allow-auto-merge`                | Allow auto-merge on pull requests                                                                                                           | No       | -                                         |
 | `delete-branch-on-merge`          | Automatically delete head branches after pull requests are merged                                                                           | No       | -                                         |
 | `allow-update-branch`             | Always suggest updating pull request branches                                                                                               | No       | -                                         |
-| `has-wiki`                        | Enable or disable the repository wiki                                                                                                       | No       | -                                         |
+| `wiki`                            | Enable or disable the repository wiki                                                                                                       | No       | -                                         |
 | `immutable-releases`              | Enable immutable releases to prevent release deletion and modification                                                                      | No       | -                                         |
 | `code-scanning`                   | Enable or disable default code scanning setup                                                                                               | No       | -                                         |
 | `secret-scanning`                 | Enable or disable secret scanning                                                                                                           | No       | -                                         |
@@ -1130,7 +1130,7 @@ jobs:
           allow-auto-merge: true
           delete-branch-on-merge: true
           allow-update-branch: true
-          has-wiki: false
+          wiki: false
           code-scanning: true
           dependabot-pr-title: 'chore: update dependabot.yml'
           dry-run: ${{ github.event_name == 'pull_request' }} # dry run if PR

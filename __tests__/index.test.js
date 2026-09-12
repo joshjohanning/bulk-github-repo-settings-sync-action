@@ -130,7 +130,7 @@ inputs:
     description: 'Delete branch on merge'
   allow-update-branch:
     description: 'Allow update branch'
-  has-wiki:
+  wiki:
     description: 'Repository wiki'
   immutable-releases:
     description: 'Immutable releases'
@@ -228,7 +228,7 @@ const mockActionYmlParsed = {
     'allow-auto-merge': { description: 'Allow auto merge' },
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
-    'has-wiki': { description: 'Repository wiki' },
+    wiki: { description: 'Repository wiki' },
     'immutable-releases': { description: 'Immutable releases' },
     'code-scanning': { description: 'Code scanning' },
     'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
@@ -3664,7 +3664,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'has-wiki': 'false'
+          wiki: 'false'
         };
         return inputs[name] || '';
       });

@@ -4624,7 +4624,7 @@ export async function run() {
       allow_auto_merge: getBooleanInput('allow-auto-merge'),
       delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
       allow_update_branch: getBooleanInput('allow-update-branch'),
-      has_wiki: getBooleanInput('has-wiki')
+      has_wiki: getBooleanInput('wiki')
     };
 
     // Handle code-scanning with deprecated alias support
@@ -4924,7 +4924,7 @@ export async function run() {
           repo,
           settings.allow_update_branch
         ),
-        has_wiki: coerceBooleanConfig(repoConfig['has-wiki'], 'has-wiki', repo, settings.has_wiki)
+        has_wiki: coerceBooleanConfig(repoConfig.wiki, 'wiki', repo, settings.has_wiki)
       };
 
       // Handle repo-specific code scanning (support both new and deprecated input names)

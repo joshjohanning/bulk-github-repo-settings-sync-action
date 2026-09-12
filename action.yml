@@ -63,7 +63,7 @@ inputs:
   allow-update-branch:
     description: 'Always suggest updating pull request branches'
     required: false
-  has-wiki:
+  wiki:
     description: 'Enable or disable the repository wiki'
     required: false
 

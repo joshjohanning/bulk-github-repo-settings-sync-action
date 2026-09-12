@@ -21,7 +21,7 @@ rules:
       allow-merge-commit: false
       allow-rebase-merge: false
       delete-branch-on-merge: true
-      has-wiki: false
+      wiki: false
       code-scanning: true
       secret-scanning: true
       secret-scanning-push-protection: true

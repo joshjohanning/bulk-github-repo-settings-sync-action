@@ -12,7 +12,7 @@ repos:
     allow-auto-merge: false
     delete-branch-on-merge: false
     allow-update-branch: false
-    has-wiki: false
+    wiki: false
     code-scanning: false
     topics: 'javascript,github-actions,automation,different'
     dependabot-yml: './config/dependabot/npm-actions.yml'
