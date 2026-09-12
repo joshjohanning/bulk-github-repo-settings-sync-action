@@ -325,7 +325,7 @@ async function getOrgRepositoriesWithProperties(octokit, owner) {
 
 /**
  * Get all repositories owned by a user or organization that are accessible to the authenticated token.
- * User repository discovery uses the authenticated endpoint so private repositories are included.
+ * User repository discovery supports both user tokens and GitHub App installation tokens.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - User or organization login
  * @returns {Promise<Array<Object>>} Repository API responses owned by the configured owner
@@ -345,20 +345,43 @@ async function getRepositoriesForOwner(octokit, owner) {
   const perPage = 100;
   let page = 1;
   let hasMore = true;
+  let useInstallationRepositories = false;
 
   while (hasMore) {
-    const { data } = isOrg
-      ? await octokit.rest.repos.listForOrg({
-          org: owner,
-          type: 'all',
-          per_page: perPage,
-          page
-        })
-      : await octokit.rest.repos.listForAuthenticatedUser({
+    let data;
+    if (isOrg) {
+      ({ data } = await octokit.rest.repos.listForOrg({
+        org: owner,
+        type: 'all',
+        per_page: perPage,
+        page
+      }));
+    } else if (useInstallationRepositories) {
+      const response = await octokit.rest.apps.listReposAccessibleToInstallation({
+        per_page: perPage,
+        page
+      });
+      data = response.data.repositories;
+    } else {
+      try {
+        ({ data } = await octokit.rest.repos.listForAuthenticatedUser({
           visibility: 'all',
           per_page: perPage,
           page
+        }));
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'status' in error && error.status === 403)) {
+          throw error;
+        }
+
+        useInstallationRepositories = true;
+        const response = await octokit.rest.apps.listReposAccessibleToInstallation({
+          per_page: perPage,
+          page
         });
+        data = response.data.repositories;
+      }
+    }
     const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
 
     repositories.push(...ownedRepositories);
