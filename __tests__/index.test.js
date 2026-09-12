@@ -130,6 +130,8 @@ inputs:
     description: 'Delete branch on merge'
   allow-update-branch:
     description: 'Allow update branch'
+  wiki:
+    description: 'Repository wiki'
   immutable-releases:
     description: 'Immutable releases'
   code-scanning:
@@ -226,6 +228,7 @@ const mockActionYmlParsed = {
     'allow-auto-merge': { description: 'Allow auto merge' },
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
+    wiki: { description: 'Repository wiki' },
     'immutable-releases': { description: 'Immutable releases' },
     'code-scanning': { description: 'Code scanning' },
     'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
@@ -380,7 +383,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_rebase_merge: true,
         delete_branch_on_merge: false,
         allow_auto_merge: false,
-        allow_update_branch: false
+        allow_update_branch: false,
+        has_wiki: true
       }
     });
     mockOctokit.rest.repos.update.mockClear();
@@ -1752,6 +1756,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
           allow_auto_merge: false,
           delete_branch_on_merge: false,
           allow_update_branch: false,
+          has_wiki: true,
           permissions: { admin: true, push: true, pull: true }
         }
       });
@@ -1763,7 +1768,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_rebase_merge: true,
         allow_auto_merge: true,
         delete_branch_on_merge: true,
-        allow_update_branch: true
+        allow_update_branch: true,
+        has_wiki: false
       };
 
       const result = await updateRepositorySettings(
@@ -1779,7 +1785,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.repository).toBe('owner/repo');
-      expect(result.changes.length).toBe(6);
+      expect(result.changes.length).toBe(7);
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
@@ -1788,7 +1794,38 @@ describe('Bulk GitHub Repository Settings Action', () => {
         allow_rebase_merge: true,
         allow_auto_merge: true,
         delete_branch_on_merge: true,
-        allow_update_branch: true
+        allow_update_branch: true,
+        has_wiki: false
+      });
+    });
+
+    test('should disable the repository wiki', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          has_wiki: true,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        { has_wiki: false },
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.changes).toEqual([{ setting: 'has_wiki', from: true, to: false }]);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        has_wiki: false
       });
     });
 
@@ -3619,6 +3656,29 @@ describe('Bulk GitHub Repository Settings Action', () => {
         owner: 'owner',
         repo: 'repo1',
         names: ['javascript', 'github-actions', 'automation']
+      });
+    });
+
+    test('should allow disabling wikis as the only setting', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          wiki: 'false'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        has_wiki: false
       });
     });
 
