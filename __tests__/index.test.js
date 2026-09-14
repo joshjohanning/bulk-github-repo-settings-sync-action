@@ -1822,6 +1822,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(result.success).toBe(true);
       expect(result.changes).toEqual([{ setting: 'has_wiki', from: true, to: false }]);
+      expect(result.subResults).toEqual([
+        expect.objectContaining({
+          kind: 'settings',
+          message: 'settings: wiki'
+        })
+      ]);
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
         owner: 'owner',
         repo: 'repo',
@@ -3344,8 +3350,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
             push: false,
             triage: false,
             pull: false
-          }
-          // Missing allow_squash_merge may indicate app not installed, insufficient permissions, or API changes
+          },
+          // Standard repository fields remain readable without administration access.
+          has_wiki: true
         }
       });
 
@@ -4879,6 +4886,45 @@ describe('Bulk GitHub Repository Settings Action', () => {
       // repo1 should use override (false), repo2 should use global (true)
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+    });
+
+    test('should map repo-specific wiki configuration to the GitHub API field', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    wiki: false');
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', wiki: false }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false,
+          has_wiki: true
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        has_wiki: false
+      });
+      expect(mockCore.info).toHaveBeenCalledWith('     wiki: true → false');
     });
 
     test('should warn and use global default for invalid enum config in YAML', async () => {

@@ -968,8 +968,18 @@ const REPOSITORY_SETTING_FIELDS = Object.freeze([
   { key: 'allow_auto_merge' },
   { key: 'delete_branch_on_merge' },
   { key: 'allow_update_branch' },
-  { key: 'has_wiki' }
+  { key: 'has_wiki', displayName: 'wiki' }
 ]);
+
+/**
+ * Get the public configuration name for a repository setting.
+ * @param {string} setting - GitHub API repository setting name
+ * @returns {string} Public action input and YAML configuration name
+ */
+function getRepositorySettingDisplayName(setting) {
+  const field = REPOSITORY_SETTING_FIELDS.find(candidate => candidate.key === setting);
+  return field?.displayName || setting.replace(/_/g, '-');
+}
 
 /**
  * Handle a common boolean feature toggle flow.
@@ -1349,15 +1359,14 @@ export async function updateRepositorySettings(
       };
     }
 
-    // Check multiple critical fields to determine whether repository settings are readable.
+    // Check admin-only fields to determine whether repository settings are readable.
     const settingsFields = [
       'allow_squash_merge',
       'allow_merge_commit',
       'allow_rebase_merge',
       'delete_branch_on_merge',
       'allow_auto_merge',
-      'allow_update_branch',
-      'has_wiki'
+      'allow_update_branch'
     ];
     const allSettingsUndefined = settingsFields.every(field => currentRepo[field] === undefined);
     if (allSettingsUndefined) {
@@ -1453,7 +1462,7 @@ export async function updateRepositorySettings(
 
     if (changes.length > 0) {
       const wouldPrefix = dryRun ? 'Would update ' : '';
-      const settingNames = changes.map(c => c.setting.replace(/_/g, '-'));
+      const settingNames = changes.map(c => getRepositorySettingDisplayName(c.setting));
       result.subResults.push(
         createSubResult('settings', SubResultStatus.CHANGED, `${wouldPrefix}settings: ${settingNames.join(', ')}`)
       );
@@ -5661,7 +5670,7 @@ export async function run() {
         if (result.changes && result.changes.length > 0) {
           core.info(`  📝 Settings changes:`);
           for (const change of result.changes) {
-            const settingName = change.setting.replace(/_/g, '-');
+            const settingName = getRepositorySettingDisplayName(change.setting);
             core.info(`     ${settingName}: ${change.from} → ${change.to}`);
           }
         }
