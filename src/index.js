@@ -370,16 +370,25 @@ async function getRepositoriesForOwner(octokit, owner) {
           page
         }));
       } catch (error) {
-        if (!(error && typeof error === 'object' && 'status' in error && error.status === 403)) {
+        const canTryInstallationRepositories =
+          page === 1 && error && typeof error === 'object' && 'status' in error && error.status === 403;
+        if (!canTryInstallationRepositories) {
           throw error;
         }
 
-        useInstallationRepositories = true;
-        const response = await octokit.rest.apps.listReposAccessibleToInstallation({
-          per_page: perPage,
-          page
-        });
-        data = response.data.repositories;
+        try {
+          const response = await octokit.rest.apps.listReposAccessibleToInstallation({
+            per_page: perPage,
+            page
+          });
+          useInstallationRepositories = true;
+          data = response.data.repositories;
+        } catch (installationError) {
+          throw new Error(
+            `Authenticated user repository listing failed (${error.message}); ` +
+              `GitHub App installation repository listing also failed (${installationError.message})`
+          );
+        }
       }
     }
     const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);

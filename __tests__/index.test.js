@@ -660,6 +660,23 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
+    test('should not switch to installation repositories after authenticated user pagination starts', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        full_name: `owner/repo${index + 1}`,
+        owner: { login: 'owner' },
+        private: true
+      }));
+      mockOctokit.rest.repos.listForAuthenticatedUser
+        .mockResolvedValueOnce({ data: firstPage })
+        .mockRejectedValueOnce({ status: 403, message: 'Secondary rate limit' });
+
+      await expect(parseRepositories('all', '', 'owner', mockOctokit)).rejects.toThrow(
+        'Failed to fetch repositories for owner: Secondary rate limit'
+      );
+      expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).not.toHaveBeenCalled();
+    });
+
     test('should fetch private user repositories with a GitHub App installation token', async () => {
       mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
       mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({
@@ -712,6 +729,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
         page: 2
       });
       expect(mockOctokit.rest.repos.listForAuthenticatedUser).toHaveBeenCalledTimes(1);
+    });
+
+    test('should preserve both errors when the installation repository fallback fails', async () => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({
+        status: 403,
+        message: 'Resource not accessible by integration'
+      });
+      mockOctokit.rest.apps.listReposAccessibleToInstallation.mockRejectedValue({
+        status: 403,
+        message: 'Installation token lacks repository access'
+      });
+
+      await expect(parseRepositories('all', '', 'owner', mockOctokit)).rejects.toThrow(
+        'Failed to fetch repositories for owner: Authenticated user repository listing failed ' +
+          '(Resource not accessible by integration); GitHub App installation repository listing also failed ' +
+          '(Installation token lacks repository access)'
+      );
     });
 
     test('should not use the installation endpoint for non-forbidden authenticated user errors', async () => {
