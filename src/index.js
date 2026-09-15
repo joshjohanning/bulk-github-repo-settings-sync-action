@@ -324,6 +324,106 @@ async function getOrgRepositoriesWithProperties(octokit, owner) {
 }
 
 /**
+ * Determine whether a GitHub API error is explicitly identified as a rate-limit response.
+ * @param {*} error - Error returned by Octokit
+ * @returns {boolean} Whether rate-limit response headers are present
+ */
+function isRateLimitError(error) {
+  const headers = error?.response?.headers;
+  if (!headers || typeof headers !== 'object') {
+    return false;
+  }
+
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value])
+  );
+  return String(normalizedHeaders['x-ratelimit-remaining']) === '0' || normalizedHeaders['retry-after'] !== undefined;
+}
+
+/**
+ * Get all repositories owned by a user or organization that are accessible to the authenticated token.
+ * User repository discovery supports both user tokens and GitHub App installation tokens.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} owner - User or organization login
+ * @returns {Promise<Array<Object>>} Repository API responses owned by the configured owner
+ */
+async function getRepositoriesForOwner(octokit, owner) {
+  let isOrg = false;
+  try {
+    await octokit.rest.orgs.get({ org: owner });
+    isOrg = true;
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'status' in error && error.status === 404)) {
+      throw error;
+    }
+  }
+
+  const repositories = [];
+  const perPage = 100;
+  let page = 1;
+  let hasMore = true;
+  let useInstallationRepositories = false;
+
+  while (hasMore) {
+    let data;
+    if (isOrg) {
+      ({ data } = await octokit.rest.repos.listForOrg({
+        org: owner,
+        type: 'all',
+        per_page: perPage,
+        page
+      }));
+    } else if (useInstallationRepositories) {
+      const response = await octokit.rest.apps.listReposAccessibleToInstallation({
+        per_page: perPage,
+        page
+      });
+      data = response.data.repositories;
+    } else {
+      try {
+        ({ data } = await octokit.rest.repos.listForAuthenticatedUser({
+          visibility: 'all',
+          per_page: perPage,
+          page
+        }));
+      } catch (error) {
+        const canTryInstallationRepositories =
+          page === 1 &&
+          error &&
+          typeof error === 'object' &&
+          'status' in error &&
+          error.status === 403 &&
+          !isRateLimitError(error);
+        if (!canTryInstallationRepositories) {
+          throw error;
+        }
+
+        try {
+          const response = await octokit.rest.apps.listReposAccessibleToInstallation({
+            per_page: perPage,
+            page
+          });
+          useInstallationRepositories = true;
+          data = response.data.repositories;
+        } catch (installationError) {
+          throw new Error(
+            `Authenticated user repository listing failed (${error.message}); ` +
+              `GitHub App installation repository listing also failed (${installationError.message})`
+          );
+        }
+      }
+    }
+    const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
+
+    repositories.push(...ownedRepositories);
+    hasMore = data.length === perPage;
+    page++;
+  }
+
+  return repositories;
+}
+
+/**
  * Get repository metadata, using a cache to avoid duplicate API calls.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repoFullName - Repository full name in owner/repo format
@@ -616,39 +716,10 @@ export async function parseConfigWithRules(config, octokit) {
     else if (rule.selector.all === true) {
       core.info(`Rule ${i + 1}: Targeting all repositories for ${owner}`);
 
-      // Fetch all repos for org/user
-      let isOrg = false;
-      try {
-        await octokit.rest.orgs.get({ org: owner });
-        isOrg = true;
-      } catch (error) {
-        // Only treat 404 as "not an org"; rethrow other errors to avoid masking real problems
-        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-          isOrg = false;
-        } else {
-          throw error;
-        }
-      }
-
-      const perPage = 100;
-      let page = 1;
-      let hasMore = true;
-      while (hasMore) {
-        const { data } = isOrg
-          ? await octokit.rest.repos.listForOrg({ org: owner, type: 'all', per_page: perPage, page })
-          : await octokit.rest.repos.listForUser({ username: owner, type: 'all', per_page: perPage, page });
-        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
-
-        matchedRepos.push(...ownedRepositories.map(repository => ({ repo: repository.full_name, repository })));
-        for (const repository of ownedRepositories) {
-          repositoryMetadataCache.set(repository.full_name, repository);
-        }
-
-        if (data.length === 0 || data.length < perPage) {
-          hasMore = false;
-        } else {
-          page++;
-        }
+      const repositories = await getRepositoriesForOwner(octokit, owner);
+      matchedRepos = repositories.map(repository => ({ repo: repository.full_name, repository }));
+      for (const repository of repositories) {
+        repositoryMetadataCache.set(repository.full_name, repository);
       }
       core.info(`  → Matched ${matchedRepos.length} repositories`);
     } else {
@@ -787,45 +858,8 @@ export async function parseRepositories(
 
     try {
       core.info(`Fetching all repositories for ${owner}...`);
-      const repos = [];
-      let page = 1;
-      let hasMore = true;
-
-      // Try to fetch as organization first, fall back to user if it fails
-      let isOrg = false;
-      try {
-        await octokit.rest.orgs.get({ org: owner });
-        isOrg = true;
-      } catch {
-        // Not an org or no access, treat as user
-        isOrg = false;
-      }
-
-      while (hasMore) {
-        const { data } = isOrg
-          ? await octokit.rest.repos.listForOrg({
-              org: owner,
-              type: 'all',
-              per_page: 100,
-              page
-            })
-          : await octokit.rest.repos.listForUser({
-              username: owner,
-              type: 'all',
-              per_page: 100,
-              page
-            });
-        const ownedRepositories = isOrg ? data : filterRepositoriesByOwner(data, owner);
-
-        if (data.length === 0) {
-          hasMore = false;
-        } else {
-          repos.push(...ownedRepositories.map(r => ({ repo: r.full_name })));
-          page++;
-        }
-      }
-
-      repoList = repos;
+      const repositoriesForOwner = await getRepositoriesForOwner(octokit, owner);
+      repoList = repositoriesForOwner.map(repository => ({ repo: repository.full_name }));
       core.info(`Found ${repoList.length} repositories`);
     } catch (error) {
       throw new Error(`Failed to fetch repositories for ${owner}: ${error.message}`);

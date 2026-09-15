@@ -17,7 +17,7 @@ inputs:
 
   # === Repository Selection ===
   repositories:
-    description: 'Comma-separated list of repositories (owner/repo format) or "all" for all repos in the organization/user'
+    description: 'Comma-separated list of repositories (owner/repo format) or "all" for all accessible repos owned by the organization/user'
     required: false
   repositories-file:
     description: 'Path to YAML file containing repository list (repos.yml for Option 1, settings-config.yml for Option 2)'
