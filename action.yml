@@ -115,7 +115,7 @@ inputs:
     required: false
     default: 'chore: update .gitignore'
   rulesets-file:
-    description: 'Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories'
+    description: 'Comma- or newline-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories'
     required: false
   delete-unmanaged-rulesets:
     description: 'Delete all other rulesets besides those being synced'
@@ -129,7 +129,7 @@ inputs:
     required: false
     default: 'chore: update pull request template'
   workflow-files:
-    description: 'Comma-separated list of workflow file paths to sync to .github/workflows/ in target repositories (e.g., "./workflows/ci.yml,./workflows/release.yml")'
+    description: 'Comma- or newline-separated list of workflow file paths to sync to .github/workflows/ in target repositories'
     required: false
   workflow-files-pr-title:
     description: 'Title for pull requests when updating workflow files'

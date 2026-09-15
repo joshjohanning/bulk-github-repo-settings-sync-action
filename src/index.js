@@ -179,8 +179,22 @@ export function resolveFilePath(basePath, filePath) {
 }
 
 /**
+ * Parse a string input containing comma- or newline-separated values.
+ * @param {string} value - Delimited input value
+ * @returns {string[]} Array of trimmed, non-empty values
+ */
+export function parseMultiValueInput(value) {
+  if (!value || typeof value !== 'string') return [];
+
+  return value
+    .split(/[,\r\n]+/)
+    .map(item => item.trim())
+    .filter(item => item.length > 0);
+}
+
+/**
  * Apply base-path resolution to all file-path config values in a repo config object.
- * Handles string values, comma-separated strings (for rulesets-file/workflow-files),
+ * Handles string values, comma- or newline-separated multi-file values,
  * and array values.
  * @param {Object} repoConfig - Repository configuration object
  * @param {string} basePath - Base path to prepend to relative file paths
@@ -195,12 +209,9 @@ export function applyBasePathToRepoConfig(repoConfig, basePath) {
 
     const value = resolved[key];
     if (typeof value === 'string') {
-      // rulesets-file and workflow-files support comma-separated paths
+      // Multi-file settings support comma- or newline-separated paths
       if (key === 'rulesets-file' || key === 'workflow-files') {
-        resolved[key] = value
-          .split(',')
-          .map(p => p.trim())
-          .filter(p => p.length > 0)
+        resolved[key] = parseMultiValueInput(value)
           .map(p => resolveFilePath(basePath, p))
           .join(',');
       } else {
@@ -2947,7 +2958,7 @@ export async function syncPackageJson(
 
 /**
  * Parse a rulesets-file value into an array of file paths.
- * Accepts a single string (comma-separated), a YAML array of strings,
+ * Accepts a single string (comma- or newline-separated), a YAML array of strings,
  * or an empty/falsy value (returns empty array).
  * @param {string|string[]} value - The rulesets-file value from config
  * @param {string} [context] - Context for error messages (e.g., repo name)
@@ -2968,12 +2979,11 @@ export function parseRulesetsFileValue(value, context) {
       return v.trim();
     });
   } else if (typeof value === 'string') {
-    paths = value
-      .split(',')
-      .map(p => p.trim())
-      .filter(p => p.length > 0);
+    paths = parseMultiValueInput(value);
   } else {
-    throw new Error(`Invalid "rulesets-file"${label}: expected a string, comma-separated string, or array of strings`);
+    throw new Error(
+      `Invalid "rulesets-file"${label}: expected a string, comma- or newline-separated string, or array of strings`
+    );
   }
 
   if (paths.length === 0) {
@@ -4724,12 +4734,7 @@ export async function run() {
 
     // Get workflow files settings
     const workflowFilesInput = core.getInput('workflow-files');
-    const workflowFiles = workflowFilesInput
-      ? workflowFilesInput
-          .split(',')
-          .map(f => f.trim())
-          .filter(f => f.length > 0)
-      : null;
+    const workflowFiles = workflowFilesInput ? parseMultiValueInput(workflowFilesInput) : null;
     const workflowFilesPrTitle = core.getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
 
     // Get autolinks settings
@@ -5011,7 +5016,7 @@ export async function run() {
       // Handle repo-specific .gitignore
       const repoGitignore = repoConfig['gitignore'] !== undefined ? repoConfig['gitignore'] : gitignore;
 
-      // Handle repo-specific rulesets-file (supports comma-separated string or YAML array)
+      // Handle repo-specific rulesets-file (supports comma/newline-separated strings or YAML arrays)
       const repoRulesetsFiles = (() => {
         if (repoConfig['rulesets-file'] === undefined) return rulesetsFiles;
         return parseRulesetsFileValue(repoConfig['rulesets-file'], repo);
@@ -5031,10 +5036,7 @@ export async function run() {
       const repoWorkflowFiles = (() => {
         if (repoConfig['workflow-files'] === undefined) return workflowFiles;
         if (typeof repoConfig['workflow-files'] === 'string') {
-          return repoConfig['workflow-files']
-            .split(',')
-            .map(f => f.trim())
-            .filter(f => f.length > 0);
+          return parseMultiValueInput(repoConfig['workflow-files']);
         }
         if (Array.isArray(repoConfig['workflow-files'])) return repoConfig['workflow-files'];
         return null;
