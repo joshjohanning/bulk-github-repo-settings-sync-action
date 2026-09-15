@@ -677,6 +677,33 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).not.toHaveBeenCalled();
     });
 
+    test.each([
+      [
+        'primary rate limit',
+        {
+          status: 403,
+          message: 'API rate limit exceeded',
+          response: { headers: { 'x-ratelimit-remaining': '0' } }
+        }
+      ],
+      [
+        'secondary rate limit',
+        {
+          status: 403,
+          message: 'You have exceeded a secondary rate limit',
+          response: { headers: { 'retry-after': '60' } }
+        }
+      ]
+    ])('should not use the installation endpoint for a first-page %s', async (_name, error) => {
+      mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue(error);
+
+      await expect(parseRepositories('all', '', 'owner', mockOctokit)).rejects.toThrow(
+        `Failed to fetch repositories for owner: ${error.message}`
+      );
+      expect(mockOctokit.rest.apps.listReposAccessibleToInstallation).not.toHaveBeenCalled();
+    });
+
     test('should fetch private user repositories with a GitHub App installation token', async () => {
       mockOctokit.rest.orgs.get.mockRejectedValue({ status: 404 });
       mockOctokit.rest.repos.listForAuthenticatedUser.mockRejectedValue({

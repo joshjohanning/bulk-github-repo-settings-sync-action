@@ -324,6 +324,23 @@ async function getOrgRepositoriesWithProperties(octokit, owner) {
 }
 
 /**
+ * Determine whether a GitHub API error is explicitly identified as a rate-limit response.
+ * @param {*} error - Error returned by Octokit
+ * @returns {boolean} Whether rate-limit response headers are present
+ */
+function isRateLimitError(error) {
+  const headers = error?.response?.headers;
+  if (!headers || typeof headers !== 'object') {
+    return false;
+  }
+
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value])
+  );
+  return String(normalizedHeaders['x-ratelimit-remaining']) === '0' || normalizedHeaders['retry-after'] !== undefined;
+}
+
+/**
  * Get all repositories owned by a user or organization that are accessible to the authenticated token.
  * User repository discovery supports both user tokens and GitHub App installation tokens.
  * @param {Octokit} octokit - Octokit instance
@@ -371,7 +388,12 @@ async function getRepositoriesForOwner(octokit, owner) {
         }));
       } catch (error) {
         const canTryInstallationRepositories =
-          page === 1 && error && typeof error === 'object' && 'status' in error && error.status === 403;
+          page === 1 &&
+          error &&
+          typeof error === 'object' &&
+          'status' in error &&
+          error.status === 403 &&
+          !isRateLimitError(error);
         if (!canTryInstallationRepositories) {
           throw error;
         }
