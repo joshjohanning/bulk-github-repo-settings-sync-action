@@ -360,6 +360,7 @@ const {
   resetKnownRepoConfigKeysCache,
   replaceTemplateVariables,
   resolveFilePath,
+  parseMultiValueInput,
   applyBasePathToRepoConfig
 } = await import('../src/index.js');
 
@@ -841,6 +842,27 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should resolve base-path with newline-separated rulesets-file', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'rulesets-file': 'rulesets/a.json\nrulesets/b.json'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'rulesets-file': 'config/rulesets/a.json,config/rulesets/b.json'
+        }
+      ]);
+    });
+
     test('should resolve base-path with array-format workflow-files', async () => {
       setMockFileContent('base-path...');
       setMockYamlContent({
@@ -858,6 +880,27 @@ describe('Bulk GitHub Repository Settings Action', () => {
         {
           repo: 'owner/repo1',
           'workflow-files': ['config/workflows/ci.yml', 'config/workflows/release.yml']
+        }
+      ]);
+    });
+
+    test('should resolve base-path with newline-separated workflow-files', async () => {
+      setMockFileContent('base-path...');
+      setMockYamlContent({
+        'base-path': './config/',
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'workflow-files': 'workflows/ci.yml\nworkflows/release.yml'
+          }
+        ]
+      });
+
+      const result = await parseRepositories('', 'repos.yml', '', mockOctokit);
+      expect(result).toEqual([
+        {
+          repo: 'owner/repo1',
+          'workflow-files': 'config/workflows/ci.yml,config/workflows/release.yml'
         }
       ]);
     });
@@ -3760,6 +3803,61 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test('should process newline-separated rulesets-file action input', async () => {
+      setMockFileContent(
+        JSON.stringify({
+          name: 'branch-protection',
+          target: 'branch',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }),
+        './rulesets/branch.json'
+      );
+      setMockFileContent(
+        JSON.stringify({
+          name: 'tag-protection',
+          target: 'tag',
+          enforcement: 'active',
+          rules: [{ type: 'deletion' }]
+        }),
+        './rulesets/tag.json'
+      );
+
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'rulesets-file': './rulesets/branch.json\n./rulesets/tag.json\n'
+        };
+        return inputs[name] || '';
+      });
+
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockOctokit.rest.repos.createRepoRuleset
+        .mockResolvedValueOnce({ data: { id: 1 } })
+        .mockResolvedValueOnce({ data: { id: 2 } });
+
+      await run();
+
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo1',
+          name: 'branch-protection'
+        })
+      );
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo1',
+          name: 'tag-protection'
+        })
+      );
+    });
+
     test('should honor repo-specific delete-unmanaged-rulesets override', async () => {
       setMockFileContent(
         JSON.stringify({
@@ -5099,6 +5197,44 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+
+    test('should process repo-specific workflow-files as newline-separated string', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      mockFs.readFileSync.mockImplementation((filePath, _encoding) => {
+        if (typeof filePath === 'string' && filePath.endsWith('action.yml')) {
+          return mockActionYmlContent;
+        }
+        if (filePath === 'repos.yml') {
+          return 'repos:\n  - repo: owner/repo1\n    workflow-files: |\n      ci.yml\n      release.yml';
+        }
+        return 'name: Test Workflow';
+      });
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', 'workflow-files': 'ci.yml\nrelease.yml\n' }]
+      });
+
+      mockOctokit.rest.repos.getContent.mockRejectedValue({ status: 404 });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef
+        .mockRejectedValueOnce({ status: 404 })
+        .mockResolvedValueOnce({ data: { object: { sha: 'abc123' } } });
+      mockOctokit.rest.git.createRef.mockResolvedValue({});
+      mockOctokit.rest.repos.createOrUpdateFileContents.mockResolvedValue({});
+      mockOctokit.rest.pulls.create.mockResolvedValue({
+        data: { number: 1, html_url: 'https://github.com/owner/repo1/pull/1' }
+      });
+
+      await run();
+
+      expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledTimes(2);
     });
 
     test('should process repo-specific workflow-files as array', async () => {
@@ -6894,6 +7030,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
     });
 
+    test('should parse newline-separated file paths', () => {
+      const result = parseRulesetsFileValue('./rulesets/branch.json\n./rulesets/tag.json\n');
+      expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
+    });
+
+    test('should parse mixed comma- and newline-separated file paths', () => {
+      const result = parseRulesetsFileValue('./rulesets/branch.json,\r\n./rulesets/tag.json\n./rulesets/release.json');
+      expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json', './rulesets/release.json']);
+    });
+
     test('should parse a YAML array of file paths', () => {
       const result = parseRulesetsFileValue(['./rulesets/branch.json', './rulesets/tag.json']);
       expect(result).toEqual(['./rulesets/branch.json', './rulesets/tag.json']);
@@ -6916,7 +7062,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should throw for invalid type', () => {
       expect(() => parseRulesetsFileValue(123)).toThrow(
-        'expected a string, comma-separated string, or array of strings'
+        'expected a string, comma- or newline-separated string, or array of strings'
       );
     });
 
@@ -6926,6 +7072,21 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
     test('should include context in error messages', () => {
       expect(() => parseRulesetsFileValue(123, 'owner/repo')).toThrow('for repo "owner/repo"');
+    });
+  });
+
+  describe('parseMultiValueInput', () => {
+    test('should parse comma-, newline-, and CRLF-separated values', () => {
+      expect(parseMultiValueInput('one, two\nthree\r\nfour')).toEqual(['one', 'two', 'three', 'four']);
+    });
+
+    test('should trim values and remove empty entries', () => {
+      expect(parseMultiValueInput(' one ,, \n two \r\n')).toEqual(['one', 'two']);
+    });
+
+    test('should return an empty array for empty or non-string values', () => {
+      expect(parseMultiValueInput('')).toEqual([]);
+      expect(parseMultiValueInput(null)).toEqual([]);
     });
   });
 

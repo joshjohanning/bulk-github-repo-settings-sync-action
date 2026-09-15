@@ -301,7 +301,7 @@ repos:
 
 ### Syncing Repository Rulesets
 
-Sync repository rulesets across multiple repositories. Each ruleset is defined in its own JSON file, and `rulesets-file` accepts comma-separated paths to sync multiple rulesets:
+Sync repository rulesets across multiple repositories. Each ruleset is defined in its own JSON file, and `rulesets-file` accepts comma- or newline-separated paths to sync multiple rulesets:
 
 ```yml
 - name: Sync Repository Rulesets
@@ -312,7 +312,20 @@ Sync repository rulesets across multiple repositories. Each ruleset is defined i
     rulesets-file: './config/rulesets/branch-protection.json, ./config/rulesets/tag-protection.json'
 ```
 
-Or with repo-specific overrides in `repos.yml` (supports comma-separated strings or YAML arrays):
+For a more readable list in a workflow, use a YAML literal block:
+
+```yml
+- name: Sync Repository Rulesets
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    rulesets-file: |
+      ./config/rulesets/branch-protection.json
+      ./config/rulesets/tag-protection.json
+```
+
+Or with repo-specific overrides in `repos.yml` (supports comma- or newline-separated strings and YAML arrays):
 
 ```yaml
 repos:
@@ -452,7 +465,20 @@ Sync one or more workflow files to `.github/workflows/` in target repositories v
     workflow-files-pr-title: 'chore: sync workflow configuration'
 ```
 
-Or with repo-specific overrides in `repos.yml`:
+For a more readable list in a workflow, use a YAML literal block:
+
+```yml
+- name: Sync Workflow Files
+  uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: 'repos.yml'
+    workflow-files: |
+      ./config/workflows/ci.yml
+      ./config/workflows/release.yml
+```
+
+Or with repo-specific overrides in `repos.yml` (supports comma- or newline-separated strings and YAML arrays):
 
 ```yaml
 repos:
@@ -977,11 +1003,11 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 | `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                        | No       | `chore: update dependabot.yml`            |
 | `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                     | No       | -                                         |
 | `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                            | No       | `chore: update .gitignore`                |
-| `rulesets-file`                   | Comma-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories                      | No       | -                                         |
+| `rulesets-file`                   | Comma- or newline-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories          | No       | -                                         |
 | `delete-unmanaged-rulesets`       | Delete all other rulesets besides those being synced                                                                                        | No       | `false`                                   |
 | `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                   | No       | -                                         |
 | `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                 | No       | `chore: update pull request template`     |
-| `workflow-files`                  | Comma-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                                          | No       | -                                         |
+| `workflow-files`                  | Comma- or newline-separated list of workflow file paths to sync to `.github/workflows/` in target repositories                              | No       | -                                         |
 | `workflow-files-pr-title`         | Title for pull requests when updating workflow files                                                                                        | No       | `chore: sync workflow configuration`      |
 | `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                           | No       | -                                         |
 | `environments`                    | Comma-separated list of environment names to create (e.g., `production, staging, development`)                                              | No       | -                                         |
