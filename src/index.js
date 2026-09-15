@@ -1001,8 +1001,19 @@ const REPOSITORY_SETTING_FIELDS = Object.freeze([
   { key: 'allow_rebase_merge' },
   { key: 'allow_auto_merge' },
   { key: 'delete_branch_on_merge' },
-  { key: 'allow_update_branch' }
+  { key: 'allow_update_branch' },
+  { key: 'has_wiki', displayName: 'wiki' }
 ]);
+
+/**
+ * Get the public configuration name for a repository setting.
+ * @param {string} setting - GitHub API repository setting name
+ * @returns {string} Public action input and YAML configuration name
+ */
+function getRepositorySettingDisplayName(setting) {
+  const field = REPOSITORY_SETTING_FIELDS.find(candidate => candidate.key === setting);
+  return field?.displayName || setting.replace(/_/g, '-');
+}
 
 /**
  * Handle a common boolean feature toggle flow.
@@ -1382,9 +1393,7 @@ export async function updateRepositorySettings(
       };
     }
 
-    // Check if we can read the repository settings
-    // If allow_squash_merge is undefined, it means we can't read the settings (likely not installed on repo)
-    // Check for multiple critical settings fields to robustly determine if settings are readable
+    // Check admin-only fields to determine whether repository settings are readable.
     const settingsFields = [
       'allow_squash_merge',
       'allow_merge_commit',
@@ -1487,7 +1496,7 @@ export async function updateRepositorySettings(
 
     if (changes.length > 0) {
       const wouldPrefix = dryRun ? 'Would update ' : '';
-      const settingNames = changes.map(c => c.setting.replace(/_/g, '-'));
+      const settingNames = changes.map(c => getRepositorySettingDisplayName(c.setting));
       result.subResults.push(
         createSubResult('settings', SubResultStatus.CHANGED, `${wouldPrefix}settings: ${settingNames.join(', ')}`)
       );
@@ -4657,7 +4666,8 @@ export async function run() {
       allow_rebase_merge: getBooleanInput('allow-rebase-merge'),
       allow_auto_merge: getBooleanInput('allow-auto-merge'),
       delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
-      allow_update_branch: getBooleanInput('allow-update-branch')
+      allow_update_branch: getBooleanInput('allow-update-branch'),
+      has_wiki: getBooleanInput('wiki')
     };
 
     // Handle code-scanning with deprecated alias support
@@ -4956,7 +4966,8 @@ export async function run() {
           'allow-update-branch',
           repo,
           settings.allow_update_branch
-        )
+        ),
+        has_wiki: coerceBooleanConfig(repoConfig.wiki, 'wiki', repo, settings.has_wiki)
       };
 
       // Handle repo-specific code scanning (support both new and deprecated input names)
@@ -5693,7 +5704,7 @@ export async function run() {
         if (result.changes && result.changes.length > 0) {
           core.info(`  📝 Settings changes:`);
           for (const change of result.changes) {
-            const settingName = change.setting.replace(/_/g, '-');
+            const settingName = getRepositorySettingDisplayName(change.setting);
             core.info(`     ${settingName}: ${change.from} → ${change.to}`);
           }
         }
