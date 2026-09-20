@@ -13,6 +13,7 @@
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
+import ignore from 'ignore';
 import * as path from 'path';
 import * as url from 'url';
 import * as yaml from 'js-yaml';
@@ -26,7 +27,7 @@ import * as yaml from 'js-yaml';
 function getKnownRepoConfigKeys() {
   // 'repo' is always valid as it's the repository identifier in YAML config
   // 'codeowners-vars' is YAML-only config for template variables (no action input)
-  const keys = new Set(['repo', 'codeowners-vars']);
+  const keys = new Set(['repo', 'codeowners-vars', 'file-sync']);
 
   try {
     // Get the directory where this script is located
@@ -220,6 +221,15 @@ export function applyBasePathToRepoConfig(repoConfig, basePath) {
     } else if (Array.isArray(value)) {
       resolved[key] = value.map(p => (typeof p === 'string' ? resolveFilePath(basePath, p) : p));
     }
+  }
+
+  // file-sync is YAML-only configuration. Only its local source path is
+  // resolved: `target` is always a path inside the destination repository.
+  if (Array.isArray(resolved['file-sync'])) {
+    resolved['file-sync'] = resolved['file-sync'].map(mapping => {
+      if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return mapping;
+      return { ...mapping, source: resolveFilePath(basePath, mapping.source) };
+    });
   }
 
   return resolved;
@@ -923,7 +933,8 @@ const SYNC_KIND_LABELS = Object.freeze({
   'environments-sync': 'environments',
   'copilot-instructions-sync': 'copilot-instructions.md',
   'codeowners-sync': 'CODEOWNERS',
-  'package-json-sync': 'package.json'
+  'package-json-sync': 'package.json',
+  'file-sync': 'file sync'
 });
 
 /**
@@ -1879,6 +1890,379 @@ export async function closeStaleActionPrs(octokit, repo, branchName, dryRun, aut
     // Non-fatal error - don't fail the sync because of stale PR cleanup
     core.warning(`  ⚠️  Could not check for stale PRs: ${error.message}`);
     return null;
+  }
+}
+
+const DEFAULT_FILE_SYNC_GROUP = 'file-sync';
+
+function normalizeRepositoryPath(target, fieldName = 'target') {
+  if (typeof target !== 'string' || target.trim() === '') {
+    throw new Error(`file-sync ${fieldName} must be a non-empty string`);
+  }
+
+  const value = target.trim().replaceAll('\\', '/');
+  if (value === '.' || value === './') return '';
+  if (value.startsWith('/') || value.split('/').includes('..')) {
+    throw new Error(`file-sync ${fieldName} must be a relative repository path: ${target}`);
+  }
+
+  return path.posix.normalize(value).replace(/^\.\//, '');
+}
+
+/**
+ * Validate and normalize a repository's YAML-only file-sync mappings.
+ * @param {*} value - The `file-sync` YAML value
+ * @returns {Array<Object>} Normalized mappings
+ */
+export function parseFileSyncConfig(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error('file-sync must be an array of mappings');
+
+  return value.map((mapping, index) => {
+    const label = `file-sync mapping #${index + 1}`;
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+      throw new Error(`${label} must be an object`);
+    }
+    if (typeof mapping.name !== 'string' || mapping.name.trim() === '') {
+      throw new Error(`${label} requires a non-empty 'name'`);
+    }
+    if (typeof mapping.source !== 'string' || mapping.source.trim() === '') {
+      throw new Error(`${label} requires a non-empty 'source'`);
+    }
+    const group = mapping.group === undefined ? DEFAULT_FILE_SYNC_GROUP : mapping.group;
+    if (typeof group !== 'string' || group.trim() === '') {
+      throw new Error(`${label} 'group' must be a non-empty string when specified`);
+    }
+    if (mapping.delete !== undefined && typeof mapping.delete !== 'boolean') {
+      throw new Error(`${label} 'delete' must be a boolean when specified`);
+    }
+    if (
+      mapping.ignore !== undefined &&
+      (!Array.isArray(mapping.ignore) || mapping.ignore.some(p => typeof p !== 'string'))
+    ) {
+      throw new Error(`${label} 'ignore' must be an array of .gitignore patterns`);
+    }
+
+    return {
+      name: mapping.name.trim(),
+      source: mapping.source,
+      target: normalizeRepositoryPath(mapping.target),
+      group: group.trim(),
+      delete: mapping.delete === true,
+      ignore: mapping.ignore || []
+    };
+  });
+}
+
+function getFileSyncGroups(mappings) {
+  const groups = new Map();
+  for (const mapping of mappings) {
+    const current = groups.get(mapping.group) || [];
+    current.push(mapping);
+    groups.set(mapping.group, current);
+  }
+  return groups;
+}
+
+function fileSyncBranchName(group) {
+  if (group === DEFAULT_FILE_SYNC_GROUP) return DEFAULT_FILE_SYNC_GROUP;
+  const slug = group
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `file-sync-${slug || DEFAULT_FILE_SYNC_GROUP}`;
+}
+
+function fileSyncPrTitle(group, mappings) {
+  if (mappings.length === 1) return `chore: sync ${mappings[0].name}`;
+  return group === DEFAULT_FILE_SYNC_GROUP ? 'chore: sync files' : `chore: sync ${group}`;
+}
+
+function isFileSyncIgnored(patterns, relativePath) {
+  if (patterns.length === 0) return false;
+  return ignore().add(patterns).ignores(relativePath);
+}
+
+function readLocalFileSyncEntries(mapping) {
+  let sourceStat;
+  try {
+    sourceStat = fs.lstatSync(mapping.source);
+  } catch (error) {
+    throw new Error(`Cannot read file-sync source '${mapping.source}': ${error.message}`);
+  }
+
+  const entries = [];
+  const addEntry = (sourcePath, targetPath) => {
+    const stat = fs.lstatSync(sourcePath);
+    if (stat.isSymbolicLink()) {
+      entries.push({ targetPath, content: Buffer.from(fs.readlinkSync(sourcePath)), mode: '120000' });
+    } else if (stat.isFile()) {
+      entries.push({
+        targetPath,
+        content: fs.readFileSync(sourcePath),
+        mode: stat.mode & 0o111 ? '100755' : '100644'
+      });
+    } else {
+      throw new Error(`file-sync source '${sourcePath}' is not a regular file or symbolic link`);
+    }
+  };
+
+  if (!sourceStat.isDirectory()) {
+    if (!mapping.target)
+      throw new Error(`file-sync mapping '${mapping.name}' needs a file target when source is a file`);
+    addEntry(mapping.source, mapping.target);
+    return entries;
+  }
+
+  const walk = (directory, relativeDirectory = '') => {
+    for (const child of fs.readdirSync(directory, { withFileTypes: true })) {
+      const relativePath = path.posix.join(relativeDirectory, child.name);
+      const sourcePath = path.join(directory, child.name);
+      // Do not prune ignored directories: a later negated .gitignore rule may
+      // re-include a file below one of them.
+      if (child.isDirectory()) {
+        walk(sourcePath, relativePath);
+      } else if ((child.isFile() || child.isSymbolicLink()) && !isFileSyncIgnored(mapping.ignore, relativePath)) {
+        addEntry(sourcePath, path.posix.join(mapping.target, relativePath));
+      }
+    }
+  };
+  walk(mapping.source);
+  return entries;
+}
+
+function buildFileSyncDesiredEntries(mappings) {
+  const desired = new Map();
+  for (const mapping of mappings) {
+    for (const entry of readLocalFileSyncEntries(mapping)) {
+      if (desired.has(entry.targetPath)) {
+        throw new Error(`Duplicate file-sync target path '${entry.targetPath}' in group '${mapping.group}'`);
+      }
+      desired.set(entry.targetPath, entry);
+    }
+  }
+  return desired;
+}
+
+async function getGitCommitAndTree(octokit, owner, repo, ref) {
+  const { data: gitRef } = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${ref}` });
+  const { data: commit } = await octokit.rest.git.getCommit({ owner, repo, commit_sha: gitRef.object.sha });
+  return { commitSha: gitRef.object.sha, treeSha: commit.tree.sha };
+}
+
+async function getGitTreeFiles(octokit, owner, repo, treeSha) {
+  const { data } = await octokit.rest.git.getTree({ owner, repo, tree_sha: treeSha, recursive: 'true' });
+  if (data.truncated) throw new Error('Target repository tree is too large to safely sync files');
+  return new Map(data.tree.filter(entry => entry.type === 'blob').map(entry => [entry.path, entry]));
+}
+
+async function equalGitFile(octokit, owner, repo, existing, desired, blobCache) {
+  if (!existing || existing.type !== 'blob' || existing.mode !== desired.mode) return false;
+  if (!blobCache.has(existing.sha)) {
+    const { data } = await octokit.rest.git.getBlob({ owner, repo, file_sha: existing.sha });
+    blobCache.set(existing.sha, Buffer.from(data.content, 'base64'));
+  }
+  return blobCache.get(existing.sha).equals(desired.content);
+}
+
+function fileSyncDeletionCandidates(mappings, desired, remoteFiles) {
+  const deleted = new Map();
+  for (const mapping of mappings.filter(item => item.delete)) {
+    const sourceIsDirectory = fs.lstatSync(mapping.source).isDirectory();
+    if (!sourceIsDirectory) {
+      throw new Error(`file-sync mapping '${mapping.name}' uses delete but its source is not a directory`);
+    }
+    const prefix = mapping.target ? `${mapping.target}/` : '';
+    for (const [remotePath, remote] of remoteFiles) {
+      if (remotePath !== mapping.target && !remotePath.startsWith(prefix)) continue;
+      const relativePath = remotePath === mapping.target ? '' : remotePath.slice(prefix.length);
+      if (!desired.has(remotePath) && (!relativePath || !isFileSyncIgnored(mapping.ignore, relativePath))) {
+        deleted.set(remotePath, remote);
+      }
+    }
+  }
+  return deleted;
+}
+
+/** Sync one file-sync group through the Git Data API, preserving Git modes and symlinks. */
+export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authenticatedLogin) {
+  const [owner, repoName] = repo.split('/');
+  const group = mappings[0]?.group || DEFAULT_FILE_SYNC_GROUP;
+  const branchName = fileSyncBranchName(group);
+  const prTitle = fileSyncPrTitle(group, mappings);
+  if (!owner || !repoName)
+    return { repository: repo, success: false, error: 'Invalid repository format. Expected "owner/repo"', dryRun };
+
+  try {
+    const desired = buildFileSyncDesiredEntries(mappings);
+    const { data: repoData } = await octokit.rest.repos.get({ owner, repo: repoName });
+    const defaultBranch = repoData.default_branch;
+    const { data: pulls } = await octokit.rest.pulls.list({
+      owner,
+      repo: repoName,
+      state: 'open',
+      head: `${owner}:${branchName}`,
+      per_page: 100
+    });
+    const existingPr = pulls[0];
+    const blobCache = new Map();
+    const changesFor = async remoteFiles => {
+      const changes = [];
+      for (const [targetPath, entry] of desired) {
+        if (!(await equalGitFile(octokit, owner, repoName, remoteFiles.get(targetPath), entry, blobCache))) {
+          changes.push({ path: targetPath, ...entry, isNew: !remoteFiles.has(targetPath) });
+        }
+      }
+      const deletions = fileSyncDeletionCandidates(mappings, desired, remoteFiles);
+      for (const [targetPath, entry] of deletions)
+        changes.push({ path: targetPath, mode: entry.mode, type: 'blob', sha: null, deleted: true });
+      return changes;
+    };
+
+    // Only close a sync PR after establishing that the default branch already has the desired state.
+    const defaultBase = await getGitCommitAndTree(octokit, owner, repoName, defaultBranch);
+    const defaultFiles = await getGitTreeFiles(octokit, owner, repoName, defaultBase.treeSha);
+    const defaultChanges = await changesFor(defaultFiles);
+
+    if (defaultChanges.length === 0) {
+      const stale = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
+      if (stale?.action === 'closed' || stale?.action === 'would-close') {
+        return {
+          repository: repo,
+          success: true,
+          fileSync: stale.action === 'closed' ? 'stale-pr-closed' : 'would-close-stale-pr',
+          message: stale.message,
+          prNumber: stale.prNumber,
+          prUrl: stale.prUrl,
+          dryRun
+        };
+      }
+      return {
+        repository: repo,
+        success: true,
+        fileSync: existingPr ? 'pr-up-to-date' : 'unchanged',
+        message: existingPr
+          ? `File sync group '${group}' is already up to date in PR #${existingPr.number}`
+          : `File sync group '${group}' is already up to date`,
+        prNumber: existingPr?.number,
+        prUrl: existingPr?.html_url,
+        dryRun
+      };
+    }
+
+    const base = existingPr ? await getGitCommitAndTree(octokit, owner, repoName, branchName) : defaultBase;
+    const remoteFiles = existingPr ? await getGitTreeFiles(octokit, owner, repoName, base.treeSha) : defaultFiles;
+    const changes = existingPr ? await changesFor(remoteFiles) : defaultChanges;
+
+    if (changes.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        fileSync: 'pr-up-to-date',
+        message: `File sync group '${group}' is already up to date in PR #${existingPr.number}`,
+        prNumber: existingPr.number,
+        prUrl: existingPr.html_url,
+        dryRun
+      };
+    }
+
+    const created = changes.filter(change => change.isNew).length;
+    const removed = changes.filter(change => change.deleted).length;
+    if (dryRun)
+      return {
+        repository: repo,
+        success: true,
+        fileSync: existingPr ? 'would-update-pr' : 'would-create',
+        message: `Would sync ${changes.length} file(s) for group '${group}' (${created} added, ${changes.length - created - removed} updated, ${removed} deleted)`,
+        dryRun
+      };
+
+    const tree = [];
+    for (const change of changes) {
+      if (change.deleted) {
+        tree.push({ path: change.path, mode: change.mode, type: 'blob', sha: null });
+      } else {
+        const { data: blob } = await octokit.rest.git.createBlob({
+          owner,
+          repo: repoName,
+          content: change.content.toString('base64'),
+          encoding: 'base64'
+        });
+        tree.push({ path: change.path, mode: change.mode, type: 'blob', sha: blob.sha });
+      }
+    }
+    const { data: newTree } = await octokit.rest.git.createTree({
+      owner,
+      repo: repoName,
+      base_tree: base.treeSha,
+      tree
+    });
+    const { data: commit } = await octokit.rest.git.createCommit({
+      owner,
+      repo: repoName,
+      message: prTitle,
+      tree: newTree.sha,
+      parents: [base.commitSha]
+    });
+    if (existingPr) {
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: commit.sha,
+        force: false
+      });
+      return {
+        repository: repo,
+        success: true,
+        fileSync: 'pr-updated',
+        message: `Updated file sync group '${group}' in PR #${existingPr.number}`,
+        prNumber: existingPr.number,
+        prUrl: existingPr.html_url,
+        dryRun
+      };
+    }
+    try {
+      await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commit.sha });
+    } catch (error) {
+      if (error.status !== 422) throw error;
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: commit.sha,
+        force: true
+      });
+    }
+    const body = `Syncs the configured file-sync group **${group}**.\n\n**Mappings:**\n${mappings
+      .map(mapping => `- ${mapping.name}`)
+      .join('\n')}\n\n**Changes:**\n${changes
+      .map(change => `- ${change.deleted ? 'Delete' : change.isNew ? 'Add' : 'Update'} \`${change.path}\``)
+      .join('\n')}`;
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo: repoName,
+      title: prTitle,
+      head: branchName,
+      base: defaultBranch,
+      body
+    });
+    return {
+      repository: repo,
+      success: true,
+      fileSync: 'created',
+      message: `Synced ${changes.length} file(s) for group '${group}' via PR #${pr.number}`,
+      prNumber: pr.number,
+      prUrl: pr.html_url,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync file-sync group '${group}': ${error.message}`,
+      dryRun
+    };
   }
 }
 
@@ -4737,6 +5121,18 @@ export async function run() {
     const workflowFiles = workflowFilesInput ? parseMultiValueInput(workflowFilesInput) : null;
     const workflowFilesPrTitle = core.getInput('workflow-files-pr-title') || 'chore: sync workflow configuration';
 
+    // Get direct file-sync settings
+    const fileSyncSource = core.getInput('file-sync-source');
+    const fileSyncTarget = core.getInput('file-sync-target');
+    if (Boolean(fileSyncSource) !== Boolean(fileSyncTarget)) {
+      throw new Error('file-sync-source and file-sync-target must be provided together');
+    }
+    const globalFileSync = fileSyncSource
+      ? parseFileSyncConfig([
+          { name: path.posix.basename(fileSyncTarget), source: fileSyncSource, target: fileSyncTarget }
+        ])
+      : [];
+
     // Get autolinks settings
     const autolinksFile = core.getInput('autolinks-file');
 
@@ -4794,6 +5190,7 @@ export async function run() {
       rulesetsFiles.length > 0 ||
       pullRequestTemplate ||
       (workflowFiles && workflowFiles.length > 0) ||
+      globalFileSync.length > 0 ||
       autolinksFile ||
       globalEnvironments.length > 0 ||
       copilotInstructionsMd ||
@@ -4801,7 +5198,7 @@ export async function run() {
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -5115,6 +5512,18 @@ export async function run() {
         return null;
       })();
 
+      // A per-repository file-sync mapping overrides the direct, single-file input.
+      let repoFileSync = globalFileSync;
+      if (repoConfig['file-sync'] !== undefined) {
+        try {
+          repoFileSync = parseFileSyncConfig(repoConfig['file-sync']);
+        } catch (error) {
+          core.warning(
+            `Invalid file-sync configuration for ${repo}: ${error.message}. Skipping file sync for this repo.`
+          );
+        }
+      }
+
       // Handle repo-specific security settings
       const repoSecuritySettings = {
         secretScanning: coerceBooleanConfig(
@@ -5405,6 +5814,33 @@ export async function run() {
           result.subResults.push(
             createSubResult('workflow-files-sync', SubResultStatus.WARNING, 'Workflow files sync produced a warning')
           );
+        }
+      }
+
+      if (repoFileSync.length > 0) {
+        core.info(`  📁 Checking generic file sync...`);
+        result.fileSync = [];
+        for (const [group, mappings] of getFileSyncGroups(repoFileSync)) {
+          const fileSyncResult = await syncFileSyncGroup(octokit, repo, mappings, dryRun, authenticatedLogin);
+          result.fileSync.push(fileSyncResult);
+          if (fileSyncResult.success) {
+            core.info(`  📁 ${fileSyncResult.message}`);
+            if (fileSyncResult.fileSync && fileSyncResult.fileSync !== 'unchanged') {
+              result.subResults.push(
+                createSubResult('file-sync', statusForSync(fileSyncResult.fileSync), fileSyncResult.message, {
+                  syncStatus: fileSyncResult.fileSync,
+                  prNumber: fileSyncResult.prNumber,
+                  prUrl: fileSyncResult.prUrl
+                })
+              );
+            }
+          } else {
+            result.hasWarnings = true;
+            core.warning(`  ⚠️  ${fileSyncResult.error}`);
+            result.subResults.push(
+              createSubResult('file-sync', SubResultStatus.WARNING, `File sync group '${group}' produced a warning`)
+            );
+          }
         }
       }
 
