@@ -61,7 +61,13 @@ const mockOctokit = {
       getRef: jest.fn(),
       createRef: jest.fn(),
       updateRef: jest.fn(),
-      deleteRef: jest.fn()
+      deleteRef: jest.fn(),
+      getCommit: jest.fn(),
+      getTree: jest.fn(),
+      getBlob: jest.fn(),
+      createBlob: jest.fn(),
+      createTree: jest.fn(),
+      createCommit: jest.fn()
     },
     issues: {
       createComment: jest.fn()
@@ -90,7 +96,10 @@ const mockOctokit = {
 
 // Mock fs module - use a real implementation that tracks test content
 const mockFs = {
-  readFileSync: jest.fn()
+  readFileSync: jest.fn(),
+  lstatSync: jest.fn(),
+  readdirSync: jest.fn(),
+  readlinkSync: jest.fn()
 };
 
 // Mock yaml module - use a real implementation that tracks test content
@@ -172,6 +181,10 @@ inputs:
     description: 'Workflow files'
   workflow-files-pr-title:
     description: 'Workflow files PR title'
+  file-sync-source:
+    description: 'File sync source'
+  file-sync-target:
+    description: 'File sync target'
   autolinks-file:
     description: 'Autolinks file'
   environments:
@@ -250,6 +263,8 @@ const mockActionYmlParsed = {
     'pull-request-template-pr-title': { description: 'Pull request template PR title' },
     'workflow-files': { description: 'Workflow files' },
     'workflow-files-pr-title': { description: 'Workflow files PR title' },
+    'file-sync-source': { description: 'File sync source' },
+    'file-sync-target': { description: 'File sync target' },
     'autolinks-file': { description: 'Autolinks file' },
     environments: { description: 'Comma-separated environment names' },
     'environments-file': { description: 'Environments file' },
@@ -363,7 +378,9 @@ const {
   replaceTemplateVariables,
   resolveFilePath,
   parseMultiValueInput,
-  applyBasePathToRepoConfig
+  applyBasePathToRepoConfig,
+  parseFileSyncConfig,
+  syncFileSyncGroup
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -1180,6 +1197,134 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const config = { repo: 'owner/repo1', 'rulesets-file': ['a.json', 'b.json'] };
       const result = applyBasePathToRepoConfig(config, './base/');
       expect(result['rulesets-file']).toEqual(['base/a.json', 'base/b.json']);
+    });
+
+    test('should resolve file-sync sources but not destination paths', () => {
+      const config = {
+        repo: 'owner/repo1',
+        'file-sync': [{ name: 'Renovate', source: 'templates/renovate.json', target: '.github/renovate.json' }]
+      };
+      const result = applyBasePathToRepoConfig(config, './base/');
+      expect(result['file-sync'][0]).toEqual({
+        name: 'Renovate',
+        source: 'base/templates/renovate.json',
+        target: '.github/renovate.json'
+      });
+    });
+  });
+
+  describe('file-sync', () => {
+    test('validates mappings and normalizes a repository-root target', () => {
+      expect(
+        parseFileSyncConfig([{ name: 'Shared files', source: './template', target: '.', ignore: ['local/**'] }])
+      ).toEqual([
+        {
+          name: 'Shared files',
+          source: './template',
+          target: '',
+          group: 'file-sync',
+          delete: false,
+          ignore: ['local/**']
+        }
+      ]);
+    });
+
+    test('rejects invalid mappings before target repositories are changed', () => {
+      expect(() => parseFileSyncConfig([{ source: './template', target: '.' }])).toThrow('requires a non-empty');
+      expect(() => parseFileSyncConfig({ name: 'bad' })).toThrow('file-sync must be an array');
+    });
+
+    test('uses a Git tree commit to update modes, delete unmanaged files, and retain ignored files', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Shared files', source: './template', target: '.', delete: true, ignore: ['ignored.txt'] }
+      ]);
+      const directory = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100755 };
+      mockFs.lstatSync.mockImplementation(filePath => (filePath === './template' ? directory : file));
+      mockFs.readdirSync.mockReturnValue([
+        { name: 'script', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false }
+      ]);
+      mockFs.readFileSync.mockImplementation(filePath =>
+        filePath === 'template/script' ? Buffer.from('#!/bin/sh\necho ok\n') : ''
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef.mockResolvedValue({ data: { object: { sha: 'base-commit' } } });
+      mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+      mockOctokit.rest.git.getTree.mockResolvedValue({
+        data: {
+          tree: [
+            { path: 'script', type: 'blob', mode: '100644', sha: 'old-script' },
+            { path: 'remove.txt', type: 'blob', mode: '100644', sha: 'remove' },
+            { path: 'ignored.txt', type: 'blob', mode: '100644', sha: 'ignored' }
+          ]
+        }
+      });
+      mockOctokit.rest.git.createBlob.mockResolvedValue({ data: { sha: 'new-script' } });
+      mockOctokit.rest.git.createTree.mockResolvedValue({ data: { sha: 'new-tree' } });
+      mockOctokit.rest.git.createCommit.mockResolvedValue({ data: { sha: 'new-commit' } });
+      mockOctokit.rest.pulls.create.mockResolvedValue({ data: { number: 12, html_url: 'https://example.test/pr/12' } });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: true, fileSync: 'created', prNumber: 12 });
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'chore: sync Shared files', head: 'file-sync' })
+      );
+      expect(mockOctokit.rest.git.createCommit).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'chore: sync Shared files' })
+      );
+      expect(mockOctokit.rest.git.createTree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tree: expect.arrayContaining([
+            expect.objectContaining({ path: 'script', mode: '100755', sha: 'new-script' }),
+            expect.objectContaining({ path: 'remove.txt', sha: null })
+          ])
+        })
+      );
+      expect(mockOctokit.rest.git.createTree.mock.calls[0][0].tree).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: 'ignored.txt', sha: null })])
+      );
+    });
+
+    test('keeps an existing sync PR open when only its branch has the desired files', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [{ number: 19, html_url: 'https://example.test/pr/19' }]
+      });
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) =>
+        Promise.resolve({ data: { object: { sha: ref === 'heads/main' ? 'default-commit' : 'pr-commit' } } })
+      );
+      mockOctokit.rest.git.getCommit.mockImplementation(({ commit_sha }) =>
+        Promise.resolve({ data: { tree: { sha: commit_sha === 'default-commit' ? 'default-tree' : 'pr-tree' } } })
+      );
+      mockOctokit.rest.git.getTree.mockImplementation(({ tree_sha }) =>
+        Promise.resolve({
+          data: {
+            tree:
+              tree_sha === 'default-tree'
+                ? []
+                : [{ path: 'renovate.json', type: 'blob', mode: '100644', sha: 'desired-blob' }]
+          }
+        })
+      );
+      mockOctokit.rest.git.getBlob.mockResolvedValue({
+        data: { content: Buffer.from('{"extends": []}\n').toString('base64') }
+      });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: true, fileSync: 'pr-up-to-date', prNumber: 19 });
+      expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
     });
   });
 
@@ -3850,7 +3995,56 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+      );
+    });
+
+    test('should require both direct file-sync inputs', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'file-sync-source': './config/renovate.json'
+        };
+        return inputs[name] || '';
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        'Action failed with error: file-sync-source and file-sync-target must be provided together'
+      );
+    });
+
+    test('should sync one file from direct file-sync inputs', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'file-sync-source': './config/renovate.json',
+          'file-sync-target': 'renovate.json'
+        };
+        return inputs[name] || '';
+      });
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockImplementation(filePath =>
+        filePath === './config/renovate.json' ? Buffer.from('{"extends": []}\n') : ''
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData({ default_branch: 'main' }) });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef.mockResolvedValue({ data: { object: { sha: 'base-commit' } } });
+      mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+      mockOctokit.rest.git.getTree.mockResolvedValue({ data: { tree: [] } });
+      mockOctokit.rest.git.createBlob.mockResolvedValue({ data: { sha: 'new-blob' } });
+      mockOctokit.rest.git.createTree.mockResolvedValue({ data: { sha: 'new-tree' } });
+      mockOctokit.rest.git.createCommit.mockResolvedValue({ data: { sha: 'new-commit' } });
+      mockOctokit.rest.pulls.create.mockResolvedValue({ data: { number: 12, html_url: 'https://example.test/pr/12' } });
+
+      await run();
+
+      expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'chore: sync renovate.json', head: 'file-sync', base: 'main' })
       );
     });
 
