@@ -12,6 +12,7 @@
 
 import * as core from '@actions/core';
 import { Octokit } from '@octokit/rest';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import ignore from 'ignore';
 import * as path from 'path';
@@ -1906,7 +1907,8 @@ function normalizeRepositoryPath(target, fieldName = 'target') {
     throw new Error(`file-sync ${fieldName} must be a relative repository path: ${target}`);
   }
 
-  return path.posix.normalize(value).replace(/^\.\//, '');
+  const normalized = path.posix.normalize(value).replace(/^\.\//, '').replace(/\/+$/, '');
+  return normalized === '.' ? '' : normalized;
 }
 
 /**
@@ -1918,7 +1920,7 @@ export function parseFileSyncConfig(value) {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new Error('file-sync must be an array of mappings');
 
-  return value.map((mapping, index) => {
+  const mappings = value.map((mapping, index) => {
     const label = `file-sync mapping #${index + 1}`;
     if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
       throw new Error(`${label} must be an object`);
@@ -1936,6 +1938,9 @@ export function parseFileSyncConfig(value) {
     if (mapping.delete !== undefined && typeof mapping.delete !== 'boolean') {
       throw new Error(`${label} 'delete' must be a boolean when specified`);
     }
+    if (mapping['allow-root-delete'] !== undefined && typeof mapping['allow-root-delete'] !== 'boolean') {
+      throw new Error(`${label} 'allow-root-delete' must be a boolean when specified`);
+    }
     if (
       mapping.ignore !== undefined &&
       (!Array.isArray(mapping.ignore) || mapping.ignore.some(p => typeof p !== 'string'))
@@ -1943,15 +1948,34 @@ export function parseFileSyncConfig(value) {
       throw new Error(`${label} 'ignore' must be an array of .gitignore patterns`);
     }
 
+    const target = normalizeRepositoryPath(mapping.target);
+    if (mapping.delete === true && target === '' && mapping['allow-root-delete'] !== true) {
+      throw new Error(`${label} requires 'allow-root-delete: true' when using delete at the repository root`);
+    }
+
     return {
       name: mapping.name.trim(),
       source: mapping.source,
-      target: normalizeRepositoryPath(mapping.target),
+      target,
       group: group.trim(),
       delete: mapping.delete === true,
       ignore: mapping.ignore || []
     };
   });
+
+  const groupsByBranch = new Map();
+  for (const mapping of mappings) {
+    const branchName = fileSyncBranchName(mapping.group);
+    const existingGroup = groupsByBranch.get(branchName);
+    if (existingGroup && existingGroup !== mapping.group) {
+      throw new Error(
+        `file-sync groups '${existingGroup}' and '${mapping.group}' both generate branch '${branchName}'; use distinct group names`
+      );
+    }
+    groupsByBranch.set(branchName, mapping.group);
+  }
+
+  return mappings;
 }
 
 function getFileSyncGroups(mappings) {
@@ -2050,19 +2074,29 @@ async function getGitCommitAndTree(octokit, owner, repo, ref) {
   return { commitSha: gitRef.object.sha, treeSha: commit.tree.sha };
 }
 
+async function getGitRefIfExists(octokit, owner, repo, ref) {
+  try {
+    const { data } = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${ref}` });
+    return data;
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
+}
+
 async function getGitTreeFiles(octokit, owner, repo, treeSha) {
   const { data } = await octokit.rest.git.getTree({ owner, repo, tree_sha: treeSha, recursive: 'true' });
   if (data.truncated) throw new Error('Target repository tree is too large to safely sync files');
   return new Map(data.tree.filter(entry => entry.type === 'blob').map(entry => [entry.path, entry]));
 }
 
-async function equalGitFile(octokit, owner, repo, existing, desired, blobCache) {
+function gitBlobSha(content) {
+  return createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex');
+}
+
+function equalGitFile(existing, desired) {
   if (!existing || existing.type !== 'blob' || existing.mode !== desired.mode) return false;
-  if (!blobCache.has(existing.sha)) {
-    const { data } = await octokit.rest.git.getBlob({ owner, repo, file_sha: existing.sha });
-    blobCache.set(existing.sha, Buffer.from(data.content, 'base64'));
-  }
-  return blobCache.get(existing.sha).equals(desired.content);
+  return existing.sha === gitBlobSha(desired.content);
 }
 
 function fileSyncDeletionCandidates(mappings, desired, remoteFiles) {
@@ -2104,12 +2138,20 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
       head: `${owner}:${branchName}`,
       per_page: 100
     });
+    if (pulls.length > 0 && !authenticatedLogin) {
+      throw new Error(`Cannot verify ownership of existing PR #${pulls[0].number} on branch '${branchName}'`);
+    }
+    const unexpectedPr = pulls.find(pr => pr.user?.login !== authenticatedLogin || pr.base?.ref !== defaultBranch);
+    if (unexpectedPr) {
+      throw new Error(
+        `Refusing to update branch '${branchName}' because PR #${unexpectedPr.number} is owned by '${unexpectedPr.user?.login || 'unknown'}' and targets '${unexpectedPr.base?.ref || 'unknown'}', expected '${authenticatedLogin}' and '${defaultBranch}'`
+      );
+    }
     const existingPr = pulls[0];
-    const blobCache = new Map();
-    const changesFor = async remoteFiles => {
+    const changesFor = remoteFiles => {
       const changes = [];
       for (const [targetPath, entry] of desired) {
-        if (!(await equalGitFile(octokit, owner, repoName, remoteFiles.get(targetPath), entry, blobCache))) {
+        if (!equalGitFile(remoteFiles.get(targetPath), entry)) {
           changes.push({ path: targetPath, ...entry, isNew: !remoteFiles.has(targetPath) });
         }
       }
@@ -2122,7 +2164,7 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
     // Only close a sync PR after establishing that the default branch already has the desired state.
     const defaultBase = await getGitCommitAndTree(octokit, owner, repoName, defaultBranch);
     const defaultFiles = await getGitTreeFiles(octokit, owner, repoName, defaultBase.treeSha);
-    const defaultChanges = await changesFor(defaultFiles);
+    const defaultChanges = changesFor(defaultFiles);
 
     if (defaultChanges.length === 0) {
       const stale = await closeStaleActionPrs(octokit, repo, branchName, dryRun, authenticatedLogin);
@@ -2152,7 +2194,7 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
 
     const base = existingPr ? await getGitCommitAndTree(octokit, owner, repoName, branchName) : defaultBase;
     const remoteFiles = existingPr ? await getGitTreeFiles(octokit, owner, repoName, base.treeSha) : defaultFiles;
-    const changes = existingPr ? await changesFor(remoteFiles) : defaultChanges;
+    const changes = existingPr ? changesFor(remoteFiles) : defaultChanges;
 
     if (changes.length === 0) {
       return {
@@ -2164,6 +2206,43 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
         prUrl: existingPr.html_url,
         dryRun
       };
+    }
+
+    let reusableBranchSha = null;
+    if (!existingPr) {
+      const existingBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
+      if (existingBranch && !authenticatedLogin) {
+        throw new Error(`Cannot verify ownership of existing branch '${branchName}'`);
+      }
+      if (existingBranch) {
+        const { data: closedPulls } = await octokit.rest.pulls.list({
+          owner,
+          repo: repoName,
+          state: 'closed',
+          head: `${owner}:${branchName}`,
+          base: defaultBranch,
+          sort: 'updated',
+          direction: 'desc',
+          per_page: 100
+        });
+        const ownedClosedPr = closedPulls.find(
+          pr =>
+            pr.user?.login === authenticatedLogin &&
+            pr.base?.ref === defaultBranch &&
+            pr.head?.sha === existingBranch.object.sha
+        );
+        if (ownedClosedPr) {
+          reusableBranchSha = existingBranch.object.sha;
+        } else {
+          throw new Error(
+            `Refusing to overwrite existing branch '${branchName}' because it has no recognized file-sync PR`
+          );
+        }
+      }
+    }
+
+    if (reusableBranchSha && dryRun) {
+      core.info(`  ✓ Reusing action-owned branch ${branchName} from a closed file-sync PR`);
     }
 
     const created = changes.filter(change => change.isNew).length;
@@ -2222,10 +2301,13 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
         dryRun
       };
     }
-    try {
-      await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commit.sha });
-    } catch (error) {
-      if (error.status !== 422) throw error;
+    if (reusableBranchSha) {
+      const currentBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
+      if (currentBranch?.object.sha !== reusableBranchSha) {
+        throw new Error(
+          `Refusing to overwrite file-sync branch '${branchName}' because it changed after the ownership check`
+        );
+      }
       await octokit.rest.git.updateRef({
         owner,
         repo: repoName,
@@ -2233,6 +2315,19 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
         sha: commit.sha,
         force: true
       });
+    } else {
+      try {
+        await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commit.sha });
+      } catch (error) {
+        if (error.status !== 422) throw error;
+        const racedBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
+        if (racedBranch) {
+          throw new Error(
+            `Refusing to overwrite file-sync branch '${branchName}' because it appeared after the safety check`
+          );
+        }
+        throw new Error(`Failed to create file-sync branch '${branchName}': ${error.message}`);
+      }
     }
     const body = `Syncs the configured file-sync group **${group}**.\n\n**Mappings:**\n${mappings
       .map(mapping => `- ${mapping.name}`)
@@ -5518,6 +5613,7 @@ export async function run() {
         try {
           repoFileSync = parseFileSyncConfig(repoConfig['file-sync']);
         } catch (error) {
+          repoFileSync = [];
           core.warning(
             `Invalid file-sync configuration for ${repo}: ${error.message}. Skipping file sync for this repo.`
           );

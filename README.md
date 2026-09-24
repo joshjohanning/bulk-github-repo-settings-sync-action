@@ -480,7 +480,6 @@ repos:
       - name: Shared repository files
         source: templates/base
         target: .
-        delete: true
         ignore:
           - local/**
           - '!local/README.md'
@@ -491,8 +490,12 @@ repos:
 - Mappings in the same optional `group` are included in one pull request. Mappings without a group use the `file-sync` group.
 - A repository's `file-sync` configuration replaces the `file-sync-source` and `file-sync-target` inputs for that repository.
 - `delete: true` is valid only for directory sources and removes files below that mapping's target that are not in the source directory.
+- Using `delete: true` with `target: .` requires `allow-root-delete: true`.
 - `ignore` uses `.gitignore` patterns, including negation rules. Ignored files are neither changed nor deleted.
 - Executable permissions and symbolic links are preserved.
+
+> [!CAUTION]
+> Repository-root deletion can remove every file that is not present in the source template or matched by `ignore`. Use `allow-root-delete: true` only when the source directory is intended to represent the complete managed repository root.
 
 ### Syncing Workflow Files
 
