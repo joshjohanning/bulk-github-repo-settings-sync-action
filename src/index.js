@@ -1907,7 +1907,8 @@ function normalizeRepositoryPath(target, fieldName = 'target') {
     throw new Error(`file-sync ${fieldName} must be a relative repository path: ${target}`);
   }
 
-  return path.posix.normalize(value).replace(/^\.\//, '');
+  const normalized = path.posix.normalize(value).replace(/^\.\//, '').replace(/\/+$/, '');
+  return normalized === '.' ? '' : normalized;
 }
 
 /**
@@ -2137,12 +2138,13 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
       head: `${owner}:${branchName}`,
       per_page: 100
     });
-    const unexpectedPr = pulls.find(
-      pr => !authenticatedLogin || pr.user?.login !== authenticatedLogin || pr.base?.ref !== defaultBranch
-    );
+    if (pulls.length > 0 && !authenticatedLogin) {
+      throw new Error(`Cannot verify ownership of existing PR #${pulls[0].number} on branch '${branchName}'`);
+    }
+    const unexpectedPr = pulls.find(pr => pr.user?.login !== authenticatedLogin || pr.base?.ref !== defaultBranch);
     if (unexpectedPr) {
       throw new Error(
-        `Refusing to update branch '${branchName}' because PR #${unexpectedPr.number} was not created by ${authenticatedLogin || 'the authenticated account'} against '${defaultBranch}'`
+        `Refusing to update branch '${branchName}' because PR #${unexpectedPr.number} is owned by '${unexpectedPr.user?.login || 'unknown'}' and targets '${unexpectedPr.base?.ref || 'unknown'}', expected '${authenticatedLogin}' and '${defaultBranch}'`
       );
     }
     const existingPr = pulls[0];
@@ -2206,13 +2208,41 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
       };
     }
 
+    let reusableBranchSha = null;
     if (!existingPr) {
       const existingBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
-      if (existingBranch) {
-        throw new Error(
-          `Refusing to overwrite existing branch '${branchName}' because it has no recognized open file-sync PR`
-        );
+      if (existingBranch && !authenticatedLogin) {
+        throw new Error(`Cannot verify ownership of existing branch '${branchName}'`);
       }
+      if (existingBranch) {
+        const { data: closedPulls } = await octokit.rest.pulls.list({
+          owner,
+          repo: repoName,
+          state: 'closed',
+          head: `${owner}:${branchName}`,
+          base: defaultBranch,
+          sort: 'updated',
+          direction: 'desc',
+          per_page: 100
+        });
+        const ownedClosedPr = closedPulls.find(
+          pr =>
+            pr.user?.login === authenticatedLogin &&
+            pr.base?.ref === defaultBranch &&
+            pr.head?.sha === existingBranch.object.sha
+        );
+        if (ownedClosedPr) {
+          reusableBranchSha = existingBranch.object.sha;
+        } else {
+          throw new Error(
+            `Refusing to overwrite existing branch '${branchName}' because it has no recognized file-sync PR`
+          );
+        }
+      }
+    }
+
+    if (reusableBranchSha && dryRun) {
+      core.info(`  ✓ Reusing action-owned branch ${branchName} from a closed file-sync PR`);
     }
 
     const created = changes.filter(change => change.isNew).length;
@@ -2271,11 +2301,33 @@ export async function syncFileSyncGroup(octokit, repo, mappings, dryRun, authent
         dryRun
       };
     }
-    try {
-      await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commit.sha });
-    } catch (error) {
-      if (error.status !== 422) throw error;
-      throw new Error(`Refusing to overwrite file-sync branch '${branchName}' because it already exists`);
+    if (reusableBranchSha) {
+      const currentBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
+      if (currentBranch?.object.sha !== reusableBranchSha) {
+        throw new Error(
+          `Refusing to overwrite file-sync branch '${branchName}' because it changed after the ownership check`
+        );
+      }
+      await octokit.rest.git.updateRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branchName}`,
+        sha: commit.sha,
+        force: true
+      });
+    } else {
+      try {
+        await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commit.sha });
+      } catch (error) {
+        if (error.status !== 422) throw error;
+        const racedBranch = await getGitRefIfExists(octokit, owner, repoName, branchName);
+        if (racedBranch) {
+          throw new Error(
+            `Refusing to overwrite file-sync branch '${branchName}' because it appeared after the safety check`
+          );
+        }
+        throw new Error(`Failed to create file-sync branch '${branchName}': ${error.message}`);
+      }
     }
     const body = `Syncs the configured file-sync group **${group}**.\n\n**Mappings:**\n${mappings
       .map(mapping => `- ${mapping.name}`)
@@ -5561,6 +5613,7 @@ export async function run() {
         try {
           repoFileSync = parseFileSyncConfig(repoConfig['file-sync']);
         } catch (error) {
+          repoFileSync = [];
           core.warning(
             `Invalid file-sync configuration for ${repo}: ${error.message}. Skipping file sync for this repo.`
           );

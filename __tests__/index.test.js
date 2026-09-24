@@ -1217,7 +1217,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
   describe('file-sync', () => {
     test('validates mappings and normalizes a repository-root target', () => {
       expect(
-        parseFileSyncConfig([{ name: 'Shared files', source: './template', target: '.', ignore: ['local/**'] }])
+        parseFileSyncConfig([
+          { name: 'Shared files', source: './template', target: './.', ignore: ['local/**'] },
+          { name: 'Managed files', source: './managed', target: 'managed/' }
+        ])
       ).toEqual([
         {
           name: 'Shared files',
@@ -1226,6 +1229,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
           group: 'file-sync',
           delete: false,
           ignore: ['local/**']
+        },
+        {
+          name: 'Managed files',
+          source: './managed',
+          target: 'managed',
+          group: 'file-sync',
+          delete: false,
+          ignore: []
         }
       ]);
     });
@@ -1235,6 +1246,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(() => parseFileSyncConfig({ name: 'bad' })).toThrow('file-sync must be an array');
       expect(() =>
         parseFileSyncConfig([{ name: 'Shared files', source: './template', target: '.', delete: true }])
+      ).toThrow(`requires 'allow-root-delete: true'`);
+      expect(() =>
+        parseFileSyncConfig([{ name: 'Shared files', source: './template', target: './.', delete: true }])
       ).toThrow(`requires 'allow-root-delete: true'`);
     });
 
@@ -1391,6 +1405,33 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
     });
 
+    test('refuses to update an open pull request when authenticated identity is unknown', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 22,
+            html_url: 'https://example.test/pr/22',
+            user: { login: 'bot' },
+            base: { ref: 'main' }
+          }
+        ]
+      });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, '');
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(`Cannot verify ownership of existing PR #22`);
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
+    });
+
     test('refuses to update an owned pull request targeting a non-default branch', async () => {
       const mappings = parseFileSyncConfig([
         { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
@@ -1441,6 +1482,50 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
     });
 
+    test('reuses an unchanged action-owned branch from a closed pull request', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockImplementation(({ state }) =>
+        Promise.resolve({
+          data:
+            state === 'closed'
+              ? [
+                  {
+                    number: 18,
+                    user: { login: 'bot' },
+                    base: { ref: 'main' },
+                    head: { sha: 'closed-pr-branch' }
+                  }
+                ]
+              : []
+        })
+      );
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) =>
+        Promise.resolve({
+          data: { object: { sha: ref === 'heads/main' ? 'base-commit' : 'closed-pr-branch' } }
+        })
+      );
+      mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+      mockOctokit.rest.git.getTree.mockResolvedValue({ data: { tree: [] } });
+      mockOctokit.rest.git.createBlob.mockResolvedValue({ data: { sha: 'new-blob' } });
+      mockOctokit.rest.git.createTree.mockResolvedValue({ data: { sha: 'new-tree' } });
+      mockOctokit.rest.git.createCommit.mockResolvedValue({ data: { sha: 'new-commit' } });
+      mockOctokit.rest.pulls.create.mockResolvedValue({ data: { number: 23, html_url: 'https://example.test/pr/23' } });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: true, fileSync: 'created', prNumber: 23 });
+      expect(mockOctokit.rest.git.updateRef).toHaveBeenCalledWith(
+        expect.objectContaining({ ref: 'heads/file-sync', sha: 'new-commit', force: true })
+      );
+      expect(mockOctokit.rest.git.createRef).not.toHaveBeenCalled();
+    });
+
     test('refuses to overwrite a branch created after the preflight check', async () => {
       const mappings = parseFileSyncConfig([
         { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
@@ -1450,11 +1535,16 @@ describe('Bulk GitHub Repository Settings Action', () => {
       mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
       mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
       mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      let branchChecks = 0;
       mockOctokit.rest.git.getRef.mockImplementation(({ ref }) => {
         if (ref === 'heads/file-sync') {
-          const error = new Error('Not found');
-          error.status = 404;
-          return Promise.reject(error);
+          branchChecks++;
+          if (branchChecks === 1) {
+            const error = new Error('Not found');
+            error.status = 404;
+            return Promise.reject(error);
+          }
+          return Promise.resolve({ data: { object: { sha: 'raced-branch' } } });
         }
         return Promise.resolve({ data: { object: { sha: 'base-commit' } } });
       });
@@ -1470,7 +1560,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
 
       expect(result).toMatchObject({ success: false });
-      expect(result.error).toContain(`Refusing to overwrite file-sync branch 'file-sync' because it already exists`);
+      expect(result.error).toContain(
+        `Refusing to overwrite file-sync branch 'file-sync' because it appeared after the safety check`
+      );
       expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
       expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
     });
@@ -4201,6 +4293,36 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'chore: sync renovate.json', head: 'file-sync', base: 'main' })
       );
+    });
+
+    test('should skip global file sync when a repository override is invalid', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          'file-sync-source': './config/renovate.json',
+          'file-sync-target': 'renovate.json'
+        };
+        return inputs[name] || '';
+      });
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    file-sync: invalid');
+      setMockYamlContent({
+        repos: [
+          {
+            repo: 'owner/repo1',
+            'file-sync': [{ name: 'Root template', source: './template', target: '.', delete: true }]
+          }
+        ]
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData({ default_branch: 'main' }) });
+
+      await run();
+
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid file-sync configuration for owner/repo1')
+      );
+      expect(mockOctokit.rest.pulls.list).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
     });
 
     test('should allow topics as the only setting', async () => {
