@@ -1391,6 +1391,33 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
     });
 
+    test('refuses to update an owned pull request targeting a non-default branch', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 21,
+            html_url: 'https://example.test/pr/21',
+            user: { login: 'bot' },
+            base: { ref: 'release' }
+          }
+        ]
+      });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(`Refusing to update branch 'file-sync'`);
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
+    });
+
     test('refuses to overwrite an existing branch without an owned open pull request', async () => {
       const mappings = parseFileSyncConfig([
         { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
@@ -1411,6 +1438,40 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toMatchObject({ success: false });
       expect(result.error).toContain(`Refusing to overwrite existing branch 'file-sync'`);
       expect(mockOctokit.rest.git.createBlob).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+    });
+
+    test('refuses to overwrite a branch created after the preflight check', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) => {
+        if (ref === 'heads/file-sync') {
+          const error = new Error('Not found');
+          error.status = 404;
+          return Promise.reject(error);
+        }
+        return Promise.resolve({ data: { object: { sha: 'base-commit' } } });
+      });
+      mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+      mockOctokit.rest.git.getTree.mockResolvedValue({ data: { tree: [] } });
+      mockOctokit.rest.git.createBlob.mockResolvedValue({ data: { sha: 'new-blob' } });
+      mockOctokit.rest.git.createTree.mockResolvedValue({ data: { sha: 'new-tree' } });
+      mockOctokit.rest.git.createCommit.mockResolvedValue({ data: { sha: 'new-commit' } });
+      const branchExistsError = new Error('Reference already exists');
+      branchExistsError.status = 422;
+      mockOctokit.rest.git.createRef.mockRejectedValueOnce(branchExistsError);
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(`Refusing to overwrite file-sync branch 'file-sync' because it already exists`);
+      expect(mockOctokit.rest.git.createRef).toHaveBeenCalled();
       expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
     });
   });
