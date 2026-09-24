@@ -3,6 +3,7 @@
  */
 
 import { jest } from '@jest/globals';
+import { createHash } from 'crypto';
 
 // Mock the @actions/core module
 const mockCore = {
@@ -1232,11 +1233,30 @@ describe('Bulk GitHub Repository Settings Action', () => {
     test('rejects invalid mappings before target repositories are changed', () => {
       expect(() => parseFileSyncConfig([{ source: './template', target: '.' }])).toThrow('requires a non-empty');
       expect(() => parseFileSyncConfig({ name: 'bad' })).toThrow('file-sync must be an array');
+      expect(() =>
+        parseFileSyncConfig([{ name: 'Shared files', source: './template', target: '.', delete: true }])
+      ).toThrow(`requires 'allow-root-delete: true'`);
+    });
+
+    test('rejects groups that generate the same pull request branch', () => {
+      expect(() =>
+        parseFileSyncConfig([
+          { name: 'First', source: './first', target: 'first', group: 'Foo Bar' },
+          { name: 'Second', source: './second', target: 'second', group: 'foo-bar' }
+        ])
+      ).toThrow(`both generate branch 'file-sync-foo-bar'`);
     });
 
     test('uses a Git tree commit to update modes, delete unmanaged files, and retain ignored files', async () => {
       const mappings = parseFileSyncConfig([
-        { name: 'Shared files', source: './template', target: '.', delete: true, ignore: ['ignored.txt'] }
+        {
+          name: 'Shared files',
+          source: './template',
+          target: '.',
+          delete: true,
+          'allow-root-delete': true,
+          ignore: ['ignored.txt']
+        }
       ]);
       const directory = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
       const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100755 };
@@ -1249,7 +1269,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
       mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
       mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
-      mockOctokit.rest.git.getRef.mockResolvedValue({ data: { object: { sha: 'base-commit' } } });
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) => {
+        if (ref === 'heads/file-sync') {
+          const error = new Error('Not found');
+          error.status = 404;
+          return Promise.reject(error);
+        }
+        return Promise.resolve({ data: { object: { sha: 'base-commit' } } });
+      });
       mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
       mockOctokit.rest.git.getTree.mockResolvedValue({
         data: {
@@ -1291,12 +1318,24 @@ describe('Bulk GitHub Repository Settings Action', () => {
       const mappings = parseFileSyncConfig([
         { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
       ]);
+      const desiredContent = Buffer.from('{"extends": []}\n');
+      const desiredSha = createHash('sha1')
+        .update(`blob ${desiredContent.length}\0`)
+        .update(desiredContent)
+        .digest('hex');
       const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
       mockFs.lstatSync.mockReturnValue(file);
-      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockFs.readFileSync.mockReturnValue(desiredContent);
       mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
       mockOctokit.rest.pulls.list.mockResolvedValue({
-        data: [{ number: 19, html_url: 'https://example.test/pr/19' }]
+        data: [
+          {
+            number: 19,
+            html_url: 'https://example.test/pr/19',
+            user: { login: 'bot' },
+            base: { ref: 'main' }
+          }
+        ]
       });
       mockOctokit.rest.git.getRef.mockImplementation(({ ref }) =>
         Promise.resolve({ data: { object: { sha: ref === 'heads/main' ? 'default-commit' : 'pr-commit' } } })
@@ -1310,21 +1349,69 @@ describe('Bulk GitHub Repository Settings Action', () => {
             tree:
               tree_sha === 'default-tree'
                 ? []
-                : [{ path: 'renovate.json', type: 'blob', mode: '100644', sha: 'desired-blob' }]
+                : [{ path: 'renovate.json', type: 'blob', mode: '100644', sha: desiredSha }]
           }
         })
       );
-      mockOctokit.rest.git.getBlob.mockResolvedValue({
-        data: { content: Buffer.from('{"extends": []}\n').toString('base64') }
-      });
 
       const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
 
       expect(result).toMatchObject({ success: true, fileSync: 'pr-up-to-date', prNumber: 19 });
+      expect(mockOctokit.rest.git.getBlob).not.toHaveBeenCalled();
       expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
       expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
       expect(mockOctokit.rest.git.deleteRef).not.toHaveBeenCalled();
       expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
+    });
+
+    test('refuses to update an open pull request not owned by the authenticated account', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({
+        data: [
+          {
+            number: 20,
+            html_url: 'https://example.test/pr/20',
+            user: { login: 'someone-else' },
+            base: { ref: 'main' }
+          }
+        ]
+      });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(`Refusing to update branch 'file-sync'`);
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.createCommit).not.toHaveBeenCalled();
+    });
+
+    test('refuses to overwrite an existing branch without an owned open pull request', async () => {
+      const mappings = parseFileSyncConfig([
+        { name: 'Renovate configuration', source: './renovate.json', target: 'renovate.json' }
+      ]);
+      const file = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false, mode: 0o100644 };
+      mockFs.lstatSync.mockReturnValue(file);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('{"extends": []}\n'));
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: { default_branch: 'main' } });
+      mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) =>
+        Promise.resolve({ data: { object: { sha: ref === 'heads/main' ? 'base-commit' : 'existing-branch' } } })
+      );
+      mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+      mockOctokit.rest.git.getTree.mockResolvedValue({ data: { tree: [] } });
+
+      const result = await syncFileSyncGroup(mockOctokit, 'owner/repo', mappings, false, 'bot');
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.error).toContain(`Refusing to overwrite existing branch 'file-sync'`);
+      expect(mockOctokit.rest.git.createBlob).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.git.updateRef).not.toHaveBeenCalled();
     });
   });
 
@@ -4033,7 +4120,14 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
       mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData({ default_branch: 'main' }) });
       mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
-      mockOctokit.rest.git.getRef.mockResolvedValue({ data: { object: { sha: 'base-commit' } } });
+      mockOctokit.rest.git.getRef.mockImplementation(({ ref }) => {
+        if (ref === 'heads/file-sync') {
+          const error = new Error('Not found');
+          error.status = 404;
+          return Promise.reject(error);
+        }
+        return Promise.resolve({ data: { object: { sha: 'base-commit' } } });
+      });
       mockOctokit.rest.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
       mockOctokit.rest.git.getTree.mockResolvedValue({ data: { tree: [] } });
       mockOctokit.rest.git.createBlob.mockResolvedValue({ data: { sha: 'new-blob' } });
