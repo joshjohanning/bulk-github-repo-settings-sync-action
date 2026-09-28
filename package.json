@@ -47,7 +47,7 @@
   "dependencies": {
     "@actions/core": "^3.0.1",
     "@octokit/rest": "^22.0.1",
-    "ignore": "^7.0.9",
+    "ignore": "^7.0.10",
     "js-yaml": "^5.4.1"
   },
   "devDependencies": {
