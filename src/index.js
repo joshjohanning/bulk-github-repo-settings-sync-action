@@ -3503,6 +3503,30 @@ export function stripRulesetReadonlyFields(config) {
   return result;
 }
 
+/** Return whether ruleset configs match, allowing GitHub to materialize omitted empty arrays. */
+function rulesetConfigMatches(actual, expected) {
+  if (actual === expected) return true;
+  if (actual === null || expected === null || typeof actual !== 'object' || typeof expected !== 'object') {
+    return false;
+  }
+
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => rulesetConfigMatches(value, expected[index]))
+    );
+  }
+
+  for (const key of Object.keys(actual)) {
+    if (!Object.hasOwn(expected, key) && (!Array.isArray(actual[key]) || actual[key].length !== 0)) return false;
+  }
+  return Object.keys(expected).every(
+    key => Object.hasOwn(actual, key) && rulesetConfigMatches(actual[key], expected[key])
+  );
+}
+
 /**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
@@ -3638,7 +3662,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
 
       const existingConfig = stripRulesetReadonlyFields(fullRuleset);
       const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
-      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
+      const configsMatch = rulesetConfigMatches(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);
