@@ -19,6 +19,8 @@ import * as path from 'path';
 import * as url from 'url';
 import * as yaml from 'js-yaml';
 
+const GITHUB_API_VERSION = '2026-03-10';
+
 /**
  * Get the known configuration keys from action.yml.
  * This dynamically reads the action.yml file to determine valid input keys,
@@ -1136,7 +1138,6 @@ async function handleBooleanFeatureToggle({
  * @param {string} options.setRoute - REST path used for both enabling and disabling
  * @param {Function} options.readCurrentValue - Maps the GET response into a boolean
  * @param {boolean} [options.notFoundMeans] - Treat 404 from GET as this boolean current value
- * @param {Object} [options.headers] - Optional request headers
  * @param {Function} [options.onWarning] - Optional callback invoked after warning state is set
  * @returns {Promise<void>}
  */
@@ -1149,7 +1150,6 @@ async function handleBooleanEndpointToggle({
   setRoute,
   readCurrentValue,
   notFoundMeans,
-  headers,
   onWarning
 }) {
   const { octokit, owner, repoName, result, dryRun } = ctx;
@@ -1163,8 +1163,7 @@ async function handleBooleanEndpointToggle({
       try {
         const response = await octokit.request(getRoute, {
           owner,
-          repo: repoName,
-          headers
+          repo: repoName
         });
         return readCurrentValue(response);
       } catch (error) {
@@ -1177,14 +1176,12 @@ async function handleBooleanEndpointToggle({
     enable: async () =>
       octokit.request(`PUT ${setRoute}`, {
         owner,
-        repo: repoName,
-        headers
+        repo: repoName
       }),
     disable: async () =>
       octokit.request(`DELETE ${setRoute}`, {
         owner,
-        repo: repoName,
-        headers
+        repo: repoName
       }),
     onWarning
   });
@@ -1656,10 +1653,7 @@ export async function updateRepositorySettings(
       getRoute: 'GET /repos/{owner}/{repo}/immutable-releases',
       setRoute: '/repos/{owner}/{repo}/immutable-releases',
       readCurrentValue: response => response.data.enabled === true,
-      notFoundMeans: false,
-      headers: {
-        'X-GitHub-Api-Version': '2022-11-28'
-      }
+      notFoundMeans: false
     });
 
     // Handle security settings (only if securitySettings object is provided)
@@ -1711,10 +1705,7 @@ export async function updateRepositorySettings(
         label: 'private vulnerability reporting',
         getRoute: 'GET /repos/{owner}/{repo}/private-vulnerability-reporting',
         setRoute: '/repos/{owner}/{repo}/private-vulnerability-reporting',
-        readCurrentValue: response => response.data.enabled === true,
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        readCurrentValue: response => response.data.enabled === true
       });
 
       // Handle Dependabot alerts (vulnerability alerts)
@@ -1726,10 +1717,7 @@ export async function updateRepositorySettings(
         getRoute: 'GET /repos/{owner}/{repo}/vulnerability-alerts',
         setRoute: '/repos/{owner}/{repo}/vulnerability-alerts',
         readCurrentValue: () => true,
-        notFoundMeans: false,
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        notFoundMeans: false
       });
 
       // Handle Dependabot security updates
@@ -1741,10 +1729,7 @@ export async function updateRepositorySettings(
         getRoute: 'GET /repos/{owner}/{repo}/automated-security-fixes',
         setRoute: '/repos/{owner}/{repo}/automated-security-fixes',
         readCurrentValue: response => response.data.enabled === true,
-        notFoundMeans: false,
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        notFoundMeans: false
       });
     } // End of if (securitySettings)
 
@@ -5300,7 +5285,12 @@ export async function run() {
     // Initialize Octokit
     const octokit = new Octokit({
       auth: githubToken,
-      baseUrl: githubApiUrl
+      baseUrl: githubApiUrl,
+      request: {
+        headers: {
+          'X-GitHub-Api-Version': GITHUB_API_VERSION
+        }
+      }
     });
 
     // Get authenticated user/app login for stale PR author matching

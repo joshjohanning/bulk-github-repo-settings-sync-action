@@ -2754,17 +2754,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.immutableReleasesChange.to).toBe(true);
       expect(mockOctokit.request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
       expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
     });
 
@@ -2801,10 +2795,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.immutableReleasesChange.to).toBe(false);
       expect(mockOctokit.request).toHaveBeenCalledWith('DELETE /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
     });
 
@@ -5163,10 +5154,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo1',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo1'
       });
     });
 
@@ -6344,7 +6332,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(Octokit).toHaveBeenCalledWith({
         auth: 'test-token',
-        baseUrl: customApiUrl
+        baseUrl: customApiUrl,
+        request: {
+          headers: {
+            'X-GitHub-Api-Version': '2026-03-10'
+          }
+        }
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
@@ -6368,7 +6361,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(Octokit).toHaveBeenCalledWith({
         auth: 'test-token',
-        baseUrl: 'https://api.github.com'
+        baseUrl: 'https://api.github.com',
+        request: {
+          headers: {
+            'X-GitHub-Api-Version': '2026-03-10'
+          }
+        }
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
@@ -6393,7 +6391,12 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(Octokit).toHaveBeenCalledWith({
         auth: 'test-token',
-        baseUrl: gheUrl
+        baseUrl: gheUrl,
+        request: {
+          headers: {
+            'X-GitHub-Api-Version': '2026-03-10'
+          }
+        }
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
