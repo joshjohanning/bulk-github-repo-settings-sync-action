@@ -2107,6 +2107,40 @@ describe('Bulk GitHub Repository Settings Action', () => {
       ]);
     });
 
+    test('should combine and deduplicate ruleset files from matching rules', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [{ full_name: 'my-org/repo1', fork: false }]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: {
+              'rulesets-file': 'rulesets/pr.json\nrulesets/status-checks.json'
+            }
+          },
+          {
+            selector: { all: true },
+            settings: {
+              'rulesets-file': ['rulesets/status-checks.json', 'rulesets/signed-commits.json']
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'rulesets-file': 'rulesets/pr.json,rulesets/status-checks.json,rulesets/signed-commits.json'
+        }
+      ]);
+    });
+
     test('should handle multiple repos from different rules', async () => {
       // Mock organization check
       mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });

@@ -580,6 +580,17 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
 }
 
 /**
+ * Merge and deduplicate ruleset file paths while preserving their configured order.
+ * @param {string|string[]} existing - Existing ruleset file paths
+ * @param {string|string[]} incoming - Ruleset file paths from the matching rule
+ * @param {string} repo - Repository name for validation error context
+ * @returns {string} Comma-separated ruleset file paths
+ */
+function mergeRulesetsFiles(existing, incoming, repo) {
+  return [...new Set([...parseRulesetsFileValue(existing, repo), ...parseRulesetsFileValue(incoming, repo)])].join(',');
+}
+
+/**
  * Parse a rules-based configuration file and return repositories with merged settings
  * @param {Object} config - Parsed YAML config object with rules array
  * @param {Octokit} octokit - Octokit instance
@@ -771,7 +782,20 @@ export async function parseConfigWithRules(config, octokit) {
       // Destructure to exclude 'repo' from rule.settings to prevent accidental overwrites
       // eslint-disable-next-line no-unused-vars
       const { repo: _ignoredRepo, ...safeSettings } = rule.settings;
-      repoSettingsMap.set(matchedRepo.repo, { ...existingSettings, ...safeSettings });
+      const mergedSettings = { ...existingSettings, ...safeSettings };
+
+      // Rulesets are additive: a repository can match a broad baseline rule and
+      // a more-specific rule, each contributing its own ruleset files. Keep the
+      // configured order and avoid syncing the same file twice.
+      if (existingSettings['rulesets-file'] !== undefined && safeSettings['rulesets-file'] !== undefined) {
+        mergedSettings['rulesets-file'] = mergeRulesetsFiles(
+          existingSettings['rulesets-file'],
+          safeSettings['rulesets-file'],
+          matchedRepo.repo
+        );
+      }
+
+      repoSettingsMap.set(matchedRepo.repo, mergedSettings);
     }
   }
 

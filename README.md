@@ -235,7 +235,7 @@ Use in workflow:
 
 **Settings Merging:**
 
-When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting:
+When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting, except `rulesets-file`: its paths are combined and deduplicated in rule order.
 
 ```yaml
 # If repo1 matches both rules:
