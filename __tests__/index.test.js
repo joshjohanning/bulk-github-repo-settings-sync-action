@@ -6959,6 +6959,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'] } },
         rules: [{ type: 'deletion' }]
       };
 
@@ -7034,6 +7035,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'] } },
         rules: [{ type: 'deletion' }]
       };
 
@@ -7042,7 +7044,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'], exclude: [] } },
         rules: [{ type: 'deletion' }],
+        // GitHub materializes this optional field even when it is omitted from the source config.
+        bypass_actors: [],
         // These fields are returned by API but should be ignored in comparison
         source_type: 'Repository',
         source: 'owner/repo',
@@ -7065,6 +7070,54 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should update ruleset when GitHub retains an omitted non-empty field', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const existingRuleset = { id: 789, ...rulesetConfig, some_future_field: 'old-value' };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({ data: existingRuleset });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+    });
+
+    test('should update ruleset when an explicitly configured array has extra entries', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]
+      };
+      const existingRuleset = {
+        id: 789,
+        ...rulesetConfig,
+        bypass_actors: [
+          ...rulesetConfig.bypass_actors,
+          { actor_id: 6, actor_type: 'RepositoryRole', bypass_mode: 'always' }
+        ]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({ data: existingRuleset });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
     });
 
     test('should not update ruleset when source config contains API-only fields', async () => {
