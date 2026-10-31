@@ -93,7 +93,10 @@ const mockOctokit = {
   },
   request: jest.fn(),
   paginate: jest.fn(),
-  graphql: jest.fn()
+  graphql: jest.fn(),
+  hook: {
+    before: jest.fn()
+  }
 };
 
 // Mock fs module - use a real implementation that tracks test content
@@ -382,7 +385,10 @@ const {
   parseMultiValueInput,
   applyBasePathToRepoConfig,
   parseFileSyncConfig,
-  syncFileSyncGroup
+  syncFileSyncGroup,
+  configureApiVersion,
+  LATEST_API_VERSION,
+  FALLBACK_API_VERSION
 } = await import('../src/index.js');
 
 describe('Bulk GitHub Repository Settings Action', () => {
@@ -2945,17 +2951,11 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.immutableReleasesChange.to).toBe(true);
       expect(mockOctokit.request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
       expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
     });
 
@@ -2992,10 +2992,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.immutableReleasesChange.to).toBe(false);
       expect(mockOctokit.request).toHaveBeenCalledWith('DELETE /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo'
       });
     });
 
@@ -5354,10 +5351,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/immutable-releases', {
         owner: 'owner',
-        repo: 'repo1',
-        headers: {
-          'X-GitHub-Api-Version': '2022-11-28'
-        }
+        repo: 'repo1'
       });
     });
 
@@ -6530,12 +6524,17 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
 
       mockOctokit.rest.repos.update.mockResolvedValue({});
+      mockOctokit.request.mockReset();
+      mockOctokit.request.mockResolvedValue({});
 
       await run();
 
       expect(Octokit).toHaveBeenCalledWith({
         auth: 'test-token',
         baseUrl: customApiUrl
+      });
+      expect(mockOctokit.request).toHaveBeenCalledWith('GET /meta', {
+        headers: { 'x-github-api-version': LATEST_API_VERSION }
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
@@ -6587,6 +6586,86 @@ describe('Bulk GitHub Repository Settings Action', () => {
         baseUrl: gheUrl
       });
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
+    });
+  });
+
+  describe('configureApiVersion', () => {
+    const createClient = () => ({
+      request: jest.fn().mockResolvedValue({}),
+      hook: { before: jest.fn() }
+    });
+    const getAppliedVersion = client => {
+      expect(client.hook.before).toHaveBeenCalledWith('request', expect.any(Function));
+      const options = { headers: {} };
+      client.hook.before.mock.calls[0][1](options);
+      return options.headers['x-github-api-version'];
+    };
+
+    test.each(['https://api.github.com', 'https://api.octocorp.ghe.com', 'https://API.GitHub.com/'])(
+      'should use latest version without probing for %s',
+      async apiUrl => {
+        const client = createClient();
+
+        const version = await configureApiVersion(client, apiUrl);
+
+        expect(version).toBe(LATEST_API_VERSION);
+        expect(client.request).not.toHaveBeenCalled();
+        expect(getAppliedVersion(client)).toBe(LATEST_API_VERSION);
+      }
+    );
+
+    test('should use latest version on GHES when supported', async () => {
+      const client = createClient();
+
+      const version = await configureApiVersion(client, 'https://ghes.example.com/api/v3');
+
+      expect(version).toBe(LATEST_API_VERSION);
+      expect(client.request).toHaveBeenCalledTimes(1);
+      expect(client.request).toHaveBeenCalledWith('GET /meta', {
+        headers: { 'x-github-api-version': LATEST_API_VERSION }
+      });
+      expect(getAppliedVersion(client)).toBe(LATEST_API_VERSION);
+    });
+
+    test('should fall back on GHES when latest version returns 400', async () => {
+      const client = createClient();
+      client.request.mockRejectedValueOnce(Object.assign(new Error('not a supported version'), { status: 400 }));
+
+      const version = await configureApiVersion(client, 'https://ghes.example.com/api/v3');
+
+      expect(version).toBe(FALLBACK_API_VERSION);
+      expect(client.request).toHaveBeenNthCalledWith(2, 'GET /meta', {
+        headers: { 'x-github-api-version': FALLBACK_API_VERSION }
+      });
+      expect(mockCore.info).toHaveBeenCalledWith(expect.stringContaining(`using ${FALLBACK_API_VERSION}`));
+      expect(getAppliedVersion(client)).toBe(FALLBACK_API_VERSION);
+    });
+
+    test('should rethrow non-400 probe errors without falling back', async () => {
+      const client = createClient();
+      client.request.mockRejectedValueOnce(Object.assign(new Error('Bad credentials'), { status: 401 }));
+
+      await expect(configureApiVersion(client, 'https://ghes.example.com/api/v3')).rejects.toThrow('Bad credentials');
+      expect(client.request).toHaveBeenCalledTimes(1);
+      expect(client.hook.before).not.toHaveBeenCalled();
+    });
+
+    test('should throw when fallback version also fails', async () => {
+      const client = createClient();
+      client.request
+        .mockRejectedValueOnce(Object.assign(new Error('not a supported version'), { status: 400 }))
+        .mockRejectedValueOnce(Object.assign(new Error('still bad'), { status: 400 }));
+
+      await expect(configureApiVersion(client, 'https://ghes.example.com/api/v3')).rejects.toThrow('still bad');
+      expect(client.hook.before).not.toHaveBeenCalled();
+    });
+
+    test('should probe when API URL cannot be parsed', async () => {
+      const client = createClient();
+
+      await configureApiVersion(client, 'not a url');
+
+      expect(client.request).toHaveBeenCalledTimes(1);
     });
   });
 
