@@ -1015,6 +1015,10 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 > [!NOTE]
 > This feature requires the token to have **pull-requests: write** and **issues: write** permissions (for adding the closing comment). GitHub App tokens and PATs with `repo` scope include both.
 
+### REST API Version
+
+The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about-the-rest-api/api-versions) header on every REST request. GitHub.com and GHE.com (GHEC with data residency) use `2026-03-10`. For GitHub Enterprise Server, the action checks once at startup whether `2026-03-10` is supported (GHES 3.21+) and otherwise falls back to `2022-11-28`. No configuration is required.
+
 ## Action Inputs
 
 | Input                             | Description                                                                                                                                 | Required | Default                                   |
