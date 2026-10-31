@@ -584,10 +584,22 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
  * @param {string|string[]} existing - Existing ruleset file paths
  * @param {string|string[]} incoming - Ruleset file paths from the matching rule
  * @param {string} repo - Repository name for validation error context
- * @returns {string} Comma-separated ruleset file paths
+ * @param {string} [basePath] - Base directory for resolving equivalent file paths
+ * @returns {string[]} Ruleset file paths in their first configured form
  */
-function mergeRulesetsFiles(existing, incoming, repo) {
-  return [...new Set([...parseRulesetsFileValue(existing, repo), ...parseRulesetsFileValue(incoming, repo)])].join(',');
+function mergeRulesetsFiles(existing, incoming, repo, basePath = '') {
+  if (basePath && typeof basePath !== 'string') {
+    throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
+  }
+
+  const directory = basePath ? basePath.trim() : '';
+  const seen = new Set();
+  return [...parseRulesetsFileValue(existing, repo), ...parseRulesetsFileValue(incoming, repo)].filter(filePath => {
+    const resolvedPath = path.resolve(directory, filePath);
+    if (seen.has(resolvedPath)) return false;
+    seen.add(resolvedPath);
+    return true;
+  });
 }
 
 /**
@@ -791,7 +803,8 @@ export async function parseConfigWithRules(config, octokit) {
         mergedSettings['rulesets-file'] = mergeRulesetsFiles(
           existingSettings['rulesets-file'],
           safeSettings['rulesets-file'],
-          matchedRepo.repo
+          matchedRepo.repo,
+          config['base-path']
         );
       }
 

@@ -115,7 +115,7 @@ inputs:
     required: false
     default: 'chore: update .gitignore'
   rulesets-file:
-    description: 'Comma- or newline-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories'
+    description: 'Comma- or newline-separated paths to JSON files to sync as separate repository rulesets. Matching selector rules combine and deduplicate paths.'
     required: false
   delete-unmanaged-rulesets:
     description: 'Delete all other rulesets besides those being synced'
