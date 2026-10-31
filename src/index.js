@@ -620,6 +620,29 @@ export async function filterRepositoriesByCustomProperty(octokit, owner, propert
 }
 
 /**
+ * Merge and deduplicate ruleset file paths while preserving their configured order.
+ * @param {string|string[]} existing - Existing ruleset file paths
+ * @param {string|string[]} incoming - Ruleset file paths from the matching rule
+ * @param {string} repo - Repository name for validation error context
+ * @param {string} [basePath] - Base directory for resolving equivalent file paths
+ * @returns {string[]} Ruleset file paths in their first configured form
+ */
+function mergeRulesetsFiles(existing, incoming, repo, basePath = '') {
+  if (basePath && typeof basePath !== 'string') {
+    throw new Error(`'base-path' must be a string, got ${typeof basePath}`);
+  }
+
+  const directory = basePath ? basePath.trim() : '';
+  const seen = new Set();
+  return [...parseRulesetsFileValue(existing, repo), ...parseRulesetsFileValue(incoming, repo)].filter(filePath => {
+    const resolvedPath = path.resolve(directory, filePath);
+    if (seen.has(resolvedPath)) return false;
+    seen.add(resolvedPath);
+    return true;
+  });
+}
+
+/**
  * Parse a rules-based configuration file and return repositories with merged settings
  * @param {Object} config - Parsed YAML config object with rules array
  * @param {Octokit} octokit - Octokit instance
@@ -811,7 +834,21 @@ export async function parseConfigWithRules(config, octokit) {
       // Destructure to exclude 'repo' from rule.settings to prevent accidental overwrites
       // eslint-disable-next-line no-unused-vars
       const { repo: _ignoredRepo, ...safeSettings } = rule.settings;
-      repoSettingsMap.set(matchedRepo.repo, { ...existingSettings, ...safeSettings });
+      const mergedSettings = { ...existingSettings, ...safeSettings };
+
+      // Rulesets are additive: a repository can match a broad baseline rule and
+      // a more-specific rule, each contributing its own ruleset files. Keep the
+      // configured order and avoid syncing the same file twice.
+      if (existingSettings['rulesets-file'] !== undefined && safeSettings['rulesets-file'] !== undefined) {
+        mergedSettings['rulesets-file'] = mergeRulesetsFiles(
+          existingSettings['rulesets-file'],
+          safeSettings['rulesets-file'],
+          matchedRepo.repo,
+          config['base-path']
+        );
+      }
+
+      repoSettingsMap.set(matchedRepo.repo, mergedSettings);
     }
   }
 
@@ -3526,6 +3563,30 @@ export function stripRulesetReadonlyFields(config) {
   return result;
 }
 
+/** Return whether ruleset configs match, allowing GitHub to materialize omitted empty arrays. */
+function rulesetConfigMatches(actual, expected) {
+  if (actual === expected) return true;
+  if (actual === null || expected === null || typeof actual !== 'object' || typeof expected !== 'object') {
+    return false;
+  }
+
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => rulesetConfigMatches(value, expected[index]))
+    );
+  }
+
+  for (const key of Object.keys(actual)) {
+    if (!Object.hasOwn(expected, key) && (!Array.isArray(actual[key]) || actual[key].length !== 0)) return false;
+  }
+  return Object.keys(expected).every(
+    key => Object.hasOwn(actual, key) && rulesetConfigMatches(actual[key], expected[key])
+  );
+}
+
 /**
  * Sync repository rulesets to target repository.
  * Accepts an array of ruleset JSON file paths, processes each one,
@@ -3661,7 +3722,7 @@ export async function syncRepositoryRulesets(octokit, repo, rulesetFilePaths, de
 
       const existingConfig = stripRulesetReadonlyFields(fullRuleset);
       const normalizedSourceConfig = stripRulesetReadonlyFields(rulesetConfig);
-      const configsMatch = deepEqual(existingConfig, normalizedSourceConfig);
+      const configsMatch = rulesetConfigMatches(existingConfig, normalizedSourceConfig);
 
       if (configsMatch) {
         core.info(`  📋 Ruleset "${rulesetName}" is already up to date`);

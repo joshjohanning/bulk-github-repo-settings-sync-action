@@ -4,6 +4,7 @@
 
 import { jest } from '@jest/globals';
 import { createHash } from 'crypto';
+import * as nodePath from 'path';
 
 // Mock the @actions/core module
 const mockCore = {
@@ -2111,6 +2112,196 @@ describe('Bulk GitHub Repository Settings Action', () => {
           'immutable-releases': true
         }
       ]);
+    });
+
+    test('should combine and deduplicate ruleset files from matching rules', async () => {
+      mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
+      mockOctokit.rest.repos.listForOrg.mockResolvedValueOnce({
+        data: [{ full_name: 'my-org/repo1', fork: false }]
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['my-org/repo1'] },
+            settings: {
+              'rulesets-file': 'rulesets/pr.json\nrulesets/status-checks.json'
+            }
+          },
+          {
+            selector: { all: true },
+            settings: {
+              'rulesets-file': ['rulesets/status-checks.json', 'rulesets/signed-commits.json']
+            }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'rulesets-file': ['rulesets/pr.json', 'rulesets/status-checks.json', 'rulesets/signed-commits.json']
+        }
+      ]);
+    });
+
+    test.each([
+      ['relative aliases', '', 'rulesets/ci.json', './rulesets/ci.json', ['rulesets/ci.json']],
+      ['parent directory aliases', '', 'rulesets/ci.json', 'rulesets/nested/../ci.json', ['rulesets/ci.json']],
+      ['absolute aliases', '', 'rulesets/ci.json', nodePath.resolve('rulesets/ci.json'), ['rulesets/ci.json']],
+      [
+        'absolute aliases with base-path',
+        './config/',
+        'rulesets/ci.json',
+        nodePath.resolve('config/rulesets/ci.json'),
+        ['rulesets/ci.json']
+      ],
+      [
+        'distinct absolute paths with base-path',
+        './config/',
+        'rulesets/ci.json',
+        nodePath.resolve('rulesets/ci.json'),
+        ['rulesets/ci.json', nodePath.resolve('rulesets/ci.json')]
+      ],
+      [
+        'absolute aliases with whitespace-only base-path',
+        '   ',
+        'rulesets/ci.json',
+        nodePath.resolve('rulesets/ci.json'),
+        ['rulesets/ci.json']
+      ]
+    ])('should handle %s when combining ruleset files', async (_name, basePath, existing, incoming, expected) => {
+      const config = {
+        owner: 'my-org',
+        'base-path': basePath,
+        rules: [existing, incoming].map(value => ({
+          selector: { repos: ['my-org/repo1'] },
+          settings: { 'rulesets-file': value }
+        }))
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/repo1', 'rulesets-file': expected }]);
+    });
+
+    test.each([
+      ['empty array', []],
+      ['empty string', ''],
+      ['null', null]
+    ])('should keep inherited ruleset files when a later rule contributes an %s', async (_name, value) => {
+      const config = {
+        owner: 'my-org',
+        rules: ['rulesets/baseline.json', value].map(files => ({
+          selector: { repos: ['my-org/repo1'] },
+          settings: { 'rulesets-file': files }
+        }))
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([{ repo: 'my-org/repo1', 'rulesets-file': ['rulesets/baseline.json'] }]);
+    });
+
+    test('should reject an invalid base-path when combining ruleset files', async () => {
+      const config = {
+        owner: 'my-org',
+        'base-path': 123,
+        rules: ['rulesets/baseline.json', 'rulesets/strict.json'].map(files => ({
+          selector: { repos: ['my-org/repo1'] },
+          settings: { 'rulesets-file': files }
+        }))
+      };
+
+      await expect(parseConfigWithRules(config, mockOctokit)).rejects.toThrow(
+        `'base-path' must be a string, got number`
+      );
+    });
+
+    test('should preserve array filenames containing delimiters across three matching rules', async () => {
+      const config = {
+        owner: 'my-org',
+        rules: [
+          ['rulesets/ci,primary.json', 'rulesets/ci\nprimary.json'],
+          'rulesets/other.json, rulesets/extra.json\nrulesets/last.json',
+          ['rulesets/ci,primary.json']
+        ].map(files => ({
+          selector: { repos: ['my-org/repo1'] },
+          settings: { 'rulesets-file': files }
+        }))
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit);
+
+      expect(result).toEqual([
+        {
+          repo: 'my-org/repo1',
+          'rulesets-file': [
+            'rulesets/ci,primary.json',
+            'rulesets/ci\nprimary.json',
+            'rulesets/other.json',
+            'rulesets/extra.json',
+            'rulesets/last.json'
+          ]
+        }
+      ]);
+    });
+
+    test('should sync layered files separately without splitting filenames or syncing aliases twice', async () => {
+      setMockFileContent('layered rules');
+      setMockYamlContent({
+        owner: 'my-org',
+        'base-path': './config/',
+        rules: [
+          'rulesets/baseline.json',
+          ['./rulesets/baseline.json', 'rulesets/strict,extra.json'],
+          nodePath.resolve('config/rulesets/baseline.json')
+        ].map(files => ({
+          selector: { repos: ['my-org/repo1'] },
+          settings: { 'rulesets-file': files }
+        }))
+      });
+
+      const [repoConfig] = await parseRepositories('', 'settings-config.yml', '', mockOctokit);
+      expect(repoConfig['rulesets-file']).toEqual([
+        'config/rulesets/baseline.json',
+        'config/rulesets/strict,extra.json'
+      ]);
+
+      const baseline = { name: 'Baseline', target: 'branch', enforcement: 'active', rules: [{ type: 'deletion' }] };
+      const strict = { name: 'Strict', target: 'branch', enforcement: 'active', rules: [{ type: 'creation' }] };
+      setMockFileContent(JSON.stringify(baseline), 'config/rulesets/baseline.json');
+      setMockFileContent(JSON.stringify(strict), 'config/rulesets/strict,extra.json');
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockOctokit.rest.repos.createRepoRuleset
+        .mockResolvedValueOnce({ data: { id: 101, name: 'Baseline' } })
+        .mockResolvedValueOnce({ data: { id: 102, name: 'Strict' } });
+
+      const result = await syncRepositoryRulesets(
+        mockOctokit,
+        repoConfig.repo,
+        parseRulesetsFileValue(repoConfig['rulesets-file']),
+        false,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenNthCalledWith(1, {
+        ...baseline,
+        owner: 'my-org',
+        repo: 'repo1'
+      });
+      expect(mockOctokit.rest.repos.createRepoRuleset).toHaveBeenNthCalledWith(2, {
+        ...strict,
+        owner: 'my-org',
+        repo: 'repo1'
+      });
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
     });
 
     test('should handle multiple repos from different rules', async () => {
@@ -7038,6 +7229,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'] } },
         rules: [{ type: 'deletion' }]
       };
 
@@ -7113,6 +7305,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'] } },
         rules: [{ type: 'deletion' }]
       };
 
@@ -7121,7 +7314,10 @@ describe('Bulk GitHub Repository Settings Action', () => {
         name: 'ci',
         target: 'branch',
         enforcement: 'active',
+        conditions: { ref_name: { include: ['~ALL'], exclude: [] } },
         rules: [{ type: 'deletion' }],
+        // GitHub materializes this optional field even when it is omitted from the source config.
+        bypass_actors: [],
         // These fields are returned by API but should be ignored in comparison
         source_type: 'Repository',
         source: 'owner/repo',
@@ -7144,6 +7340,54 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockOctokit.rest.repos.getRepoRuleset).toHaveBeenCalled();
       expect(mockOctokit.rest.repos.updateRepoRuleset).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.createRepoRuleset).not.toHaveBeenCalled();
+    });
+
+    test('should update ruleset when GitHub retains an omitted non-empty field', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }]
+      };
+      const existingRuleset = { id: 789, ...rulesetConfig, some_future_field: 'old-value' };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({ data: existingRuleset });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
+    });
+
+    test('should update ruleset when an explicitly configured array has extra entries', async () => {
+      const rulesetConfig = {
+        name: 'ci',
+        target: 'branch',
+        enforcement: 'active',
+        rules: [{ type: 'deletion' }],
+        bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]
+      };
+      const existingRuleset = {
+        id: 789,
+        ...rulesetConfig,
+        bypass_actors: [
+          ...rulesetConfig.bypass_actors,
+          { actor_id: 6, actor_type: 'RepositoryRole', bypass_mode: 'always' }
+        ]
+      };
+
+      setMockFileContent(JSON.stringify(rulesetConfig));
+      mockOctokit.paginate.mockResolvedValue([{ id: 789, name: 'ci' }]);
+      mockOctokit.rest.repos.getRepoRuleset.mockResolvedValue({ data: existingRuleset });
+      mockOctokit.rest.repos.updateRepoRuleset.mockResolvedValue({});
+
+      const result = await syncRepositoryRuleset(mockOctokit, 'owner/repo', './ruleset.json', false, false);
+
+      expect(result.ruleset).toBe('updated');
+      expect(mockOctokit.rest.repos.updateRepoRuleset).toHaveBeenCalledTimes(1);
     });
 
     test('should not update ruleset when source config contains API-only fields', async () => {

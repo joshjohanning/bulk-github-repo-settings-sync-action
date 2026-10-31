@@ -235,7 +235,9 @@ Use in workflow:
 
 **Settings Merging:**
 
-When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting:
+When a repository matches multiple rules, settings are merged in order. Later rules override earlier rules for the same setting, except `rulesets-file`: its paths are combined and deduplicated in rule order.
+
+Each file remains a separate ruleset; ruleset JSON contents are not merged. Paths resolving to the same location, including relative/absolute aliases and `base-path`, are synced only once. Use YAML arrays for filenames containing commas or newlines. An empty list contributes no additional rulesets and does not remove files from earlier matching rules.
 
 ```yaml
 # If repo1 matches both rules:
@@ -245,18 +247,23 @@ rules:
     settings:
       code-scanning: true
       topics: 'standard'
+      rulesets-file: 'rulesets/baseline.json'
 
   - selector:
       repos: [my-org/repo1]
     settings:
       topics: 'special,override' # This overrides 'standard'
       dependabot-alerts: true # This is added
+      rulesets-file:
+        - './rulesets/baseline.json' # Already contributed by the first rule
+        - 'rulesets/strict.json' # Adds a separate ruleset
 
 
 # Result for repo1:
 # code-scanning: true
 # topics: 'special,override'
 # dependabot-alerts: true
+# rulesets-file: [rulesets/baseline.json, rulesets/strict.json]
 ```
 
 > **Note:** Custom properties are only available for GitHub organizations (not personal accounts) and must be configured at the organization level.
@@ -1053,7 +1060,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                        | No       | `chore: update dependabot.yml`            |
 | `gitignore`                       | Path to a .gitignore file to sync to `.gitignore` in target repositories (preserves repo-specific content after marker)                     | No       | -                                         |
 | `gitignore-pr-title`              | Title for pull requests when updating .gitignore                                                                                            | No       | `chore: update .gitignore`                |
-| `rulesets-file`                   | Comma- or newline-separated paths to JSON files, each containing a repository ruleset configuration to sync to target repositories          | No       | -                                         |
+| `rulesets-file`                   | Comma- or newline-separated JSON paths for separate rulesets; matching selector rules combine and deduplicate paths                         | No       | -                                         |
 | `delete-unmanaged-rulesets`       | Delete all other rulesets besides those being synced                                                                                        | No       | `false`                                   |
 | `pull-request-template`           | Path to a pull request template file to sync to `.github/pull_request_template.md` in target repositories                                   | No       | -                                         |
 | `pull-request-template-pr-title`  | Title for pull requests when updating pull request template                                                                                 | No       | `chore: update pull request template`     |
