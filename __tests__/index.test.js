@@ -148,6 +148,8 @@ inputs:
     description: 'Allow update branch'
   wiki:
     description: 'Repository wiki'
+  projects:
+    description: 'Repository projects'
   immutable-releases:
     description: 'Immutable releases'
   code-scanning:
@@ -249,6 +251,7 @@ const mockActionYmlParsed = {
     'delete-branch-on-merge': { description: 'Delete branch on merge' },
     'allow-update-branch': { description: 'Allow update branch' },
     wiki: { description: 'Repository wiki' },
+    projects: { description: 'Repository projects' },
     'immutable-releases': { description: 'Immutable releases' },
     'code-scanning': { description: 'Code scanning' },
     'enable-default-code-scanning': { description: 'Enable default code scanning (deprecated)' },
@@ -2626,6 +2629,42 @@ describe('Bulk GitHub Repository Settings Action', () => {
         owner: 'owner',
         repo: 'repo',
         has_wiki: false
+      });
+    });
+
+    test('should disable repository projects', async () => {
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          allow_squash_merge: false,
+          has_projects: true,
+          permissions: { admin: true, push: true, pull: true }
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      const result = await updateRepositorySettings(
+        mockOctokit,
+        'owner/repo',
+        { has_projects: false },
+        false,
+        null,
+        null,
+        null,
+        false
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.changes).toEqual([{ setting: 'has_projects', from: true, to: false }]);
+      expect(result.subResults).toEqual([
+        expect.objectContaining({
+          kind: 'settings',
+          message: 'settings: projects'
+        })
+      ]);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        has_projects: false
       });
     });
 
@@ -5848,6 +5887,45 @@ describe('Bulk GitHub Repository Settings Action', () => {
         has_wiki: false
       });
       expect(mockCore.info).toHaveBeenCalledWith('     wiki: true → false');
+    });
+
+    test('should map repo-specific projects configuration to the GitHub API field', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    projects: false');
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', projects: false }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true,
+          allow_merge_commit: true,
+          allow_rebase_merge: true,
+          delete_branch_on_merge: false,
+          allow_auto_merge: false,
+          allow_update_branch: false,
+          has_projects: true
+        }
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        has_projects: false
+      });
+      expect(mockCore.info).toHaveBeenCalledWith('     projects: true → false');
     });
 
     test('should warn and use global default for invalid enum config in YAML', async () => {

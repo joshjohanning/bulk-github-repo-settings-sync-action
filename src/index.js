@@ -1102,7 +1102,8 @@ const REPOSITORY_SETTING_FIELDS = Object.freeze([
   { key: 'allow_auto_merge' },
   { key: 'delete_branch_on_merge' },
   { key: 'allow_update_branch' },
-  { key: 'has_wiki', displayName: 'wiki' }
+  { key: 'has_wiki', displayName: 'wiki' },
+  { key: 'has_projects', displayName: 'projects' }
 ]);
 
 /**
@@ -5240,7 +5241,8 @@ export async function run() {
       allow_auto_merge: getBooleanInput('allow-auto-merge'),
       delete_branch_on_merge: getBooleanInput('delete-branch-on-merge'),
       allow_update_branch: getBooleanInput('allow-update-branch'),
-      has_wiki: getBooleanInput('wiki')
+      has_wiki: getBooleanInput('wiki'),
+      has_projects: getBooleanInput('projects')
     };
 
     // Handle code-scanning with deprecated alias support
@@ -5549,7 +5551,8 @@ export async function run() {
           repo,
           settings.allow_update_branch
         ),
-        has_wiki: coerceBooleanConfig(repoConfig.wiki, 'wiki', repo, settings.has_wiki)
+        has_wiki: coerceBooleanConfig(repoConfig.wiki, 'wiki', repo, settings.has_wiki),
+        has_projects: coerceBooleanConfig(repoConfig.projects, 'projects', repo, settings.has_projects)
       };
 
       // Handle repo-specific code scanning (support both new and deprecated input names)
