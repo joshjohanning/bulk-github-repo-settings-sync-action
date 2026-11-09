@@ -192,6 +192,8 @@ inputs:
     description: 'File sync target'
   autolinks-file:
     description: 'Autolinks file'
+  actions-sha-pinning-required:
+    description: 'Actions SHA pinning required'
   environments:
     description: 'Comma-separated environment names'
   environments-file:
@@ -271,6 +273,7 @@ const mockActionYmlParsed = {
     'file-sync-source': { description: 'File sync source' },
     'file-sync-target': { description: 'File sync target' },
     'autolinks-file': { description: 'Autolinks file' },
+    'actions-sha-pinning-required': { description: 'Actions SHA pinning required' },
     environments: { description: 'Comma-separated environment names' },
     'environments-file': { description: 'Environments file' },
     'delete-unmanaged-environments': { description: 'Delete unmanaged environments' },
@@ -368,6 +371,7 @@ const {
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
+  syncActionsShaPinning,
   syncEnvironments,
   parseEnvironmentsConfig,
   normalizeExistingEnvironment,
@@ -5811,6 +5815,43 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
     });
 
+    test('should sync SHA pinning for actions from repo-specific configuration', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml'
+        };
+        return inputs[name] || '';
+      });
+
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    actions-sha-pinning-required: true');
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', 'actions-sha-pinning-required': true }]
+      });
+
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          default_branch: 'main',
+          permissions: { admin: true },
+          allow_squash_merge: true
+        }
+      });
+      mockOctokit.request.mockResolvedValue({
+        data: { enabled: true, allowed_actions: 'all', sha_pinning_required: false }
+      });
+
+      await run();
+
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/actions/permissions', {
+        owner: 'owner',
+        repo: 'repo1',
+        enabled: true,
+        allowed_actions: 'all',
+        sha_pinning_required: true
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+    });
+
     test('should map repo-specific wiki configuration to the GitHub API field', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -9967,6 +10008,101 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result.autolinks).toBe('unchanged');
       expect(mockOctokit.rest.repos.createAutolink).not.toHaveBeenCalled();
       expect(mockOctokit.rest.repos.deleteAutolink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncActionsShaPinning', () => {
+    const getRoute = 'GET /repos/{owner}/{repo}/actions/permissions';
+    const putRoute = 'PUT /repos/{owner}/{repo}/actions/permissions';
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockOctokit.request.mockReset();
+    });
+
+    test('should require SHA pinning and keep the other Actions permissions', async () => {
+      mockOctokit.request.mockResolvedValue({
+        data: { enabled: true, allowed_actions: 'selected', sha_pinning_required: false }
+      });
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', true, false);
+
+      expect(result.success).toBe(true);
+      expect(result.actionsShaPinning).toBe('updated');
+      expect(result.message).toBe('Changed to require SHA pinning for actions');
+      expect(mockOctokit.request).toHaveBeenCalledWith(getRoute, { owner: 'owner', repo: 'repo' });
+      expect(mockOctokit.request).toHaveBeenCalledWith(putRoute, {
+        owner: 'owner',
+        repo: 'repo',
+        enabled: true,
+        allowed_actions: 'selected',
+        sha_pinning_required: true
+      });
+    });
+
+    test('should not send allowed_actions when the API does not return it', async () => {
+      mockOctokit.request.mockResolvedValue({ data: { enabled: false, sha_pinning_required: true } });
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', false, false);
+
+      expect(result.actionsShaPinning).toBe('updated');
+      expect(result.message).toBe('Changed to no longer require SHA pinning for actions');
+      expect(mockOctokit.request).toHaveBeenCalledWith(putRoute, {
+        owner: 'owner',
+        repo: 'repo',
+        enabled: false,
+        sha_pinning_required: false
+      });
+    });
+
+    test('should not update when the setting matches', async () => {
+      mockOctokit.request.mockResolvedValue({
+        data: { enabled: true, allowed_actions: 'all', sha_pinning_required: true }
+      });
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', true, false);
+
+      expect(result.success).toBe(true);
+      expect(result.actionsShaPinning).toBe('unchanged');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(putRoute, expect.anything());
+    });
+
+    test('should treat a missing sha_pinning_required as not required', async () => {
+      mockOctokit.request.mockResolvedValue({ data: { enabled: true, allowed_actions: 'all' } });
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', false, false);
+
+      expect(result.actionsShaPinning).toBe('unchanged');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(putRoute, expect.anything());
+    });
+
+    test('should preview the change in dry-run', async () => {
+      mockOctokit.request.mockResolvedValue({
+        data: { enabled: true, allowed_actions: 'all', sha_pinning_required: false }
+      });
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', true, true);
+
+      expect(result.success).toBe(true);
+      expect(result.actionsShaPinning).toBe('would-update');
+      expect(result.message).toBe('Would require SHA pinning for actions');
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(putRoute, expect.anything());
+    });
+
+    test('should handle API errors', async () => {
+      mockOctokit.request.mockRejectedValue(new Error('Conflict'));
+
+      const result = await syncActionsShaPinning(mockOctokit, 'owner/repo', true, false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Failed to sync SHA pinning for actions: Conflict');
+    });
+
+    test('should handle invalid repository format', async () => {
+      const result = await syncActionsShaPinning(mockOctokit, 'invalid', true, false);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid repository format');
     });
   });
 
