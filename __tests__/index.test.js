@@ -4599,6 +4599,114 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
     });
 
+    test.each([true, false])('should allow projects=%s as the only setting', async projects => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          projects: String(projects)
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: makeReadableRepoData({ has_projects: !projects })
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        has_projects: projects
+      });
+      expect(getResultsOutput()[0].changes).toEqual([{ setting: 'has_projects', from: !projects, to: projects }]);
+    });
+
+    test.each([true, false])('should preserve projects=%s when the input is unset', async projects => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          wiki: 'false'
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: makeReadableRepoData({ has_wiki: true, has_projects: projects })
+      });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.getBooleanInput).not.toHaveBeenCalledWith('projects');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo1',
+        has_wiki: false
+      });
+      expect(getResultsOutput()[0].changes).toEqual([{ setting: 'has_wiki', from: true, to: false }]);
+    });
+
+    test.each([true, false])('should not update unchanged projects=%s', async projects => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          projects: String(projects)
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: makeReadableRepoData({ has_projects: projects })
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(getResultsOutput()[0].changes).toEqual([]);
+    });
+
+    test.each([true, false])('should preview projects=%s without updating in dry-run mode', async projects => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          projects: String(projects),
+          'dry-run': 'true'
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: makeReadableRepoData({ has_projects: !projects })
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.repos.update).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(getResultsOutput()[0]).toEqual(
+        expect.objectContaining({
+          dryRun: true,
+          changes: [{ setting: 'has_projects', from: !projects, to: projects }],
+          subResults: [expect.objectContaining({ kind: 'settings', message: 'Would update settings: projects' })]
+        })
+      );
+    });
+
     test('should allow CodeQL scanning as the only setting', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -5927,6 +6035,105 @@ describe('Bulk GitHub Repository Settings Action', () => {
       });
       expect(mockCore.info).toHaveBeenCalledWith('     projects: true → false');
     });
+
+    test.each([true, false])('should honor repo-specific projects=%s over the global default', async projects => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          'repositories-file': 'repos.yml',
+          projects: String(!projects)
+        };
+        return inputs[name] || '';
+      });
+      setMockFileContent(`repos:\n  - repo: owner/repo1\n    projects: ${projects}\n  - repo: owner/repo2`);
+      setMockYamlContent({
+        repos: [{ repo: 'owner/repo1', projects }, { repo: 'owner/repo2' }]
+      });
+      mockOctokit.rest.repos.get
+        .mockResolvedValueOnce({ data: makeReadableRepoData({ has_projects: !projects }) })
+        .mockResolvedValueOnce({ data: makeReadableRepoData({ has_projects: projects }) });
+      mockOctokit.rest.repos.update.mockResolvedValue({});
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.rest.repos.update).toHaveBeenNthCalledWith(1, {
+        owner: 'owner',
+        repo: 'repo1',
+        has_projects: projects
+      });
+      expect(mockOctokit.rest.repos.update).toHaveBeenNthCalledWith(2, {
+        owner: 'owner',
+        repo: 'repo2',
+        has_projects: !projects
+      });
+    });
+
+    test.each([true, false])(
+      'should apply projects=%s from later rules and inherit global defaults',
+      async projects => {
+        mockCore.getInput.mockImplementation(name => {
+          const inputs = {
+            'github-token': 'test-token',
+            'repositories-file': 'settings-config.yml',
+            projects: String(projects)
+          };
+          return inputs[name] || '';
+        });
+        setMockFileContent(`owner: owner
+rules:
+  - selector:
+      repos: [repo1, repo2]
+    settings:
+      projects: ${!projects}
+  - selector:
+      repos: [repo1]
+    settings:
+      projects: ${projects}
+  - selector:
+      repos: [repo3]`);
+        setMockYamlContent({
+          owner: 'owner',
+          rules: [
+            { selector: { repos: ['repo1', 'repo2'] }, settings: { projects: !projects } },
+            { selector: { repos: ['repo1'] }, settings: { projects } },
+            { selector: { repos: ['repo3'] } }
+          ]
+        });
+        mockOctokit.rest.repos.get
+          .mockResolvedValueOnce({ data: makeReadableRepoData({ has_projects: !projects }) })
+          .mockResolvedValueOnce({ data: makeReadableRepoData({ has_projects: projects }) })
+          .mockResolvedValueOnce({ data: makeReadableRepoData({ has_projects: !projects }) });
+        mockOctokit.rest.repos.update.mockResolvedValue({});
+
+        await run();
+
+        expect(mockCore.setFailed).not.toHaveBeenCalled();
+        expect(mockCore.warning).not.toHaveBeenCalled();
+        expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '3');
+        expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+        expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(3);
+        expect(mockOctokit.rest.repos.update).toHaveBeenNthCalledWith(1, {
+          owner: 'owner',
+          repo: 'repo1',
+          has_projects: projects
+        });
+        expect(mockOctokit.rest.repos.update).toHaveBeenNthCalledWith(2, {
+          owner: 'owner',
+          repo: 'repo2',
+          has_projects: !projects
+        });
+        expect(mockOctokit.rest.repos.update).toHaveBeenNthCalledWith(3, {
+          owner: 'owner',
+          repo: 'repo3',
+          has_projects: projects
+        });
+      }
+    );
 
     test('should warn and use global default for invalid enum config in YAML', async () => {
       mockCore.getInput.mockImplementation(name => {
