@@ -709,12 +709,13 @@ environments:
 | `deployment_branch_policy.protected_branches`     | Whether only protected branches can deploy                          | No       |
 | `deployment_branch_policy.custom_branch_policies` | Whether to use custom branch name policies                          | No       |
 | `branch_name_patterns`                            | Array of custom branch name patterns to allow for deployment        | No\*\*   |
+| `tag_name_patterns`                               | Array of custom tag name patterns to allow for deployment           | No\*\*   |
 | `deployment_protection_rules`                     | Array of custom deployment gate apps                                | No       |
 | `deployment_protection_rules[].app`               | App slug (resolved to integration ID via API)                       | Yes      |
 
 \* Each reviewer must have either `id`, `login` (User), or `slug` (Team).
 
-\*\* `branch_name_patterns` applies only when `deployment_branch_policy.custom_branch_policies` is `true`. If custom branch policies are enabled and `branch_name_patterns` is omitted, any existing custom branch patterns will be removed during sync.
+\*\* `branch_name_patterns` and `tag_name_patterns` apply only when `deployment_branch_policy.custom_branch_policies` is `true`. If custom branch policies are enabled and one of them is omitted, any existing custom patterns of that kind (branch or tag) will be removed during sync.
 
 > [!NOTE]
 > When using `environments-file`, omitted optional fields are set to their defaults (e.g., `wait_timer: 0`, `reviewers: []`, `deployment_branch_policy: null`). This means existing environment settings will be updated to match the file configuration. To leave an existing environment unchanged, use the inline `environments` input instead — it only creates environments that don't already exist.
