@@ -4487,13 +4487,13 @@ function reviewersEqual(a, b) {
 }
 
 /**
- * Sync custom deployment branch policies (name patterns) for an environment.
+ * Sync custom deployment branch and tag policies (name patterns) for an environment.
  * Only runs when custom_branch_policies is true in the environment config.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} owner - Repository owner
  * @param {string} repoName - Repository name
  * @param {string} envName - Environment name
- * @param {Array<string>} desiredPatterns - Desired branch/tag name patterns
+ * @param {Array<{name: string, type: string}>} desiredPatterns - Desired name patterns with their type (branch or tag)
  * @param {boolean} dryRun - Preview mode
  * @returns {Promise<Array<Object>>} Array of subResults
  */
@@ -4504,17 +4504,17 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   // Normalize desired patterns: validate strings, trim, filter empty, deduplicate
   const normalizedPatterns = [];
   const seenPatterns = new Set();
-  for (const pattern of desiredPatterns) {
+  for (const { name: pattern, type } of desiredPatterns) {
     if (typeof pattern !== 'string') {
       core.warning(
-        `  ⚠️  Skipping invalid branch policy pattern for ${envName}: expected string but got ${pattern === null ? 'null' : typeof pattern}`
+        `  ⚠️  Skipping invalid ${type} policy pattern for ${envName}: expected string but got ${pattern === null ? 'null' : typeof pattern}`
       );
       continue;
     }
     const trimmed = pattern.trim();
-    if (trimmed.length === 0 || seenPatterns.has(trimmed)) continue;
-    seenPatterns.add(trimmed);
-    normalizedPatterns.push(trimmed);
+    if (trimmed.length === 0 || seenPatterns.has(`${type}:${trimmed}`)) continue;
+    seenPatterns.add(`${type}:${trimmed}`);
+    normalizedPatterns.push({ name: trimmed, type });
   }
 
   // Get existing branch policies
@@ -4537,13 +4537,14 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
     return subResults;
   }
 
-  const existingNames = new Set(existingPolicies.map(p => p.name));
-  const desiredNames = new Set(normalizedPatterns);
+  // Policies are matched by type and name (the API omits the type where only branch policies exist)
+  const existingNames = new Set(existingPolicies.map(p => `${p.type ?? 'branch'}:${p.name}`));
+  const desiredNames = seenPatterns;
 
   // Create missing policies
-  for (const pattern of normalizedPatterns) {
-    if (!existingNames.has(pattern)) {
-      core.info(`  🌿 ${wouldPrefix}Add branch policy: ${pattern} to ${envName}`);
+  for (const { name: pattern, type } of normalizedPatterns) {
+    if (!existingNames.has(`${type}:${pattern}`)) {
+      core.info(`  🌿 ${wouldPrefix}Add ${type} policy: ${pattern} to ${envName}`);
       if (!dryRun) {
         try {
           await octokit.request(
@@ -4552,23 +4553,24 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
               owner,
               repo: repoName,
               environment_name: envName,
-              name: pattern
+              name: pattern,
+              type
             }
           );
           subResults.push(
             createSubResult(
               'environment-branch-policy',
               SubResultStatus.CHANGED,
-              `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+              `${wouldPrefix}add ${type} policy "${pattern}" to ${envName}`
             )
           );
         } catch (error) {
-          core.warning(`  ⚠️  Failed to add branch policy "${pattern}" to ${envName}: ${error.message}`);
+          core.warning(`  ⚠️  Failed to add ${type} policy "${pattern}" to ${envName}: ${error.message}`);
           subResults.push(
             createSubResult(
               'environment-branch-policy',
               SubResultStatus.WARNING,
-              `Failed to add branch policy "${pattern}" to ${envName}`
+              `Failed to add ${type} policy "${pattern}" to ${envName}`
             )
           );
         }
@@ -4577,7 +4579,7 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
           createSubResult(
             'environment-branch-policy',
             SubResultStatus.CHANGED,
-            `${wouldPrefix}add branch policy "${pattern}" to ${envName}`
+            `${wouldPrefix}add ${type} policy "${pattern}" to ${envName}`
           )
         );
       }
@@ -4587,13 +4589,14 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
   // Delete policies not in desired list (skip if all patterns were invalid — avoids accidental delete-all)
   if (desiredPatterns.length > 0 && normalizedPatterns.length === 0) {
     core.warning(
-      `  ⚠️  All branch name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`
+      `  ⚠️  All branch and tag name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`
     );
     return subResults;
   }
   for (const policy of existingPolicies) {
-    if (!desiredNames.has(policy.name)) {
-      core.info(`  🌿 ${wouldPrefix}Remove branch policy: ${policy.name} from ${envName}`);
+    const type = policy.type ?? 'branch';
+    if (!desiredNames.has(`${type}:${policy.name}`)) {
+      core.info(`  🌿 ${wouldPrefix}Remove ${type} policy: ${policy.name} from ${envName}`);
       if (!dryRun) {
         try {
           await octokit.request(
@@ -4604,16 +4607,16 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
             createSubResult(
               'environment-branch-policy',
               SubResultStatus.CHANGED,
-              `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+              `${wouldPrefix}remove ${type} policy "${policy.name}" from ${envName}`
             )
           );
         } catch (error) {
-          core.warning(`  ⚠️  Failed to remove branch policy "${policy.name}" from ${envName}: ${error.message}`);
+          core.warning(`  ⚠️  Failed to remove ${type} policy "${policy.name}" from ${envName}: ${error.message}`);
           subResults.push(
             createSubResult(
               'environment-branch-policy',
               SubResultStatus.WARNING,
-              `Failed to remove branch policy "${policy.name}" from ${envName}`
+              `Failed to remove ${type} policy "${policy.name}" from ${envName}`
             )
           );
         }
@@ -4622,7 +4625,7 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
           createSubResult(
             'environment-branch-policy',
             SubResultStatus.CHANGED,
-            `${wouldPrefix}remove branch policy "${policy.name}" from ${envName}`
+            `${wouldPrefix}remove ${type} policy "${policy.name}" from ${envName}`
           )
         );
       }
@@ -4899,22 +4902,26 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
     const envsWithBranchPatterns = [];
     for (const e of resolvedEnvironments) {
       if (e.deployment_branch_policy?.custom_branch_policies !== true) continue;
-      if (e.branch_name_patterns !== undefined && !Array.isArray(e.branch_name_patterns)) {
+      const invalidField = ['branch_name_patterns', 'tag_name_patterns'].find(
+        field => e[field] !== undefined && !Array.isArray(e[field])
+      );
+      if (invalidField) {
         core.warning(
-          `  ⚠️  Invalid branch_name_patterns for environment "${e.name}": expected an array. Skipping branch policy sync.`
+          `  ⚠️  Invalid ${invalidField} for environment "${e.name}": expected an array. Skipping branch policy sync.`
         );
         branchPolicySubResults.push(
           createSubResult(
             'environment-branch-policy',
             SubResultStatus.WARNING,
-            `Invalid branch_name_patterns for environment "${e.name}"`
+            `Invalid ${invalidField} for environment "${e.name}"`
           )
         );
         continue;
       }
       envsWithBranchPatterns.push({
         ...e,
-        branch_name_patterns: Array.isArray(e.branch_name_patterns) ? e.branch_name_patterns : []
+        branch_name_patterns: Array.isArray(e.branch_name_patterns) ? e.branch_name_patterns : [],
+        tag_name_patterns: Array.isArray(e.tag_name_patterns) ? e.tag_name_patterns : []
       });
     }
 
@@ -4994,7 +5001,10 @@ export async function syncEnvironments(octokit, repo, environmentsList, deleteUn
         owner,
         repoName,
         env.name,
-        env.branch_name_patterns,
+        [
+          ...env.branch_name_patterns.map(name => ({ name, type: 'branch' })),
+          ...env.tag_name_patterns.map(name => ({ name, type: 'tag' }))
+        ],
         dryRun
       );
       branchPolicySubResults.push(...policyResults);

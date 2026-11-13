@@ -10735,6 +10735,190 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test('should sync custom tag name patterns and match policies by type', async () => {
+      const testEnvironments = [
+        {
+          name: 'pypi',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          branch_name_patterns: ['main'],
+          tag_name_patterns: ['v*', 'release-*']
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'pypi',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return {
+            data: {
+              branch_policies: [
+                { id: 1, name: 'main', type: 'branch' },
+                // same name as a desired tag pattern, but a branch policy: must be replaced
+                { id: 2, name: 'v*', type: 'branch' },
+                { id: 3, name: 'release-*', type: 'tag' },
+                { id: 4, name: 'old-*', type: 'tag' }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      const postRoute = 'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies';
+      const deleteRoute =
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}';
+      const posts = mockOctokit.request.mock.calls.filter(([route]) => route === postRoute);
+      const deletes = mockOctokit.request.mock.calls.filter(([route]) => route === deleteRoute);
+
+      // Only the missing tag policy is created, with its type
+      expect(posts).toHaveLength(1);
+      expect(posts[0][1]).toEqual(expect.objectContaining({ name: 'v*', type: 'tag' }));
+      // The branch policy "v*" and the unmanaged tag policy "old-*" are removed
+      expect(deletes.map(([, params]) => params.branch_policy_id).sort()).toEqual([2, 4]);
+    });
+
+    test('should send type "branch" for branch patterns and treat policies without type as branch', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          branch_name_patterns: ['main', 'release/*']
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return { data: { branch_policies: [{ id: 1, name: 'main' }] } };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      const posts = mockOctokit.request.mock.calls.filter(
+        ([route]) => route === 'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies'
+      );
+      expect(posts).toHaveLength(1);
+      expect(posts[0][1]).toEqual(expect.objectContaining({ name: 'release/*', type: 'branch' }));
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.anything()
+      );
+    });
+
+    test('should remove existing tag policies when tag_name_patterns is omitted', async () => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          branch_name_patterns: ['main']
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return {
+            data: {
+              branch_policies: [
+                { id: 1, name: 'main', type: 'branch' },
+                { id: 2, name: 'v*', type: 'tag' }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, true);
+
+      expect(result.success).toBe(true);
+      expect(result.branchPolicySubResults).toEqual([
+        expect.objectContaining({ status: 'changed', message: 'Would remove tag policy "v*" from staging' })
+      ]);
+      // dry-run: nothing is written
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies/{branch_policy_id}',
+        expect.anything()
+      );
+    });
+
+    test('should warn and skip policy sync when tag_name_patterns is not an array', async () => {
+      const testEnvironments = [
+        {
+          name: 'pypi',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          tag_name_patterns: 'v*'
+        }
+      ];
+
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'pypi',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(result.success).toBe(true);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Invalid tag_name_patterns'));
+      expect(mockOctokit.request).not.toHaveBeenCalledWith(
+        'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+        expect.anything()
+      );
+    });
+
     test('should preview branch policy changes in dry-run', async () => {
       const testEnvironments = [
         {
