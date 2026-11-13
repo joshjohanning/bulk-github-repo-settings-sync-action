@@ -144,6 +144,12 @@ inputs:
   autolinks-file:
     description: 'Path to a JSON file containing autolink references to sync to target repositories'
     required: false
+  default-workflow-permissions:
+    description: 'Default permissions of the GITHUB_TOKEN in workflows (read or write)'
+    required: false
+  actions-can-approve-prs:
+    description: 'Allow or disallow GitHub Actions to create and approve pull requests'
+    required: false
   environments:
     description: 'Comma-separated list of environment names to sync (creates new environments only; existing environments are not updated)'
     required: false
