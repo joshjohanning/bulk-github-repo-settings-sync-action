@@ -148,7 +148,7 @@ inputs:
     description: 'Comma-separated list of environment names to sync (creates new environments only; existing environments are not updated)'
     required: false
   environments-file:
-    description: 'Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules, branch name patterns)'
+    description: 'Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules, branch and tag name patterns)'
     required: false
   delete-unmanaged-environments:
     description: 'Delete environments not defined in the environments configuration'
