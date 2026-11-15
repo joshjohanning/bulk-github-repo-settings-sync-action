@@ -4174,7 +4174,8 @@ export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
 }
 
 /**
- * Sync whether actions and reusable workflows have to be pinned to a full-length commit SHA in the target repository
+ * Sync whether actions must be pinned to a full-length commit SHA in the target repository.
+ * Reusable workflows can still be referenced by tag.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in "owner/repo" format
  * @param {boolean} shaPinningRequired - Whether SHA pinning is required

@@ -5815,6 +5815,59 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
     });
 
+    test.each([true, false])('should sync SHA pinning=%s as the only global setting', async required => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'actions-sha-pinning-required': String(required)
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+      mockOctokit.request.mockResolvedValue({
+        data: { enabled: true, allowed_actions: 'all', sha_pinning_required: !required }
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/actions/permissions', {
+        owner: 'owner',
+        repo: 'repo1',
+        enabled: true,
+        allowed_actions: 'all',
+        sha_pinning_required: required
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+    });
+
+    test('should report SHA pinning update failures as repository warnings', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'actions-sha-pinning-required': 'true'
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+      mockOctokit.request.mockImplementation(route => {
+        if (route.startsWith('GET ')) {
+          return { data: { enabled: true, sha_pinning_required: false } };
+        }
+        throw Object.assign(new Error('Forbidden'), { status: 403 });
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to sync SHA pinning'));
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+    });
+
     test('should sync SHA pinning for actions from repo-specific configuration', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {

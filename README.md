@@ -35,7 +35,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 - 📝 **Sync pull request templates** across repositories via pull requests
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
-- 📌 **Require SHA pinning** for actions and reusable workflows
+- 📌 **Require SHA pinning** for actions (reusable workflows can still be referenced by tag)
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
 - 👥 **Sync CODEOWNERS files** across repositories via pull requests
 - 📦 **Sync package.json properties** (scripts, engines) across repositories via pull requests
@@ -1056,6 +1056,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `private-vulnerability-reporting` | Enable or disable private vulnerability reporting                                                                                           | No       | -                                         |
 | `dependabot-alerts`               | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                  | No       | -                                         |
 | `dependabot-security-updates`     | Enable or disable Dependabot security updates (automated security fixes)                                                                    | No       | -                                         |
+| `actions-sha-pinning-required`    | Require actions to be pinned to a full-length commit SHA (reusable workflows can still be referenced by tag)                                | No       | -                                         |
 | `topics`                          | Comma-separated list of topics to set on repositories (replaces existing topics)                                                            | No       | -                                         |
 | `dependabot-yml`                  | Path to a dependabot.yml file to sync to `.github/dependabot.yml` in target repositories                                                    | No       | -                                         |
 | `dependabot-pr-title`             | Title for pull requests when updating dependabot.yml                                                                                        | No       | `chore: update dependabot.yml`            |
@@ -1070,7 +1071,6 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `file-sync-source`                | Path to one file to sync; requires `file-sync-target`                                                                                       | No       | -                                         |
 | `file-sync-target`                | Destination path for `file-sync-source` in target repositories; requires `file-sync-source`                                                 | No       | -                                         |
 | `autolinks-file`                  | Path to a JSON file containing autolink references to sync to target repositories                                                           | No       | -                                         |
-| `actions-sha-pinning-required`    | Require actions and reusable workflows to be pinned to a full-length commit SHA                                                             | No       | -                                         |
 | `environments`                    | Comma-separated list of environment names to create (e.g., `production, staging, development`)                                              | No       | -                                         |
 | `environments-file`               | Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules) | No       | -                                         |
 | `delete-unmanaged-environments`   | Delete environments not included in the configured environments                                                                             | No       | `false`                                   |

@@ -94,6 +94,11 @@ inputs:
     description: 'Enable or disable Dependabot security updates for repositories'
     required: false
 
+  # === GitHub Actions Settings ===
+  actions-sha-pinning-required:
+    description: 'Require actions to be pinned to a full-length commit SHA. Reusable workflows can still be referenced by tag.'
+    required: false
+
   # === Repository Metadata ===
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
@@ -143,9 +148,6 @@ inputs:
     required: false
   autolinks-file:
     description: 'Path to a JSON file containing autolink references to sync to target repositories'
-    required: false
-  actions-sha-pinning-required:
-    description: 'Require actions and reusable workflows to be pinned to a full-length commit SHA'
     required: false
   environments:
     description: 'Comma-separated list of environment names to sync (creates new environments only; existing environments are not updated)'
