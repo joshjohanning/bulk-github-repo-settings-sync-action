@@ -4586,15 +4586,19 @@ async function syncDeploymentBranchPolicies(octokit, owner, repoName, envName, d
     }
   }
 
-  // Delete policies not in desired list (skip if all patterns were invalid — avoids accidental delete-all)
-  if (desiredPatterns.length > 0 && normalizedPatterns.length === 0) {
-    core.warning(
-      `  ⚠️  All branch and tag name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`
-    );
-    return subResults;
+  // Invalid patterns of one type must not allow valid patterns of the other to trigger deletion.
+  const preservedTypes = new Set();
+  for (const type of ['branch', 'tag']) {
+    if (desiredPatterns.some(p => p.type === type) && !normalizedPatterns.some(p => p.type === type)) {
+      preservedTypes.add(type);
+      const message = `All ${type} name patterns for ${envName} were invalid — skipping deletion to avoid accidental removal`;
+      core.warning(`  ⚠️  ${message}`);
+      subResults.push(createSubResult('environment-branch-policy', SubResultStatus.WARNING, message));
+    }
   }
   for (const policy of existingPolicies) {
     const type = policy.type ?? 'branch';
+    if (preservedTypes.has(type)) continue;
     if (!desiredNames.has(`${type}:${policy.name}`)) {
       core.info(`  🌿 ${wouldPrefix}Remove ${type} policy: ${policy.name} from ${envName}`);
       if (!dryRun) {

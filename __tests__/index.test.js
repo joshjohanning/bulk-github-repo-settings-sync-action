@@ -10883,6 +10883,62 @@ describe('Bulk GitHub Repository Settings Action', () => {
       );
     });
 
+    test.each([
+      ['branch', 'tag'],
+      ['tag', 'branch']
+    ])('should preserve invalid %s patterns while syncing valid %s patterns', async (invalidType, validType) => {
+      const testEnvironments = [
+        {
+          name: 'staging',
+          deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+          [`${invalidType}_name_patterns`]: [null, ' '],
+          [`${validType}_name_patterns`]: ['release-*']
+        }
+      ];
+      mockOctokit.request.mockImplementation(route => {
+        if (route === 'GET /repos/{owner}/{repo}/environments') {
+          return {
+            data: {
+              environments: [
+                {
+                  name: 'staging',
+                  protection_rules: [],
+                  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
+                }
+              ]
+            }
+          };
+        }
+        if (route === 'GET /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies') {
+          return {
+            data: {
+              branch_policies: [
+                { id: 1, name: 'keep-*', type: invalidType },
+                { id: 2, name: 'old-*', type: validType }
+              ]
+            }
+          };
+        }
+        return {};
+      });
+
+      const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
+
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining(`All ${invalidType} name patterns for staging were invalid`)
+      );
+      expect(result.branchPolicySubResults).toContainEqual(
+        expect.objectContaining({ status: 'warning', message: expect.stringContaining(`All ${invalidType}`) })
+      );
+      expect(mockOctokit.request).toHaveBeenCalledWith(
+        'POST /repos/{owner}/{repo}/environments/{environment_name}/deployment-branch-policies',
+        expect.objectContaining({ name: 'release-*', type: validType })
+      );
+      const deletions = mockOctokit.request.mock.calls.filter(([route]) => route.startsWith('DELETE '));
+      expect(deletions).toHaveLength(1);
+      expect(deletions[0][1].branch_policy_id).toBe(2);
+    });
+
     test('should warn and skip policy sync when tag_name_patterns is not an array', async () => {
       const testEnvironments = [
         {
