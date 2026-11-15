@@ -1224,6 +1224,7 @@ jobs:
           allow-update-branch: true
           wiki: false
           code-scanning: true
+          actions-sha-pinning-required: true
           actions-default-workflow-permissions: read
           actions-can-approve-pull-request-reviews: false
           dependabot-pr-title: 'chore: update dependabot.yml'
@@ -1249,6 +1250,7 @@ repos:
 repos:
   - repo: owner/repo1
     allow-squash-merge: false # Override global setting
+    actions-sha-pinning-required: true
     actions-default-workflow-permissions: read
     actions-can-approve-pull-request-reviews: false
     topics: 'javascript,custom-topic'
