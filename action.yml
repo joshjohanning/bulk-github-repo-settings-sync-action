@@ -98,10 +98,10 @@ inputs:
     required: false
 
   # === GitHub Actions Settings ===
-  default-workflow-permissions:
+  actions-default-workflow-permissions:
     description: 'Default permissions of the GITHUB_TOKEN in workflows (read or write)'
     required: false
-  can-approve-pull-request-reviews:
+  actions-can-approve-pull-request-reviews:
     description: 'Allow or disallow GitHub Actions to create and approve pull requests'
     required: false
 
