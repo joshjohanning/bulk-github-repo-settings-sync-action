@@ -4224,7 +4224,9 @@ export async function syncWorkflowPermissions(octokit, repo, workflowPermissions
       });
     }
 
-    const details = changes.map(change => `${change.setting.replace(/_/g, '-')}: ${change.from} → ${change.to}`);
+    const details = changes.map(
+      change => `actions-${change.setting.replace(/_/g, '-')}: ${change.from} → ${change.to}`
+    );
     return {
       repository: repo,
       success: true,
@@ -5401,8 +5403,8 @@ export async function run() {
     const autolinksFile = core.getInput('autolinks-file');
 
     // Get workflow permissions settings
-    const defaultWorkflowPermissions = getEnumInput('default-workflow-permissions', ['READ', 'WRITE']);
-    const canApprovePullRequestReviews = getBooleanInput('can-approve-pull-request-reviews');
+    const defaultWorkflowPermissions = getEnumInput('actions-default-workflow-permissions', ['READ', 'WRITE']);
+    const canApprovePullRequestReviews = getBooleanInput('actions-can-approve-pull-request-reviews');
 
     // Get environments settings
     const environmentNames = core.getInput('environments');
@@ -5722,15 +5724,15 @@ export async function run() {
       const repoWorkflowPermissions = {
         default_workflow_permissions:
           coerceEnumConfig(
-            repoConfig['default-workflow-permissions'],
-            'default-workflow-permissions',
+            repoConfig['actions-default-workflow-permissions'],
+            'actions-default-workflow-permissions',
             repo,
             ['READ', 'WRITE'],
             defaultWorkflowPermissions
           )?.toLowerCase() ?? null,
         can_approve_pull_request_reviews: coerceBooleanConfig(
-          repoConfig['can-approve-pull-request-reviews'],
-          'can-approve-pull-request-reviews',
+          repoConfig['actions-can-approve-pull-request-reviews'],
+          'actions-can-approve-pull-request-reviews',
           repo,
           canApprovePullRequestReviews
         )

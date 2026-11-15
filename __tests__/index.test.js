@@ -194,9 +194,9 @@ inputs:
     description: 'File sync target'
   autolinks-file:
     description: 'Autolinks file'
-  default-workflow-permissions:
+  actions-default-workflow-permissions:
     description: 'Default workflow permissions'
-  can-approve-pull-request-reviews:
+  actions-can-approve-pull-request-reviews:
     description: 'Actions can approve pull requests'
   environments:
     description: 'Comma-separated environment names'
@@ -278,8 +278,8 @@ const mockActionYmlParsed = {
     'file-sync-source': { description: 'File sync source' },
     'file-sync-target': { description: 'File sync target' },
     'autolinks-file': { description: 'Autolinks file' },
-    'default-workflow-permissions': { description: 'Default workflow permissions' },
-    'can-approve-pull-request-reviews': { description: 'Actions can approve pull requests' },
+    'actions-default-workflow-permissions': { description: 'Default workflow permissions' },
+    'actions-can-approve-pull-request-reviews': { description: 'Actions can approve pull requests' },
     environments: { description: 'Comma-separated environment names' },
     'environments-file': { description: 'Environments file' },
     'delete-unmanaged-environments': { description: 'Delete unmanaged environments' },
@@ -5966,8 +5966,8 @@ describe('Bulk GitHub Repository Settings Action', () => {
     });
 
     test.each([
-      ['default-workflow-permissions', 'read', 'default_workflow_permissions', 'write', 'read'],
-      ['can-approve-pull-request-reviews', 'false', 'can_approve_pull_request_reviews', true, false]
+      ['actions-default-workflow-permissions', 'read', 'default_workflow_permissions', 'write', 'read'],
+      ['actions-can-approve-pull-request-reviews', 'false', 'can_approve_pull_request_reviews', true, false]
     ])('should sync %s as the only global setting', async (input, value, field, current, desired) => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = { 'github-token': 'test-token', repositories: 'owner/repo1', [input]: value };
@@ -5993,7 +5993,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
         const inputs = {
           'github-token': 'test-token',
           repositories: 'owner/repo1',
-          'can-approve-pull-request-reviews': 'false'
+          'actions-can-approve-pull-request-reviews': 'false'
         };
         return inputs[name] || '';
       });
@@ -6013,19 +6013,22 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
     });
 
-    test('should sync workflow permissions from inputs and repo-specific configuration', async () => {
+    test.each([
+      [{ 'actions-default-workflow-permissions': 'read' }, { 'actions-can-approve-pull-request-reviews': false }],
+      [{ 'actions-can-approve-pull-request-reviews': 'false' }, { 'actions-default-workflow-permissions': 'read' }]
+    ])('should sync workflow permissions from inputs and repo-specific configuration', async (inputs, repoSettings) => {
       mockCore.getInput.mockImplementation(name => {
-        const inputs = {
+        const values = {
           'github-token': 'test-token',
           'repositories-file': 'repos.yml',
-          'default-workflow-permissions': 'read'
+          ...inputs
         };
-        return inputs[name] || '';
+        return values[name] || '';
       });
 
-      setMockFileContent('repos:\n  - repo: owner/repo1\n    can-approve-pull-request-reviews: false');
+      setMockFileContent('repos:\n  - repo: owner/repo1');
       setMockYamlContent({
-        repos: [{ repo: 'owner/repo1', 'can-approve-pull-request-reviews': false }]
+        repos: [{ repo: 'owner/repo1', ...repoSettings }]
       });
 
       mockOctokit.rest.repos.get.mockResolvedValue({
@@ -10371,7 +10374,7 @@ rules:
       expect(result.success).toBe(true);
       expect(result.workflowPermissions).toBe('updated');
       expect(result.changes).toEqual([{ setting: 'default_workflow_permissions', from: 'write', to: 'read' }]);
-      expect(result.message).toBe('Updated workflow permissions (default-workflow-permissions: write → read)');
+      expect(result.message).toBe('Updated workflow permissions (actions-default-workflow-permissions: write → read)');
       expect(mockOctokit.request).toHaveBeenCalledWith(getRoute, { owner: 'owner', repo: 'repo' });
       expect(mockOctokit.request).toHaveBeenCalledWith(putRoute, {
         owner: 'owner',
@@ -10432,7 +10435,7 @@ rules:
       expect(result.success).toBe(true);
       expect(result.workflowPermissions).toBe('would-update');
       expect(result.message).toBe(
-        'Would update workflow permissions (default-workflow-permissions: write → read, can-approve-pull-request-reviews: true → false)'
+        'Would update workflow permissions (actions-default-workflow-permissions: write → read, actions-can-approve-pull-request-reviews: true → false)'
       );
       expect(mockOctokit.request).not.toHaveBeenCalledWith(putRoute, expect.anything());
     });
