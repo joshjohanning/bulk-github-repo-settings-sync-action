@@ -66,6 +66,9 @@ inputs:
   wiki:
     description: 'Enable or disable the repository wiki'
     required: false
+  projects:
+    description: 'Enable or disable projects for the repository'
+    required: false
 
   # === Security Settings ===
   immutable-releases:
