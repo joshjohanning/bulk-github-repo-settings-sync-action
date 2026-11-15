@@ -4246,6 +4246,71 @@ export async function syncWorkflowPermissions(octokit, repo, workflowPermissions
 }
 
 /**
+ * Sync whether actions must be pinned to a full-length commit SHA in the target repository.
+ * Reusable workflows can still be referenced by tag.
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {boolean} shaPinningRequired - Whether SHA pinning is required
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncActionsShaPinning(octokit, repo, shaPinningRequired, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    const { data: current } = await octokit.request('GET /repos/{owner}/{repo}/actions/permissions', {
+      owner,
+      repo: repoName
+    });
+    const currentValue = current.sha_pinning_required === true;
+
+    if (currentValue === shaPinningRequired) {
+      return {
+        repository: repo,
+        success: true,
+        actionsShaPinning: 'unchanged',
+        message: `SHA pinning for actions is already ${shaPinningRequired ? 'required' : 'not required'}`,
+        dryRun
+      };
+    }
+
+    if (!dryRun) {
+      // The endpoint replaces the Actions permissions and requires "enabled", so the other current values are sent back
+      const params = { owner, repo: repoName, enabled: current.enabled, sha_pinning_required: shaPinningRequired };
+      if (current.allowed_actions !== undefined) {
+        params.allowed_actions = current.allowed_actions;
+      }
+      await octokit.request('PUT /repos/{owner}/{repo}/actions/permissions', params);
+    }
+
+    const action = shaPinningRequired ? 'require' : 'no longer require';
+    return {
+      repository: repo,
+      success: true,
+      actionsShaPinning: dryRun ? 'would-update' : 'updated',
+      message: `${dryRun ? 'Would ' : 'Changed to '}${action} SHA pinning for actions`,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync SHA pinning for actions: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Normalize an existing environment from the API response into a comparable format.
  * Extracts wait_timer and reviewers from protection_rules.
  * @param {Object} env - Environment object from the API
@@ -5402,6 +5467,9 @@ export async function run() {
     // Get autolinks settings
     const autolinksFile = core.getInput('autolinks-file');
 
+    // Get SHA pinning setting for actions
+    const actionsShaPinningRequired = getBooleanInput('actions-sha-pinning-required');
+
     // Get workflow permissions settings
     const defaultWorkflowPermissions = getEnumInput('actions-default-workflow-permissions', ['READ', 'WRITE']);
     const canApprovePullRequestReviews = getBooleanInput('actions-can-approve-pull-request-reviews');
@@ -5462,6 +5530,7 @@ export async function run() {
       (workflowFiles && workflowFiles.length > 0) ||
       globalFileSync.length > 0 ||
       autolinksFile ||
+      actionsShaPinningRequired != null ||
       defaultWorkflowPermissions != null ||
       canApprovePullRequestReviews != null ||
       globalEnvironments.length > 0 ||
@@ -5529,6 +5598,9 @@ export async function run() {
     }
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
+    }
+    if (actionsShaPinningRequired !== null) {
+      core.info(`SHA pinning for actions will be ${actionsShaPinningRequired ? 'required' : 'not required'}`);
     }
     if (defaultWorkflowPermissions != null || canApprovePullRequestReviews != null) {
       core.info('Workflow permissions will be synced');
@@ -5719,6 +5791,14 @@ export async function run() {
       // Handle repo-specific autolinks-file
       const repoAutolinksFile =
         repoConfig['autolinks-file'] !== undefined ? repoConfig['autolinks-file'] : autolinksFile;
+
+      // Handle repo-specific SHA pinning for actions
+      const repoActionsShaPinningRequired = coerceBooleanConfig(
+        repoConfig['actions-sha-pinning-required'],
+        'actions-sha-pinning-required',
+        repo,
+        actionsShaPinningRequired
+      );
 
       // Handle repo-specific workflow permissions
       const repoWorkflowPermissions = {
@@ -6191,6 +6271,35 @@ export async function run() {
               'workflow-permissions-sync',
               SubResultStatus.WARNING,
               'Workflow permissions sync produced a warning'
+            )
+          );
+        }
+      }
+
+      // Sync SHA pinning for actions if specified
+      if (repoActionsShaPinningRequired != null) {
+        core.info(`  📌 Checking SHA pinning for actions...`);
+        const shaPinningResult = await syncActionsShaPinning(octokit, repo, repoActionsShaPinningRequired, dryRun);
+
+        // Add SHA pinning result to the main result
+        result.actionsShaPinningSync = shaPinningResult;
+
+        if (shaPinningResult.success) {
+          core.info(`  📌 ${shaPinningResult.message}`);
+          if (shaPinningResult.actionsShaPinning !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('actions-sha-pinning-sync', SubResultStatus.CHANGED, shaPinningResult.message)
+            );
+          }
+        } else {
+          result.hasWarnings = true;
+          result.actionsShaPinningSyncWarning = shaPinningResult.error;
+          core.warning(`  ⚠️  ${shaPinningResult.error}`);
+          result.subResults.push(
+            createSubResult(
+              'actions-sha-pinning-sync',
+              SubResultStatus.WARNING,
+              'SHA pinning for actions produced a warning'
             )
           );
         }

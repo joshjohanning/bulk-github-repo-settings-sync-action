@@ -98,6 +98,9 @@ inputs:
     required: false
 
   # === GitHub Actions Settings ===
+  actions-sha-pinning-required:
+    description: 'Require actions to be pinned to a full-length commit SHA. Reusable workflows can still be referenced by tag.'
+    required: false
   actions-default-workflow-permissions:
     description: 'Default permissions of the GITHUB_TOKEN in workflows (read or write)'
     required: false

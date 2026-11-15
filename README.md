@@ -35,6 +35,7 @@ Please refer to the [release page](https://github.com/joshjohanning/bulk-github-
 - 📝 **Sync pull request templates** across repositories via pull requests
 - 🔧 **Sync workflow files** across repositories via pull requests
 - 🔗 **Sync autolink references** across repositories
+- 📌 **Require SHA pinning** for actions (reusable workflows can still be referenced by tag)
 - 🔑 **Set workflow permissions** (default `GITHUB_TOKEN` permissions, pull request approval by GitHub Actions)
 - 🤖 **Sync copilot-instructions.md files** across repositories via pull requests
 - 👥 **Sync CODEOWNERS files** across repositories via pull requests
@@ -1058,6 +1059,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `private-vulnerability-reporting`          | Enable or disable private vulnerability reporting                                                                                           | No       | -                                         |
 | `dependabot-alerts`                        | Enable or disable Dependabot alerts (vulnerability alerts)                                                                                  | No       | -                                         |
 | `dependabot-security-updates`              | Enable or disable Dependabot security updates (automated security fixes)                                                                    | No       | -                                         |
+| `actions-sha-pinning-required`             | Require actions to be pinned to a full-length commit SHA (reusable workflows can still be referenced by tag)                                | No       | -                                         |
 | `actions-default-workflow-permissions`     | Default permissions of the `GITHUB_TOKEN` in workflows (`read` or `write`)                                                                  | No       | -                                         |
 | `actions-can-approve-pull-request-reviews` | Allow or disallow GitHub Actions to create and approve pull requests                                                                        | No       | -                                         |
 | `topics`                                   | Comma-separated list of topics to set on repositories (replaces existing topics)                                                            | No       | -                                         |
@@ -1222,6 +1224,7 @@ jobs:
           allow-update-branch: true
           wiki: false
           code-scanning: true
+          actions-sha-pinning-required: true
           actions-default-workflow-permissions: read
           actions-can-approve-pull-request-reviews: false
           dependabot-pr-title: 'chore: update dependabot.yml'
@@ -1247,6 +1250,7 @@ repos:
 repos:
   - repo: owner/repo1
     allow-squash-merge: false # Override global setting
+    actions-sha-pinning-required: true
     actions-default-workflow-permissions: read
     actions-can-approve-pull-request-reviews: false
     topics: 'javascript,custom-topic'
