@@ -5386,7 +5386,7 @@ export async function run() {
 
     // Get workflow permissions settings
     const defaultWorkflowPermissions = getEnumInput('default-workflow-permissions', ['READ', 'WRITE']);
-    const actionsCanApprovePrs = getBooleanInput('actions-can-approve-prs');
+    const canApprovePullRequestReviews = getBooleanInput('can-approve-pull-request-reviews');
 
     // Get environments settings
     const environmentNames = core.getInput('environments');
@@ -5445,7 +5445,7 @@ export async function run() {
       globalFileSync.length > 0 ||
       autolinksFile ||
       defaultWorkflowPermissions != null ||
-      actionsCanApprovePrs != null ||
+      canApprovePullRequestReviews != null ||
       globalEnvironments.length > 0 ||
       copilotInstructionsMd ||
       codeowners ||
@@ -5512,7 +5512,7 @@ export async function run() {
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
     }
-    if (defaultWorkflowPermissions != null || actionsCanApprovePrs != null) {
+    if (defaultWorkflowPermissions != null || canApprovePullRequestReviews != null) {
       core.info('Workflow permissions will be synced');
     }
     if (globalEnvironments.length > 0) {
@@ -5712,10 +5712,10 @@ export async function run() {
             defaultWorkflowPermissions
           )?.toLowerCase() ?? null,
         can_approve_pull_request_reviews: coerceBooleanConfig(
-          repoConfig['actions-can-approve-prs'],
-          'actions-can-approve-prs',
+          repoConfig['can-approve-pull-request-reviews'],
+          'can-approve-pull-request-reviews',
           repo,
-          actionsCanApprovePrs
+          canApprovePullRequestReviews
         )
       };
 

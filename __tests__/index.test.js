@@ -194,7 +194,7 @@ inputs:
     description: 'Autolinks file'
   default-workflow-permissions:
     description: 'Default workflow permissions'
-  actions-can-approve-prs:
+  can-approve-pull-request-reviews:
     description: 'Actions can approve pull requests'
   environments:
     description: 'Comma-separated environment names'
@@ -276,7 +276,7 @@ const mockActionYmlParsed = {
     'file-sync-target': { description: 'File sync target' },
     'autolinks-file': { description: 'Autolinks file' },
     'default-workflow-permissions': { description: 'Default workflow permissions' },
-    'actions-can-approve-prs': { description: 'Actions can approve pull requests' },
+    'can-approve-pull-request-reviews': { description: 'Actions can approve pull requests' },
     environments: { description: 'Comma-separated environment names' },
     'environments-file': { description: 'Environments file' },
     'delete-unmanaged-environments': { description: 'Delete unmanaged environments' },
@@ -5818,6 +5818,54 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
     });
 
+    test.each([
+      ['default-workflow-permissions', 'read', 'default_workflow_permissions', 'write', 'read'],
+      ['can-approve-pull-request-reviews', 'false', 'can_approve_pull_request_reviews', true, false]
+    ])('should sync %s as the only global setting', async (input, value, field, current, desired) => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = { 'github-token': 'test-token', repositories: 'owner/repo1', [input]: value };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+      mockOctokit.request.mockResolvedValue({ data: { [field]: current } });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockOctokit.request).toHaveBeenCalledWith('PUT /repos/{owner}/{repo}/actions/permissions/workflow', {
+        owner: 'owner',
+        repo: 'repo1',
+        [field]: desired
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+    });
+
+    test('should report workflow permission update failures as repository warnings', async () => {
+      mockCore.getInput.mockImplementation(name => {
+        const inputs = {
+          'github-token': 'test-token',
+          repositories: 'owner/repo1',
+          'can-approve-pull-request-reviews': 'false'
+        };
+        return inputs[name] || '';
+      });
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+      mockOctokit.request.mockImplementation(route => {
+        if (route.startsWith('GET ')) {
+          return { data: { can_approve_pull_request_reviews: true } };
+        }
+        throw Object.assign(new Error('Forbidden'), { status: 403 });
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to sync workflow permissions'));
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+    });
+
     test('should sync workflow permissions from inputs and repo-specific configuration', async () => {
       mockCore.getInput.mockImplementation(name => {
         const inputs = {
@@ -5828,9 +5876,9 @@ describe('Bulk GitHub Repository Settings Action', () => {
         return inputs[name] || '';
       });
 
-      setMockFileContent('repos:\n  - repo: owner/repo1\n    actions-can-approve-prs: false');
+      setMockFileContent('repos:\n  - repo: owner/repo1\n    can-approve-pull-request-reviews: false');
       setMockYamlContent({
-        repos: [{ repo: 'owner/repo1', 'actions-can-approve-prs': false }]
+        repos: [{ repo: 'owner/repo1', 'can-approve-pull-request-reviews': false }]
       });
 
       mockOctokit.rest.repos.get.mockResolvedValue({
