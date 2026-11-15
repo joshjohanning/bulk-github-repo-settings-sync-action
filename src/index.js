@@ -4175,6 +4175,77 @@ export async function syncAutolinks(octokit, repo, autolinksFilePath, dryRun) {
 }
 
 /**
+ * Sync the permissions of the GITHUB_TOKEN in workflows of the target repository
+ * @param {Octokit} octokit - Octokit instance
+ * @param {string} repo - Repository in "owner/repo" format
+ * @param {Object} workflowPermissions - Desired permissions, a null value leaves the setting unchanged
+ * @param {string|null} workflowPermissions.default_workflow_permissions - Default permissions (`read` or `write`)
+ * @param {boolean|null} workflowPermissions.can_approve_pull_request_reviews - Whether workflows can create and approve pull requests
+ * @param {boolean} dryRun - Preview mode without making actual changes
+ * @returns {Promise<Object>} Result object
+ */
+export async function syncWorkflowPermissions(octokit, repo, workflowPermissions, dryRun) {
+  const [owner, repoName] = repo.split('/');
+
+  if (!owner || !repoName) {
+    return {
+      repository: repo,
+      success: false,
+      error: 'Invalid repository format. Expected "owner/repo"',
+      dryRun
+    };
+  }
+
+  try {
+    const { data: current } = await octokit.request('GET /repos/{owner}/{repo}/actions/permissions/workflow', {
+      owner,
+      repo: repoName
+    });
+
+    const changes = Object.entries(workflowPermissions)
+      .filter(([setting, desired]) => desired != null && current[setting] !== desired)
+      .map(([setting, desired]) => ({ setting, from: current[setting], to: desired }));
+
+    if (changes.length === 0) {
+      return {
+        repository: repo,
+        success: true,
+        workflowPermissions: 'unchanged',
+        message: 'Workflow permissions are already up to date',
+        dryRun
+      };
+    }
+
+    if (!dryRun) {
+      await octokit.request('PUT /repos/{owner}/{repo}/actions/permissions/workflow', {
+        owner,
+        repo: repoName,
+        ...Object.fromEntries(changes.map(change => [change.setting, change.to]))
+      });
+    }
+
+    const details = changes.map(
+      change => `actions-${change.setting.replace(/_/g, '-')}: ${change.from} → ${change.to}`
+    );
+    return {
+      repository: repo,
+      success: true,
+      workflowPermissions: dryRun ? 'would-update' : 'updated',
+      message: `${dryRun ? 'Would update' : 'Updated'} workflow permissions (${details.join(', ')})`,
+      changes,
+      dryRun
+    };
+  } catch (error) {
+    return {
+      repository: repo,
+      success: false,
+      error: `Failed to sync workflow permissions: ${error.message}`,
+      dryRun
+    };
+  }
+}
+
+/**
  * Sync whether actions must be pinned to a full-length commit SHA in the target repository.
  * Reusable workflows can still be referenced by tag.
  * @param {Octokit} octokit - Octokit instance
@@ -5399,6 +5470,10 @@ export async function run() {
     // Get SHA pinning setting for actions
     const actionsShaPinningRequired = getBooleanInput('actions-sha-pinning-required');
 
+    // Get workflow permissions settings
+    const defaultWorkflowPermissions = getEnumInput('actions-default-workflow-permissions', ['READ', 'WRITE']);
+    const canApprovePullRequestReviews = getBooleanInput('actions-can-approve-pull-request-reviews');
+
     // Get environments settings
     const environmentNames = core.getInput('environments');
     const environmentsFile = core.getInput('environments-file');
@@ -5456,6 +5531,8 @@ export async function run() {
       globalFileSync.length > 0 ||
       autolinksFile ||
       actionsShaPinningRequired != null ||
+      defaultWorkflowPermissions != null ||
+      canApprovePullRequestReviews != null ||
       globalEnvironments.length > 0 ||
       copilotInstructionsMd ||
       codeowners ||
@@ -5524,6 +5601,9 @@ export async function run() {
     }
     if (actionsShaPinningRequired !== null) {
       core.info(`SHA pinning for actions will be ${actionsShaPinningRequired ? 'required' : 'not required'}`);
+    }
+    if (defaultWorkflowPermissions != null || canApprovePullRequestReviews != null) {
+      core.info('Workflow permissions will be synced');
     }
     if (globalEnvironments.length > 0) {
       core.info(`Environments will be synced: ${globalEnvironments.map(e => e.name).join(', ')}`);
@@ -5719,6 +5799,24 @@ export async function run() {
         repo,
         actionsShaPinningRequired
       );
+
+      // Handle repo-specific workflow permissions
+      const repoWorkflowPermissions = {
+        default_workflow_permissions:
+          coerceEnumConfig(
+            repoConfig['actions-default-workflow-permissions'],
+            'actions-default-workflow-permissions',
+            repo,
+            ['READ', 'WRITE'],
+            defaultWorkflowPermissions
+          )?.toLowerCase() ?? null,
+        can_approve_pull_request_reviews: coerceBooleanConfig(
+          repoConfig['actions-can-approve-pull-request-reviews'],
+          'actions-can-approve-pull-request-reviews',
+          repo,
+          canApprovePullRequestReviews
+        )
+      };
 
       // Handle repo-specific environments
       let repoEnvironments = globalEnvironments;
@@ -6145,6 +6243,35 @@ export async function run() {
           core.warning(`  ⚠️  ${autolinksResult.error}`);
           result.subResults.push(
             createSubResult('autolinks-sync', SubResultStatus.WARNING, 'Autolinks sync produced a warning')
+          );
+        }
+      }
+
+      // Sync workflow permissions if specified
+      if (Object.values(repoWorkflowPermissions).some(value => value != null)) {
+        core.info(`  🔑 Checking workflow permissions...`);
+        const workflowPermissionsResult = await syncWorkflowPermissions(octokit, repo, repoWorkflowPermissions, dryRun);
+
+        // Add workflow permissions result to the main result
+        result.workflowPermissionsSync = workflowPermissionsResult;
+
+        if (workflowPermissionsResult.success) {
+          core.info(`  🔑 ${workflowPermissionsResult.message}`);
+          if (workflowPermissionsResult.workflowPermissions !== 'unchanged') {
+            result.subResults.push(
+              createSubResult('workflow-permissions-sync', SubResultStatus.CHANGED, workflowPermissionsResult.message)
+            );
+          }
+        } else {
+          result.hasWarnings = true;
+          result.workflowPermissionsSyncWarning = workflowPermissionsResult.error;
+          core.warning(`  ⚠️  ${workflowPermissionsResult.error}`);
+          result.subResults.push(
+            createSubResult(
+              'workflow-permissions-sync',
+              SubResultStatus.WARNING,
+              'Workflow permissions sync produced a warning'
+            )
           );
         }
       }
