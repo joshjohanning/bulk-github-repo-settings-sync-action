@@ -112,6 +112,9 @@ inputs:
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
     required: false
+  labels-file:
+    description: 'Path to a YAML or JSON file with a labels array (name, color, optional description). Creates or updates labels without deleting unlisted labels.'
+    required: false
 
   # === File Syncing ===
   dependabot-yml:
