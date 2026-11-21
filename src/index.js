@@ -11,7 +11,10 @@
  */
 
 import * as core from '@actions/core';
+import { retry } from '@octokit/plugin-retry';
+import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from '@octokit/rest';
+import { AsyncLocalStorage } from 'async_hooks';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import ignore from 'ignore';
@@ -518,6 +521,87 @@ async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCa
 }
 
 const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
+export const DEFAULT_MAX_CONCURRENCY = 5;
+const MAX_RATE_LIMIT_RETRIES = 3;
+
+const ThrottledOctokit = Octokit.plugin(throttling, retry);
+
+/**
+ * Create an Octokit throttling handler that retries rate-limited requests a bounded number of times.
+ * @param {string} label - Human-readable rate limit type for log messages
+ * @returns {(retryAfter: number, options: Object, octokit: Object, retryCount: number) => boolean} Handler
+ */
+export function createRateLimitHandler(label) {
+  return (retryAfter, options, _octokit, retryCount) => {
+    const request = `${options.method} ${options.url}`;
+    if (retryCount < MAX_RATE_LIMIT_RETRIES) {
+      core.warning(`${label} hit for ${request}; retrying after ${retryAfter} seconds (attempt ${retryCount + 1})`);
+      return true;
+    }
+    core.warning(`${label} hit for ${request}; giving up after ${retryCount} retries`);
+    return false;
+  };
+}
+
+/**
+ * Parse the max-concurrency input.
+ * @param {string} value - Raw input value
+ * @returns {number} Positive integer concurrency
+ */
+export function parseMaxConcurrency(value) {
+  const trimmed = (value ?? '').trim();
+  if (trimmed === '') {
+    return DEFAULT_MAX_CONCURRENCY;
+  }
+  if (!/^\d+$/.test(trimmed) || Number(trimmed) < 1) {
+    throw new Error(`Invalid 'max-concurrency' input: ${value}. Must be a positive integer.`);
+  }
+  return Number(trimmed);
+}
+
+const outputBufferStorage = new AsyncLocalStorage();
+
+/**
+ * Run a function while buffering everything it writes to stdout (including @actions/core logs),
+ * then flush the buffer in one block. This keeps per-repository logs together when repositories
+ * are processed concurrently.
+ * @template T
+ * @param {() => Promise<T>} fn - Async function to run
+ * @returns {Promise<T>} Result of fn
+ */
+export async function runWithBufferedOutput(fn) {
+  const originalWrite = process.stdout.write;
+  if (!originalWrite.isBufferedOutputWriter) {
+    function bufferingWrite(...args) {
+      const [chunk, encoding, callback] = args;
+      const buffer = outputBufferStorage.getStore();
+      if (!buffer) {
+        return originalWrite.apply(process.stdout, args);
+      }
+      buffer.push(
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.from(chunk).toString(typeof encoding === 'string' ? encoding : 'utf8')
+      );
+      const done = typeof encoding === 'function' ? encoding : callback;
+      if (typeof done === 'function') {
+        done();
+      }
+      return true;
+    }
+    bufferingWrite.isBufferedOutputWriter = true;
+    process.stdout.write = bufferingWrite;
+  }
+
+  const buffer = [];
+  try {
+    return await outputBufferStorage.run(buffer, fn);
+  } finally {
+    if (buffer.length > 0) {
+      process.stdout.write(buffer.join(''));
+    }
+  }
+}
 
 /**
  * Map items with a bounded level of concurrency while preserving result order.
@@ -5561,6 +5645,7 @@ export async function run() {
 
     const dryRun = getBooleanInput('dry-run');
     const writeJobSummary = getBooleanInput('write-job-summary') !== false;
+    const maxConcurrency = parseMaxConcurrency(core.getInput('max-concurrency'));
     const jobSummaryHeadingBase = core.getInput('summary-heading').trim();
 
     // Parse topics if provided
@@ -5690,10 +5775,14 @@ export async function run() {
       );
     }
 
-    // Initialize Octokit
-    const octokit = new Octokit({
+    // Initialize Octokit with throttling (rate-limit backoff) and retries for transient errors
+    const octokit = new ThrottledOctokit({
       auth: githubToken,
-      baseUrl: githubApiUrl
+      baseUrl: githubApiUrl,
+      throttle: {
+        onRateLimit: createRateLimitHandler('Rate limit'),
+        onSecondaryRateLimit: createRateLimitHandler('Secondary rate limit')
+      }
     });
     await configureApiVersion(octokit, githubApiUrl);
 
@@ -5717,7 +5806,9 @@ export async function run() {
       customPropertyValue
     );
 
-    core.info(`Processing ${repoList.length} repositories...`);
+    core.info(
+      `Processing ${repoList.length} repositories${maxConcurrency > 1 && repoList.length > 1 ? ` (up to ${maxConcurrency} in parallel)` : ''}...`
+    );
     core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);
     if (enableCodeScanning) {
       core.info('CodeQL scanning will be enabled');
@@ -5790,7 +5881,7 @@ export async function run() {
     }
 
     // Update repositories
-    const results = [];
+    const results = new Array(repoList.length);
     let successCount = 0;
     let failureCount = 0;
     let changedCount = 0;
@@ -5800,7 +5891,7 @@ export async function run() {
     // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
     const reviewerCache = new Map();
 
-    for (const repoConfig of repoList) {
+    const processRepository = async (repoConfig, repoIndex) => {
       const repo = repoConfig.repo;
       core.info(`Updating ${repo}...`);
 
@@ -6099,12 +6190,12 @@ export async function run() {
         repoSecuritySettings,
         dryRun
       );
-      results.push(result);
+      results[repoIndex] = result;
 
       if (result.archived) {
         successCount++;
         core.info(`⏭️ Skipping archived repository ${repo}`);
-        continue;
+        return;
       }
 
       // TODO(v3): Remove legacy sync warning properties (e.g., dependabotSyncWarning, gitignoreSyncWarning)
@@ -6913,6 +7004,16 @@ export async function run() {
       } else {
         failureCount++;
         core.warning(`❌ Failed to update ${repo}: ${result.error}`);
+      }
+    };
+
+    if (maxConcurrency > 1 && repoList.length > 1) {
+      await mapWithConcurrencyLimit(repoList, maxConcurrency, (repoConfig, repoIndex) =>
+        runWithBufferedOutput(() => processRepository(repoConfig, repoIndex))
+      );
+    } else {
+      for (const [repoIndex, repoConfig] of repoList.entries()) {
+        await processRepository(repoConfig, repoIndex);
       }
     }
 

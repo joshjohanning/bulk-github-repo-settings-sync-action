@@ -1109,6 +1109,12 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 
 The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about-the-rest-api/api-versions) header on every REST request. GitHub.com and GHE.com (GHEC with data residency) use `2026-03-10`. For GitHub Enterprise Server, the action checks once at startup whether `2026-03-10` is supported (GHES 3.21+) and otherwise falls back to `2022-11-28`. No configuration is required.
 
+### Parallel Processing and Rate Limits
+
+Repositories are processed in parallel, up to 5 at a time by default. Use the `max-concurrency` input to change this, or set it to `1` to process repositories one at a time. When processing in parallel, each repository's log output is buffered and printed as one block when that repository finishes, so logs from different repositories don't interleave.
+
+The action automatically backs off and retries requests that hit primary or secondary rate limits, and also retries transient server errors. If you see frequent secondary rate limit warnings, lower `max-concurrency`.
+
 ## Action Inputs
 
 | Input                                      | Description                                                                                                                                 | Required | Default                                   |
@@ -1171,6 +1177,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `package-json-sync-engines`                | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                  | No       | `true`                                    |
 | `package-json-pr-title`                    | Title for pull requests when updating package.json                                                                                          | No       | `chore: update package.json`              |
 | `dry-run`                                  | Preview changes without applying them (logs what would be changed)                                                                          | No       | `false`                                   |
+| `max-concurrency`                          | Maximum number of repositories to process in parallel (`1` processes sequentially); rate-limited requests are retried automatically         | No       | `5`                                       |
 | `write-job-summary`                        | Write a summary table to the GitHub Actions job summary                                                                                     | No       | `true`                                    |
 | `summary-heading`                          | Custom heading for the GitHub Actions job summary                                                                                           | No       | `Bulk Repository Settings Update Results` |
 
