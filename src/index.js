@@ -1501,7 +1501,8 @@ export async function updateRepositorySettings(
       'allow_update_branch'
     ];
     const allSettingsUndefined = settingsFields.every(field => currentRepo[field] === undefined);
-    if (allSettingsUndefined) {
+    const hasRequestedRepositorySettings = REPOSITORY_SETTING_FIELDS.some(field => settings[field.key] != null);
+    if (allSettingsUndefined && hasRequestedRepositorySettings) {
       core.warning(
         `Cannot read repository settings for ${repo}. GitHub App may not be installed on this repository. Skipping.`
       );
@@ -3996,6 +3997,9 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
  */
 export async function syncLabels(octokit, repo, labelsFilePath, dryRun, labelNames = '') {
   const [owner, repoName, extra] = repo.split('/');
+  const labels = new Map();
+  const created = [];
+  const updated = [];
   try {
     if (!owner || !repoName || extra !== undefined) {
       throw new Error('Invalid repository format. Expected "owner/repo"');
@@ -4009,7 +4013,6 @@ export async function syncLabels(octokit, repo, labelsFilePath, dryRun, labelNam
       throw new Error('labels must be a string or an array of strings');
     }
 
-    const labels = new Map();
     for (const value of inlineNames) {
       if (typeof value !== 'string') {
         throw new Error('labels must be a string or an array of strings');
@@ -4067,8 +4070,6 @@ export async function syncLabels(octokit, repo, labelsFilePath, dryRun, labelNam
       per_page: 100
     });
     const byName = new Map(existing.map(label => [label.name.toLowerCase(), label]));
-    const created = [];
-    const updated = [];
     for (const label of labels.values()) {
       const current = byName.get(label.name.toLowerCase());
       if (!current) {
@@ -4116,6 +4117,9 @@ export async function syncLabels(octokit, repo, labelsFilePath, dryRun, labelNam
     return {
       repository: repo,
       success: false,
+      labels: created.length > 0 || updated.length > 0 ? (dryRun ? 'would-update' : 'updated') : 'unchanged',
+      created,
+      updated,
       error: `Failed to sync labels for ${repo}${labelsFilePath != null && labelsFilePath !== '' ? ` from ${labelsFilePath}` : ''}: ${error.message}`,
       dryRun
     };
@@ -6389,6 +6393,14 @@ export async function run() {
         } else {
           result.hasWarnings = true;
           core.warning(labelsResult.error);
+          if (labelsResult.created?.length > 0 || labelsResult.updated?.length > 0) {
+            const message = `Applied ${labelsResult.created.length} label creation(s) and ${labelsResult.updated.length} label update(s) before sync failed`;
+            result.subResults.push(
+              createSubResult('labels-sync', SubResultStatus.CHANGED, message, {
+                syncStatus: labelsResult.labels
+              })
+            );
+          }
           result.subResults.push(createSubResult('labels-sync', SubResultStatus.WARNING, labelsResult.error));
         }
       }

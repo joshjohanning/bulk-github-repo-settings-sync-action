@@ -10276,6 +10276,23 @@ rules:
       mockOctokit.rest.issues.createLabel.mockRejectedValueOnce(new Error('write denied'));
       expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
         success: false,
+        created: [],
+        updated: [],
+        error: expect.stringContaining('write denied')
+      });
+    });
+
+    test('preserves labels successfully written before a later write fails', async () => {
+      mockYaml.load.mockReturnValue({
+        labels: [desired, { name: 'other', color: 'abcdef' }]
+      });
+      mockOctokit.rest.issues.createLabel.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('write denied'));
+
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
+        success: false,
+        labels: 'updated',
+        created: ['skip-release'],
+        updated: [],
         error: expect.stringContaining('write denied')
       });
     });
@@ -10317,6 +10334,68 @@ rules:
         labelsSync: { labels: 'would-update', created: ['urgent', 'needs-review'] }
       });
       expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('allows label-only runs when repository settings are not readable', async () => {
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            labels: 'urgent'
+          })[name] || ''
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          archived: false,
+          permissions: { admin: false, push: true, pull: true, triage: true }
+        }
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'urgent',
+        color: 'f9d37c',
+        description: ''
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+    });
+
+    test('counts partial label writes as changes and reports the failure as a warning', async () => {
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            labels: 'urgent, needs-review'
+          })[name] || ''
+      );
+      mockOctokit.rest.issues.createLabel
+        .mockReset()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('write denied'));
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      const result = JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1])[0];
+      expect(result.labelsSync).toMatchObject({ success: false, created: ['urgent'], updated: [] });
+      expect(result.subResults).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'labels-sync', status: 'changed', syncStatus: 'updated' }),
+          expect.objectContaining({ kind: 'labels-sync', status: 'warning' })
+        ])
+      );
     });
 
     test('inherits and overrides inline and file settings independently for each repository', async () => {
