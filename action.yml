@@ -112,6 +112,9 @@ inputs:
   topics:
     description: 'Comma-separated list of topics to set on repositories (replaces existing topics)'
     required: false
+  labels:
+    description: 'Comma- or newline-separated label names to create if missing. Colors are generated consistently from each name; existing labels are not changed.'
+    required: false
   labels-file:
     description: 'Path to a YAML or JSON file with a labels array (name, color, optional description). Creates or updates labels without deleting unlisted labels.'
     required: false

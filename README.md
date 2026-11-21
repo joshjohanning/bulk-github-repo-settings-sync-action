@@ -561,6 +561,25 @@ For more information on GitHub Actions workflows, see the [GitHub Actions docume
 
 ### Syncing Repository Labels
 
+**Simple — create labels by name:**
+
+```yaml
+- uses: joshjohanning/bulk-github-repo-settings-sync-action@v2
+  with:
+    github-token: ${{ steps.app-token.outputs.token }}
+    repositories-file: repos.yml
+    labels: needs-triage, needs-review
+    dry-run: true # Preview only; remove to apply
+```
+
+`labels` accepts comma- or newline-separated names up to 50 characters, ignores
+case-insensitive duplicates, and creates only missing labels. New labels get a
+color derived from the first six hex digits of the SHA-256 hash of the lowercased
+name, so the same name gets the same color across repositories and runs.
+Existing labels keep their colors and descriptions, which may differ across repos.
+
+**Advanced — specify colors and descriptions in a file:**
+
 Use `labels-file` to create missing labels and update the color and configured
 description of existing labels directly through the API. Unlisted labels are
 never deleted. Names match case-insensitively; existing name casing is preserved.
@@ -576,16 +595,22 @@ description on new labels); `description: ''` explicitly clears it.
     dry-run: true # Preview only; remove to apply
 ```
 
-The same `labels-file` key supports per-repository and selector-rule overrides.
-Per-repository paths support `base-path`, just like other file settings. An empty
-string disables inherited label syncing for that repository.
+Both inputs can be combined; file entries take precedence over names in `labels`
+when they match case-insensitively. Both keys support per-repository and
+selector-rule overrides. A repository's `labels` override replaces the global
+list and accepts either a comma- or newline-separated string or a YAML array of
+names (use an array for names containing commas). `labels-file` paths support
+`base-path`. Set either key to `''` to disable that inherited input; set both to
+`''` to disable all label syncing for a repo.
 
 ```yaml
 base-path: ./config
 repos:
   - repo: owner/repo1
+    labels: [needs-triage, needs-review]
     labels-file: labels.yml
   - repo: owner/repo2
+    labels: ''
     labels-file: ''
 ```
 
@@ -1132,6 +1157,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `file-sync-source`                         | Path to one file to sync; requires `file-sync-target`                                                                                       | No       | -                                         |
 | `file-sync-target`                         | Destination path for `file-sync-source` in target repositories; requires `file-sync-source`                                                 | No       | -                                         |
 | `autolinks-file`                           | Path to a JSON file containing autolink references to sync to target repositories                                                           | No       | -                                         |
+| `labels`                                   | Comma- or newline-separated names to create if missing; colors are generated consistently and existing labels are unchanged                 | No       | -                                         |
 | `labels-file`                              | Path to a YAML or JSON file containing a labels array to create/update; unlisted labels are preserved                                       | No       | -                                         |
 | `environments`                             | Comma-separated list of environment names to create (e.g., `production, staging, development`)                                              | No       | -                                         |
 | `environments-file`                        | Path to a YAML or JSON file with detailed environment configurations (reviewers, wait timers, branch policies, deployment protection rules) | No       | -                                         |

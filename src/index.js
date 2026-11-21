@@ -3989,43 +3989,77 @@ export async function syncWorkflowFiles(octokit, repo, workflowFilePaths, prTitl
  * Create missing repository labels and update configured metadata without deleting other labels.
  * @param {Octokit} octokit - Octokit instance
  * @param {string} repo - Repository in owner/repo format
- * @param {string} labelsFilePath - Path to a YAML or JSON labels configuration
+ * @param {string|null|undefined} labelsFilePath - Path to a YAML or JSON labels configuration, if provided
  * @param {boolean} dryRun - Preview without writing
+ * @param {string|string[]} [labelNames] - Label names to create without updating existing labels
  * @returns {Promise<Object>} Sync result with planned or applied label names
  */
-export async function syncLabels(octokit, repo, labelsFilePath, dryRun) {
+export async function syncLabels(octokit, repo, labelsFilePath, dryRun, labelNames = '') {
   const [owner, repoName, extra] = repo.split('/');
   try {
     if (!owner || !repoName || extra !== undefined) {
       throw new Error('Invalid repository format. Expected "owner/repo"');
     }
-    if (typeof labelsFilePath !== 'string' || !labelsFilePath.trim()) {
-      throw new Error('labels-file must be a non-empty file path');
+    let inlineNames;
+    if (typeof labelNames === 'string') {
+      inlineNames = parseMultiValueInput(labelNames);
+    } else if (Array.isArray(labelNames)) {
+      inlineNames = labelNames;
+    } else {
+      throw new Error('labels must be a string or an array of strings');
     }
-    const config = yaml.load(fs.readFileSync(labelsFilePath, 'utf8'));
-    if (!Array.isArray(config?.labels)) {
-      throw new Error('Labels configuration must contain a "labels" array');
-    }
-    const names = new Set();
-    const labels = config.labels.map(label => {
-      if (
-        !label ||
-        typeof label.name !== 'string' ||
-        !label.name.trim() ||
-        label.name.length > 50 ||
-        typeof label.color !== 'string' ||
-        !/^[0-9a-f]{6}$/i.test(label.color) ||
-        (label.description !== undefined && (typeof label.description !== 'string' || label.description.length > 100))
-      ) {
-        throw new Error(
-          'Each label requires a non-blank name (up to 50 characters), a six-digit hex color without #, and an optional description (up to 100 characters)'
-        );
+
+    const labels = new Map();
+    for (const value of inlineNames) {
+      if (typeof value !== 'string') {
+        throw new Error('labels must be a string or an array of strings');
       }
-      const key = label.name.toLowerCase();
-      if (names.has(key)) throw new Error(`Duplicate label name: ${label.name}`);
-      names.add(key);
-      return { name: label.name, color: label.color.toLowerCase(), description: label.description };
-    });
+      const name = value.trim();
+      if (!name) continue;
+      if (name.length > 50) {
+        throw new Error('Each label name must be at most 50 characters');
+      }
+      const key = name.toLowerCase();
+      if (!labels.has(key)) {
+        labels.set(key, {
+          name,
+          color: createHash('sha256').update(key).digest('hex').slice(0, 6),
+          createOnly: true
+        });
+      }
+    }
+
+    if (labelsFilePath !== '' && labelsFilePath != null) {
+      if (typeof labelsFilePath !== 'string' || !labelsFilePath.trim()) {
+        throw new Error('labels-file must be a non-empty file path');
+      }
+      const config = yaml.load(fs.readFileSync(labelsFilePath, 'utf8'));
+      if (!Array.isArray(config?.labels)) {
+        throw new Error('Labels configuration must contain a "labels" array');
+      }
+      const fileNames = new Set();
+      for (const label of config.labels) {
+        if (
+          !label ||
+          typeof label.name !== 'string' ||
+          !label.name.trim() ||
+          label.name.length > 50 ||
+          typeof label.color !== 'string' ||
+          !/^[0-9a-f]{6}$/i.test(label.color) ||
+          (label.description !== undefined && (typeof label.description !== 'string' || label.description.length > 100))
+        ) {
+          throw new Error(
+            'Each label requires a non-blank name (up to 50 characters), a six-digit hex color without #, and an optional description (up to 100 characters)'
+          );
+        }
+        const key = label.name.toLowerCase();
+        if (fileNames.has(key)) throw new Error(`Duplicate label name: ${label.name}`);
+        fileNames.add(key);
+        labels.set(key, { name: label.name, color: label.color.toLowerCase(), description: label.description });
+      }
+    } else if (labels.size === 0) {
+      throw new Error('Provide at least one label name or a labels-file');
+    }
 
     const existing = await octokit.paginate(octokit.rest.issues.listLabelsForRepo, {
       owner,
@@ -4035,21 +4069,23 @@ export async function syncLabels(octokit, repo, labelsFilePath, dryRun) {
     const byName = new Map(existing.map(label => [label.name.toLowerCase(), label]));
     const created = [];
     const updated = [];
-    for (const label of labels) {
+    for (const label of labels.values()) {
       const current = byName.get(label.name.toLowerCase());
       if (!current) {
         if (!dryRun) {
           await octokit.rest.issues.createLabel({
             owner,
             repo: repoName,
-            ...label,
+            name: label.name,
+            color: label.color,
             description: label.description ?? ''
           });
         }
         created.push(label.name);
       } else if (
-        current.color.toLowerCase() !== label.color ||
-        (label.description !== undefined && (current.description ?? '') !== label.description)
+        !label.createOnly &&
+        (current.color.toLowerCase() !== label.color ||
+          (label.description !== undefined && (current.description ?? '') !== label.description))
       ) {
         if (!dryRun) {
           await octokit.rest.issues.updateLabel({
@@ -4070,17 +4106,17 @@ export async function syncLabels(octokit, repo, labelsFilePath, dryRun) {
       labels: changed ? (dryRun ? 'would-update' : 'updated') : 'unchanged',
       created,
       updated,
-      unchanged: labels.length - created.length - updated.length,
+      unchanged: labels.size - created.length - updated.length,
       message: changed
         ? `${dryRun ? 'Would create' : 'Created'} ${created.length} label(s), ${dryRun ? 'would update' : 'updated'} ${updated.length} label(s)`
-        : `All ${labels.length} configured label(s) are already up to date`,
+        : `All ${labels.size} configured label(s) are already up to date`,
       dryRun
     };
   } catch (error) {
     return {
       repository: repo,
       success: false,
-      error: `Failed to sync labels for ${repo} from ${labelsFilePath}: ${error.message}`,
+      error: `Failed to sync labels for ${repo}${labelsFilePath != null && labelsFilePath !== '' ? ` from ${labelsFilePath}` : ''}: ${error.message}`,
       dryRun
     };
   }
@@ -5569,6 +5605,7 @@ export async function run() {
 
     // Get autolinks settings
     const autolinksFile = core.getInput('autolinks-file');
+    const labelNames = core.getInput('labels');
     const labelsFile = core.getInput('labels-file');
 
     // Get SHA pinning setting for actions
@@ -5634,6 +5671,7 @@ export async function run() {
       (workflowFiles && workflowFiles.length > 0) ||
       globalFileSync.length > 0 ||
       autolinksFile ||
+      labelNames ||
       labelsFile ||
       actionsShaPinningRequired != null ||
       defaultWorkflowPermissions != null ||
@@ -5644,7 +5682,7 @@ export async function run() {
       (packageJsonFile && (syncScripts || syncEngines));
     if (!hasSettings) {
       throw new Error(
-        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or labels or labels-file must be specified, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     }
 
@@ -5703,6 +5741,9 @@ export async function run() {
     }
     if (autolinksFile) {
       core.info(`Autolinks will be synced from: ${autolinksFile}`);
+    }
+    if (labelNames) {
+      core.info(`Labels to create if missing: ${labelNames}`);
     }
     if (labelsFile) {
       core.info(`Labels will be synced from: ${labelsFile}`);
@@ -5866,6 +5907,7 @@ export async function run() {
       // Handle repo-specific dependabot.yml
       const repoDependabotYml =
         repoConfig['dependabot-yml'] !== undefined ? repoConfig['dependabot-yml'] : dependabotYml;
+      const repoLabelNames = repoConfig.labels !== undefined ? repoConfig.labels : labelNames;
       const repoLabelsFile = repoConfig['labels-file'] !== undefined ? repoConfig['labels-file'] : labelsFile;
 
       // Handle repo-specific .gitignore
@@ -6329,8 +6371,11 @@ export async function run() {
         }
       }
 
-      if (repoLabelsFile) {
-        const labelsResult = await syncLabels(octokit, repo, repoLabelsFile, dryRun);
+      if (
+        (repoLabelsFile != null && repoLabelsFile !== '') ||
+        (Array.isArray(repoLabelNames) ? repoLabelNames.length > 0 : repoLabelNames !== '')
+      ) {
+        const labelsResult = await syncLabels(octokit, repo, repoLabelsFile, dryRun, repoLabelNames);
         result.labelsSync = labelsResult;
         if (labelsResult.success) {
           core.info(`  ${labelsResult.message}`);
