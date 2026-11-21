@@ -50,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,3 +62,4 @@ jobs:
           mode: promote
           release_tag: ${{ inputs.promote_tag }}
           publish_minor_version: false
+          update_draft_release_pr_reminder: true
