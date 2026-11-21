@@ -260,7 +260,6 @@ rules:
         - './rulesets/baseline.json' # Already contributed by the first rule
         - 'rulesets/strict.json' # Adds a separate ruleset
 
-
 # Result for repo1:
 # code-scanning: true
 # topics: 'special,override'
