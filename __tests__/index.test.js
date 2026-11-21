@@ -72,6 +72,9 @@ const mockOctokit = {
       createCommit: jest.fn()
     },
     issues: {
+      listLabelsForRepo: jest.fn(),
+      createLabel: jest.fn(),
+      updateLabel: jest.fn(),
       createComment: jest.fn()
     },
     pulls: {
@@ -194,6 +197,10 @@ inputs:
     description: 'File sync target'
   autolinks-file:
     description: 'Autolinks file'
+  labels:
+    description: 'Label names'
+  labels-file:
+    description: 'Labels file'
   actions-sha-pinning-required:
     description: 'Actions SHA pinning required'
   actions-default-workflow-permissions:
@@ -280,6 +287,8 @@ const mockActionYmlParsed = {
     'file-sync-source': { description: 'File sync source' },
     'file-sync-target': { description: 'File sync target' },
     'autolinks-file': { description: 'Autolinks file' },
+    labels: { description: 'Label names' },
+    'labels-file': { description: 'Labels file' },
     'actions-sha-pinning-required': { description: 'Actions SHA pinning required' },
     'actions-default-workflow-permissions': { description: 'Default workflow permissions' },
     'actions-can-approve-pull-request-reviews': { description: 'Actions can approve pull requests' },
@@ -380,6 +389,7 @@ const {
   syncPullRequestTemplate,
   syncWorkflowFiles,
   syncAutolinks,
+  syncLabels,
   syncActionsShaPinning,
   syncWorkflowPermissions,
   syncEnvironments,
@@ -4473,7 +4483,7 @@ describe('Bulk GitHub Repository Settings Action', () => {
       await run();
 
       expect(mockCore.setFailed).toHaveBeenCalledWith(
-        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
+        'Action failed with error: At least one repository setting must be specified (or code-scanning must be true, or immutable-releases must be specified, or security settings must be specified, or topics must be provided, or labels or labels-file must be specified, or dependabot-yml must be specified, or gitignore must be specified, or rulesets-file must be specified, or pull-request-template must be specified, or workflow-files must be specified, or file-sync-source with file-sync-target must be specified, or autolinks-file must be specified, or environments must be specified, or copilot-instructions-md must be specified, or codeowners must be specified, or package-json-file with package-json-sync-scripts or package-json-sync-engines must be specified)'
       );
     });
 
@@ -10085,6 +10095,461 @@ rules:
       expect(result.filesCreated).toContain('.github/workflows/release.yml');
       expect(result.filesUpdated).toContain('.github/workflows/ci.yml');
       expect(mockOctokit.rest.repos.createOrUpdateFileContents).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('syncLabels', () => {
+    const desired = { name: 'skip-release', color: 'ededed', description: 'Skip publishing' };
+
+    beforeEach(() => {
+      mockYaml.load.mockReturnValue({ labels: [desired] });
+      mockOctokit.paginate.mockReset().mockResolvedValue([]);
+      mockOctokit.rest.issues.createLabel.mockReset().mockResolvedValue({});
+      mockOctokit.rest.issues.updateLabel.mockReset().mockResolvedValue({});
+    });
+
+    test('creates missing labels using paginated reads and never deletes unlisted labels', async () => {
+      mockOctokit.paginate.mockResolvedValue([{ name: 'bug', color: 'ff0000' }]);
+      const result = await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false);
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(mockOctokit.rest.issues.listLabelsForRepo, {
+        owner: 'owner',
+        repo: 'repo',
+        per_page: 100
+      });
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledWith({ owner: 'owner', repo: 'repo', ...desired });
+      expect(result).toMatchObject({ success: true, labels: 'updated', created: ['skip-release'], updated: [] });
+    });
+
+    test('creates inline labels with consistent colors and leaves existing labels unchanged', async () => {
+      mockOctokit.paginate.mockResolvedValue([{ name: 'NEEDS-REVIEW', color: 'ffffff', description: 'Existing' }]);
+      const result = await syncLabels(mockOctokit, 'owner/repo', '', false, ' Urgent, urgent\nneeds-review,, ');
+      expect(result).toMatchObject({ success: true, created: ['Urgent'], updated: [], unchanged: 1 });
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'Urgent',
+        color: 'f9d37c',
+        description: ''
+      });
+      expect(mockOctokit.rest.issues.updateLabel).not.toHaveBeenCalled();
+
+      await syncLabels(mockOctokit, 'owner/another', '', false, 'URGENT');
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenLastCalledWith({
+        owner: 'owner',
+        repo: 'another',
+        name: 'URGENT',
+        color: 'f9d37c',
+        description: ''
+      });
+    });
+
+    test('uses file entries instead of matching inline names', async () => {
+      mockYaml.load.mockReturnValue({ labels: [{ name: 'URGENT', color: 'abcdef', description: 'Managed' }] });
+      mockOctokit.paginate.mockResolvedValue([{ name: 'Urgent', color: 'ffffff', description: 'Existing' }]);
+      const result = await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false, 'urgent, needs-review');
+      expect(result).toMatchObject({ created: ['needs-review'], updated: ['URGENT'], unchanged: 0 });
+      expect(mockOctokit.rest.issues.updateLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'Urgent',
+        color: 'abcdef',
+        description: 'Managed'
+      });
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'needs-review',
+        color: '905fe6',
+        description: ''
+      });
+    });
+
+    test('previews inline label creation without changing existing labels', async () => {
+      mockOctokit.paginate.mockResolvedValue([{ name: 'Urgent', color: 'ffffff', description: 'Existing' }]);
+      const result = await syncLabels(mockOctokit, 'owner/repo', '', true, 'urgent, needs-review');
+      expect(result).toMatchObject({
+        labels: 'would-update',
+        created: ['needs-review'],
+        updated: [],
+        unchanged: 1
+      });
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.updateLabel).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ['a label name over 50 characters', 'x'.repeat(51), 'at most 50 characters'],
+      ['a non-string array entry', ['valid', 42], 'labels must be a string or an array'],
+      ['an unsupported input type', false, 'labels must be a string or an array']
+    ])('rejects %s before making API calls', async (_description, input, error) => {
+      const result = await syncLabels(mockOctokit, 'owner/repo', '', false, input);
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining(error) });
+      expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('validates the file before creating any inline labels', async () => {
+      mockYaml.load.mockReturnValue({ labels: [{ name: 'bad', color: 'invalid' }] });
+      const result = await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false, 'urgent');
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('six-digit hex') });
+      expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('updates existing labels case-insensitively and explicitly clears descriptions', async () => {
+      mockYaml.load.mockReturnValue({ labels: [{ ...desired, description: '' }] });
+      mockOctokit.paginate.mockResolvedValue([{ ...desired, name: 'Skip-Release', color: 'ffffff' }]);
+      await syncLabels(mockOctokit, 'owner/repo', 'labels.json', false);
+      expect(mockOctokit.rest.issues.updateLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'Skip-Release',
+        color: 'ededed',
+        description: ''
+      });
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('preserves omitted descriptions and treats color casing as unchanged', async () => {
+      mockYaml.load.mockReturnValue({ labels: [{ name: desired.name, color: 'EDEDED' }] });
+      mockOctokit.paginate.mockResolvedValue([desired]);
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({ labels: 'unchanged' });
+      mockOctokit.paginate.mockResolvedValue([{ ...desired, color: 'ffffff' }]);
+      await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false);
+      expect(mockOctokit.rest.issues.updateLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: desired.name,
+        color: 'ededed'
+      });
+    });
+
+    test('previews creates and updates without writes', async () => {
+      mockYaml.load.mockReturnValue({ labels: [desired, { name: 'other', color: 'abcdef' }] });
+      mockOctokit.paginate.mockResolvedValue([{ ...desired, color: 'ffffff' }]);
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', true)).toMatchObject({
+        labels: 'would-update',
+        created: ['other'],
+        updated: ['skip-release']
+      });
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.updateLabel).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      null,
+      [],
+      {},
+      { labels: null },
+      { labels: [null] },
+      { labels: [desired, { ...desired, name: 'SKIP-RELEASE' }] },
+      { labels: [{ ...desired, name: ' ' }] },
+      { labels: [{ ...desired, color: '#ededed' }] },
+      { labels: [{ ...desired, color: 123456 }] },
+      { labels: [{ ...desired, description: null }] },
+      { labels: [{ ...desired, description: 'a'.repeat(101) }] }
+    ])('rejects invalid configurations before any API calls: %j', async config => {
+      mockYaml.load.mockReturnValue(config);
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({ success: false });
+      expect(mockOctokit.paginate).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('reports read and API errors rather than treating inaccessible labels as absent', async () => {
+      mockFs.readFileSync.mockImplementationOnce(() => {
+        throw new Error('missing file');
+      });
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
+        success: false,
+        error: expect.stringContaining('missing file')
+      });
+      mockOctokit.paginate.mockRejectedValueOnce({ status: 403, message: 'Forbidden' });
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
+        success: false,
+        error: expect.stringContaining('Forbidden')
+      });
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('reports label write failures', async () => {
+      mockOctokit.rest.issues.createLabel.mockRejectedValueOnce(new Error('write denied'));
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
+        success: false,
+        created: [],
+        updated: [],
+        error: expect.stringContaining('write denied')
+      });
+    });
+
+    test('preserves labels successfully written before a later write fails', async () => {
+      mockYaml.load.mockReturnValue({
+        labels: [desired, { name: 'other', color: 'abcdef' }]
+      });
+      mockOctokit.rest.issues.createLabel.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('write denied'));
+
+      expect(await syncLabels(mockOctokit, 'owner/repo', 'labels.yml', false)).toMatchObject({
+        success: false,
+        labels: 'updated',
+        created: ['skip-release'],
+        updated: [],
+        error: expect.stringContaining('write denied')
+      });
+    });
+
+    test('integrates labels-only input with outputs and summaries in dry-run', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            'labels-file': 'labels.yml',
+            'dry-run': 'true'
+          })[name] || ''
+      );
+      await run();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1])[0]).toMatchObject({
+        labelsSync: { labels: 'would-update' },
+        subResults: [expect.objectContaining({ kind: 'labels-sync', status: 'changed' })]
+      });
+      expect(mockCore.summary.addTable.mock.calls[0][0].find(row => row[0] === 'owner/repo')[2]).toContain('labels');
+    });
+
+    test('accepts inline labels as the only setting and reports the planned changes', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            labels: 'urgent, needs-review',
+            'dry-run': 'true'
+          })[name] || ''
+      );
+      await run();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1])[0]).toMatchObject({
+        labelsSync: { labels: 'would-update', created: ['urgent', 'needs-review'] }
+      });
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('allows label-only runs when repository settings are not readable', async () => {
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            labels: 'urgent'
+          })[name] || ''
+      );
+      mockOctokit.rest.repos.get.mockResolvedValue({
+        data: {
+          archived: false,
+          permissions: { admin: false, push: true, pull: true, triage: true }
+        }
+      });
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel).toHaveBeenCalledWith({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'urgent',
+        color: 'f9d37c',
+        description: ''
+      });
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+    });
+
+    test('counts partial label writes as changes and reports the failure as a warning', async () => {
+      mockOctokit.paginate.mockResolvedValue([]);
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            labels: 'urgent, needs-review'
+          })[name] || ''
+      );
+      mockOctokit.rest.issues.createLabel
+        .mockReset()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('write denied'));
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
+      const result = JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1])[0];
+      expect(result.labelsSync).toMatchObject({ success: false, created: ['urgent'], updated: [] });
+      expect(result.subResults).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'labels-sync', status: 'changed', syncStatus: 'updated' }),
+          expect.objectContaining({ kind: 'labels-sync', status: 'warning' })
+        ])
+      );
+    });
+
+    test('inherits and overrides inline and file settings independently for each repository', async () => {
+      setupDefaultMocks();
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            labels: 'Urgent, common',
+            'labels-file': 'global.yml'
+          })[name] || ''
+      );
+      setMockFileContent('repositories config', 'repos.yml');
+      setMockYamlContent(
+        {
+          repos: [
+            { repo: 'owner/inherit' },
+            { repo: 'owner/custom', labels: ['Needs-review', 'risk,legal'], 'labels-file': '' },
+            { repo: 'owner/file-only', labels: '' },
+            { repo: 'owner/disabled', labels: '', 'labels-file': '' },
+            { repo: 'owner/invalid', labels: [true], 'labels-file': '' }
+          ]
+        },
+        'repositories config'
+      );
+      setMockFileContent('global labels', 'global.yml');
+      setMockYamlContent({ labels: [{ name: 'COMMON', color: 'abcdef', description: 'Managed' }] }, 'global labels');
+
+      await run();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(
+        mockOctokit.rest.issues.createLabel.mock.calls.map(([args]) => [args.repo, args.name, args.color])
+      ).toEqual([
+        ['inherit', 'Urgent', 'f9d37c'],
+        ['inherit', 'COMMON', 'abcdef'],
+        ['custom', 'Needs-review', '905fe6'],
+        ['custom', 'risk,legal', expect.stringMatching(/^[0-9a-f]{6}$/)],
+        ['file-only', 'COMMON', 'abcdef']
+      ]);
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('labels must be a string or an array'));
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      const results = JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1]);
+      expect(results.find(result => result.repository === 'owner/disabled').labelsSync).toBeUndefined();
+      expect(results.find(result => result.repository === 'owner/invalid').labelsSync).toMatchObject({
+        success: false
+      });
+    });
+
+    test('applies labels from selector rules and lets later matching rules override them', async () => {
+      setupDefaultMocks();
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'rules.yml'
+          })[name] || ''
+      );
+      setMockFileContent('rules config', 'rules.yml');
+      setMockYamlContent(
+        {
+          owner: 'owner',
+          rules: [
+            { selector: { repos: ['one', 'two'] }, settings: { labels: 'urgent' } },
+            { selector: { repos: ['two'] }, settings: { labels: ['needs-review'] } }
+          ]
+        },
+        'rules config'
+      );
+      await run();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel.mock.calls.map(([args]) => [args.repo, args.name])).toEqual([
+        ['one', 'urgent'],
+        ['two', 'needs-review']
+      ]);
+    });
+
+    test('resolves labels-file against base-path', () => {
+      expect(applyBasePathToRepoConfig({ 'labels-file': 'labels.yml' }, './config')).toEqual({
+        'labels-file': 'config/labels.yml'
+      });
+    });
+
+    test('inherits global files, applies per-repo base-path overrides, and disables sync with an empty override', async () => {
+      setupDefaultMocks();
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            'labels-file': 'global.yml'
+          })[name] || ''
+      );
+      setMockFileContent('repositories config', 'repos.yml');
+      setMockYamlContent(
+        {
+          'base-path': './config',
+          repos: [
+            { repo: 'owner/override', 'labels-file': 'custom.yml' },
+            { repo: 'owner/inherit' },
+            { repo: 'owner/disabled', 'labels-file': '' }
+          ]
+        },
+        'repositories config'
+      );
+      setMockFileContent('custom labels', 'config/custom.yml');
+      setMockFileContent('global labels', 'global.yml');
+      setMockYamlContent({ labels: [desired] }, 'custom labels');
+      setMockYamlContent({ labels: [{ name: 'global', color: 'abcdef' }] }, 'global labels');
+      await run();
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(mockOctokit.rest.issues.createLabel.mock.calls.map(([args]) => [args.repo, args.name])).toEqual([
+        ['override', 'skip-release'],
+        ['inherit', 'global']
+      ]);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+    });
+
+    test('reports unchanged label syncs without changed counts', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            'labels-file': 'labels.yml'
+          })[name] || ''
+      );
+      mockOctokit.paginate.mockResolvedValue([desired]);
+      await run();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('changed-repositories', '0');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('unchanged-repositories', '1');
+      expect(mockOctokit.rest.issues.createLabel).not.toHaveBeenCalled();
+    });
+
+    test('surfaces sync errors through warnings and result outputs', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo',
+            'labels-file': 'labels.yml'
+          })[name] || ''
+      );
+      mockOctokit.paginate.mockRejectedValueOnce(new Error('Forbidden'));
+      await run();
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Forbidden'));
+      expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
+      expect(JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1])[0]).toMatchObject({
+        labelsSync: { success: false, error: expect.stringContaining('Forbidden') },
+        subResults: [expect.objectContaining({ kind: 'labels-sync', status: 'warning' })]
+      });
     });
   });
 
