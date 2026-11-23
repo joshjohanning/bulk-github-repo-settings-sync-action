@@ -415,6 +415,7 @@ const {
   configureApiVersion,
   runWithBufferedOutput,
   createRateLimitHandler,
+  disableWriteRetries,
   LATEST_API_VERSION,
   FALLBACK_API_VERSION
 } = await import('../src/index.js');
@@ -4427,6 +4428,66 @@ describe('Bulk GitHub Repository Settings Action', () => {
 
       expect(tracker.maxInFlight).toBe(1);
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '3');
+    });
+
+    test('should serialize duplicate repositories while processing different repositories in parallel', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,OWNER/REPO1',
+            'allow-squash-merge': 'true'
+          })[name] || ''
+      );
+      const tracker = { inFlight: 0, maxInFlight: 0 };
+      mockOctokit.rest.repos.get.mockImplementation(async () => {
+        tracker.inFlight++;
+        tracker.maxInFlight = Math.max(tracker.maxInFlight, tracker.inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        tracker.inFlight--;
+        return { data: makeReadableRepoData() };
+      });
+
+      await run();
+
+      expect(tracker.maxInFlight).toBe(1);
+      expect(getResultsOutput().map(result => result.repository)).toEqual(['owner/repo1', 'OWNER/REPO1']);
+    });
+
+    test('should finish all repositories and report a per-repository failure', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3,owner/repo4,owner/repo5,owner/repo6',
+            'allow-squash-merge': 'true'
+          })[name] || ''
+      );
+      mockOctokit.rest.repos.get.mockImplementation(async ({ repo }) => {
+        if (repo === 'repo2') {
+          throw new Error('temporary repository failure');
+        }
+        return { data: makeReadableRepoData() };
+      });
+
+      await run();
+
+      expect(mockOctokit.rest.repos.get).toHaveBeenCalledTimes(6);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '5');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(getResultsOutput().map(result => result.repository)).toEqual([
+        'owner/repo1',
+        'owner/repo2',
+        'owner/repo3',
+        'owner/repo4',
+        'owner/repo5',
+        'owner/repo6'
+      ]);
+      expect(getResultsOutput()[1]).toMatchObject({
+        success: false,
+        error: 'temporary repository failure'
+      });
     });
 
     test('should fail on invalid max-concurrency input', async () => {
@@ -15267,10 +15328,11 @@ rules:
     test('groups each concurrent task output together instead of interleaving', async () => {
       const originalWrite = process.stdout.write;
       const writes = [];
-      process.stdout.write = jest.fn(chunk => {
+      const mockWrite = jest.fn(chunk => {
         writes.push(chunk);
         return true;
       });
+      process.stdout.write = mockWrite;
       try {
         const task = async (name, delay) => {
           process.stdout.write(`${name}-start\n`);
@@ -15286,6 +15348,7 @@ rules:
 
         expect(results).toEqual(['a', 'b']);
         expect(writes).toEqual(['b-start\nb-end\n', 'a-start\na-end\n', 'unbuffered\n']);
+        expect(process.stdout.write).toBe(mockWrite);
       } finally {
         process.stdout.write = originalWrite;
       }
@@ -15294,10 +15357,11 @@ rules:
     test('flushes buffered output when the task throws', async () => {
       const originalWrite = process.stdout.write;
       const writes = [];
-      process.stdout.write = jest.fn(chunk => {
+      const mockWrite = jest.fn(chunk => {
         writes.push(chunk);
         return true;
       });
+      process.stdout.write = mockWrite;
       try {
         await expect(
           runWithBufferedOutput(async () => {
@@ -15306,6 +15370,7 @@ rules:
           })
         ).rejects.toThrow('boom');
         expect(writes).toEqual(['before failure\n']);
+        expect(process.stdout.write).toBe(mockWrite);
       } finally {
         process.stdout.write = originalWrite;
       }
@@ -15326,6 +15391,25 @@ rules:
       expect(mockCore.warning).toHaveBeenCalledWith(
         'Secondary rate limit hit for POST /repos/{owner}/{repo}/pulls; giving up after 3 retries'
       );
+    });
+  });
+
+  describe('disableWriteRetries', () => {
+    test('disables generic retries for writes but preserves retries for reads', async () => {
+      let wrapRequest;
+      const hook = {
+        wrap: jest.fn((name, wrapper) => {
+          expect(name).toBe('request');
+          wrapRequest = wrapper;
+        })
+      };
+      const octokit = { hook };
+      const request = jest.fn(async options => options.request.retries);
+
+      expect(disableWriteRetries(octokit)).toEqual({});
+      expect(hook.wrap).toHaveBeenCalledTimes(1);
+      await expect(wrapRequest(request, { method: 'POST', request: { retries: 3 } })).resolves.toBe(0);
+      await expect(wrapRequest(request, { method: 'GET', request: { retries: 3 } })).resolves.toBe(3);
     });
   });
 });

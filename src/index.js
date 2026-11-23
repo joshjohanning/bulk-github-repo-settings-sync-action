@@ -524,7 +524,22 @@ const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
 export const DEFAULT_MAX_CONCURRENCY = 5;
 const MAX_RATE_LIMIT_RETRIES = 3;
 
-const ThrottledOctokit = Octokit.plugin(throttling, retry);
+/**
+ * Disable generic error retries for non-idempotent writes; throttling still retries rate limits.
+ * @param {Object} octokit - Octokit instance being extended
+ * @returns {Object} Empty plugin additions
+ */
+export function disableWriteRetries(octokit) {
+  octokit.hook.wrap('request', (request, options) => {
+    if (!['GET', 'HEAD'].includes(options.method.toUpperCase())) {
+      options.request = { ...options.request, retries: 0 };
+    }
+    return request(options);
+  });
+  return {};
+}
+
+const ThrottledOctokit = Octokit.plugin(throttling, retry, disableWriteRetries);
 
 /**
  * Create an Octokit throttling handler that retries rate-limited requests a bounded number of times.
@@ -560,6 +575,9 @@ export function parseMaxConcurrency(value) {
 }
 
 const outputBufferStorage = new AsyncLocalStorage();
+let originalStdoutWrite;
+let bufferedStdoutWrite;
+let activeOutputBuffers = 0;
 
 /**
  * Run a function while buffering everything it writes to stdout (including @actions/core logs),
@@ -570,13 +588,13 @@ const outputBufferStorage = new AsyncLocalStorage();
  * @returns {Promise<T>} Result of fn
  */
 export async function runWithBufferedOutput(fn) {
-  const originalWrite = process.stdout.write;
-  if (!originalWrite.isBufferedOutputWriter) {
-    function bufferingWrite(...args) {
+  if (!bufferedStdoutWrite) {
+    originalStdoutWrite = process.stdout.write;
+    bufferedStdoutWrite = function (...args) {
       const [chunk, encoding, callback] = args;
       const buffer = outputBufferStorage.getStore();
       if (!buffer) {
-        return originalWrite.apply(process.stdout, args);
+        return originalStdoutWrite.apply(process.stdout, args);
       }
       buffer.push(
         typeof chunk === 'string'
@@ -588,17 +606,26 @@ export async function runWithBufferedOutput(fn) {
         done();
       }
       return true;
-    }
-    bufferingWrite.isBufferedOutputWriter = true;
-    process.stdout.write = bufferingWrite;
+    };
+    process.stdout.write = bufferedStdoutWrite;
   }
 
   const buffer = [];
+  activeOutputBuffers++;
   try {
     return await outputBufferStorage.run(buffer, fn);
   } finally {
-    if (buffer.length > 0) {
-      process.stdout.write(buffer.join(''));
+    try {
+      if (buffer.length > 0) {
+        process.stdout.write(buffer.join(''));
+      }
+    } finally {
+      activeOutputBuffers--;
+      if (activeOutputBuffers === 0) {
+        process.stdout.write = originalStdoutWrite;
+        originalStdoutWrite = undefined;
+        bufferedStdoutWrite = undefined;
+      }
     }
   }
 }
@@ -5891,10 +5918,8 @@ export async function run() {
     // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
     const reviewerCache = new Map();
 
-    const processRepository = async (repoConfig, repoIndex) => {
+    const processRepositoryUnsafe = async (repoConfig, repoIndex) => {
       const repo = repoConfig.repo;
-      core.info(`Updating ${repo}...`);
-
       // Merge global settings with repo-specific overrides
       const repoSettings = {
         allow_squash_merge: coerceBooleanConfig(
@@ -6193,7 +6218,6 @@ export async function run() {
       results[repoIndex] = result;
 
       if (result.archived) {
-        successCount++;
         core.info(`⏭️ Skipping archived repository ${repo}`);
         return;
       }
@@ -6819,17 +6843,8 @@ export async function run() {
       result.hasWarnings = result.subResults.some(s => s.status === SubResultStatus.WARNING);
 
       if (result.success) {
-        successCount++;
-        if (result.hasWarnings) {
-          warningCount++;
-        }
         const repoHasChanges = hasRepositoryChanges(result);
         const repoHasPending = !repoHasChanges && hasRepositoryPending(result);
-        if (repoHasChanges) {
-          changedCount++;
-        } else if (repoHasPending) {
-          pendingCount++;
-        }
         if (dryRun) {
           if (repoHasChanges) {
             core.info(`🔍 Would update ${repo}`);
@@ -7002,18 +7017,91 @@ export async function run() {
           core.warning(`  ⚠️ ${result.dependabotSecurityUpdatesWarning}`);
         }
       } else {
-        failureCount++;
         core.warning(`❌ Failed to update ${repo}: ${result.error}`);
       }
     };
 
+    const processRepository = async (repoConfig, repoIndex) => {
+      const repo = repoConfig.repo;
+      try {
+        await processRepositoryUnsafe(repoConfig, repoIndex);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (results[repoIndex]) {
+          results[repoIndex].success = false;
+          results[repoIndex].hasWarnings = true;
+          results[repoIndex].error = message;
+          results[repoIndex].subResults ??= [];
+          results[repoIndex].subResults.push(
+            createSubResult('repository-processing', SubResultStatus.WARNING, message)
+          );
+        } else {
+          results[repoIndex] = {
+            repository: repo,
+            success: false,
+            hasWarnings: false,
+            subResults: [],
+            error: message,
+            dryRun
+          };
+        }
+        core.warning(`❌ Failed to update ${repo}: ${message}`);
+      }
+    };
+
+    const repositoryQueues = new Map();
+    const processRepositoryWithLock = async (repoConfig, repoIndex) => {
+      const key = String(repoConfig.repo).trim().toLowerCase();
+      const previous = repositoryQueues.get(key) ?? Promise.resolve();
+      let release;
+      const current = new Promise(resolve => {
+        release = resolve;
+      });
+      repositoryQueues.set(key, current);
+      await previous;
+
+      try {
+        core.info(`Updating ${repoConfig.repo}...`);
+        if (maxConcurrency > 1 && repoList.length > 1) {
+          await runWithBufferedOutput(() => processRepository(repoConfig, repoIndex));
+        } else {
+          await processRepository(repoConfig, repoIndex);
+        }
+      } finally {
+        release();
+        if (repositoryQueues.get(key) === current) {
+          repositoryQueues.delete(key);
+        }
+      }
+    };
+
     if (maxConcurrency > 1 && repoList.length > 1) {
-      await mapWithConcurrencyLimit(repoList, maxConcurrency, (repoConfig, repoIndex) =>
-        runWithBufferedOutput(() => processRepository(repoConfig, repoIndex))
-      );
+      await mapWithConcurrencyLimit(repoList, maxConcurrency, processRepositoryWithLock);
     } else {
       for (const [repoIndex, repoConfig] of repoList.entries()) {
-        await processRepository(repoConfig, repoIndex);
+        await processRepositoryWithLock(repoConfig, repoIndex);
+      }
+    }
+
+    for (const result of results) {
+      if (!result.success) {
+        failureCount++;
+        continue;
+      }
+
+      successCount++;
+      if (result.archived) {
+        continue;
+      }
+      if (result.hasWarnings) {
+        warningCount++;
+      }
+      const repoHasChanges = hasRepositoryChanges(result);
+      const repoHasPending = !repoHasChanges && hasRepositoryPending(result);
+      if (repoHasChanges) {
+        changedCount++;
+      } else if (repoHasPending) {
+        pendingCount++;
       }
     }
 

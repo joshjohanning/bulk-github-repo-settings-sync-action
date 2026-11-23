@@ -1111,9 +1111,9 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 
 ### Parallel Processing and Rate Limits
 
-Repositories are processed in parallel, up to 5 at a time by default. Use the `max-concurrency` input to change this, or set it to `1` to process repositories one at a time. When processing in parallel, each repository's log output is buffered and printed as one block when that repository finishes, so logs from different repositories don't interleave.
+Repositories are processed in parallel, up to 5 at a time by default. Use the `max-concurrency` input to change this, or set it to `1` to process repositories one at a time. Changes within each repository remain sequential, and repeated entries for the same repository are serialized. When processing in parallel, each repository's log output is buffered and printed as one block when that repository finishes; a short start message is printed immediately so progress remains visible.
 
-The action automatically backs off and retries requests that hit primary or secondary rate limits, and also retries transient server errors. If you see frequent secondary rate limit warnings, lower `max-concurrency`.
+The action automatically backs off and retries requests that hit primary or secondary rate limits. Transient server errors are retried for reads only; write requests are not retried on ambiguous errors because GitHub may have applied the change before the error was returned. If you see frequent secondary rate limit warnings, lower `max-concurrency`.
 
 ## Action Inputs
 
