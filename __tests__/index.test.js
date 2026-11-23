@@ -2529,6 +2529,32 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([{ repo: 'my-org/private-repo', 'allow-squash-merge': true }]);
     });
 
+    test('should limit metadata reads for fork and visibility filters to max-concurrency', async () => {
+      const tracker = { inFlight: 0, maxInFlight: 0 };
+      mockOctokit.rest.repos.get.mockImplementation(async ({ repo }) => {
+        tracker.inFlight++;
+        tracker.maxInFlight = Math.max(tracker.maxInFlight, tracker.inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        tracker.inFlight--;
+        return { data: { full_name: `my-org/${repo}`, fork: false, visibility: 'private' } };
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['repo1', 'repo2', 'repo3'], fork: false, visibility: 'private' },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit, 1);
+
+      expect(tracker.maxInFlight).toBe(1);
+      expect(result.map(({ repo }) => repo)).toEqual(['my-org/repo1', 'my-org/repo2', 'my-org/repo3']);
+    });
+
     test('should process visibility filter with custom-property selector', async () => {
       mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
       mockOctokit.request.mockResolvedValueOnce({
@@ -4417,6 +4443,62 @@ describe('Bulk GitHub Repository Settings Action', () => {
         .map(([message]) => message.match(/owner\/repo(\d)/)?.[1])
         .filter(Boolean);
       expect(repoLogOrder).toEqual([...repoLogOrder].sort());
+    });
+
+    test('should bound completed work while an earlier repository is still logging', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3,owner/repo4,owner/repo5,owner/repo6,owner/repo7',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '5'
+          })[name] || ''
+      );
+      let releaseFirstRepo;
+      let markFirstRepoStarted;
+      let markOtherFirstWaveReposFinished;
+      const firstRepoStarted = new Promise(resolve => {
+        markFirstRepoStarted = resolve;
+      });
+      const otherFirstWaveReposFinished = new Promise(resolve => {
+        markOtherFirstWaveReposFinished = resolve;
+      });
+      let otherFirstWaveRepoCount = 0;
+      mockOctokit.rest.repos.update.mockImplementation(async ({ repo }) => {
+        if (repo === 'repo1') {
+          markFirstRepoStarted();
+          await new Promise(resolve => {
+            releaseFirstRepo = resolve;
+          });
+          return {};
+        }
+
+        if (Number(repo.replace('repo', '')) <= 5) {
+          otherFirstWaveRepoCount++;
+          if (otherFirstWaveRepoCount === 4) {
+            markOtherFirstWaveReposFinished();
+          }
+        }
+        return {};
+      });
+
+      const runPromise = run();
+      await firstRepoStarted;
+      await otherFirstWaveReposFinished;
+
+      expect(mockOctokit.rest.repos.update.mock.calls.map(([{ repo }]) => repo)).toEqual([
+        'repo1',
+        'repo2',
+        'repo3',
+        'repo4',
+        'repo5'
+      ]);
+
+      releaseFirstRepo();
+      await runPromise;
+
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(7);
     });
 
     test('should process repositories sequentially when max-concurrency is 1', async () => {
@@ -15424,8 +15506,14 @@ rules:
       expect(process.stdout.write).toBe(originalWrite);
     });
 
-    test('preserves late warnings from a closed async context while another task is buffering', async () => {
+    test('keeps late warnings attached to their closed repository buffer', async () => {
       const warn = createRateLimitHandler('Rate limit');
+      const flushed = [];
+      let retainedEntries;
+      const flush = entries => {
+        retainedEntries = entries;
+        flushed.push(...entries.splice(0));
+      };
       let emitLateWarning;
       let lateWarning;
       await runWithBufferedLogs(async () => {
@@ -15435,22 +15523,20 @@ rules:
           });
           warn(1, { method: 'GET', url: '/late-warning' }, {}, 0);
         })();
-      });
-      let finishSecond;
-      const second = runWithBufferedLogs(async () => {
-        warn(1, { method: 'GET', url: '/second' }, {}, 0);
-        await new Promise(resolve => {
-          finishSecond = resolve;
-        });
-      });
+      }, flush);
       emitLateWarning();
       await lateWarning;
-      expect(mockCore.warning.mock.calls.map(([message]) => message)).toEqual([
-        'Rate limit hit for GET /late-warning; retrying after 1 seconds (attempt 1)'
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(flushed).toEqual([]);
+
+      flush(retainedEntries);
+
+      expect(flushed).toEqual([
+        {
+          method: 'warning',
+          args: ['Rate limit hit for GET /late-warning; retrying after 1 seconds (attempt 1)']
+        }
       ]);
-      finishSecond();
-      await second;
-      expect(mockCore.warning).toHaveBeenCalledTimes(2);
     });
 
     test('flushes buffered logs when the task throws', async () => {

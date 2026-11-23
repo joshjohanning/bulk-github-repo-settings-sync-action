@@ -33,7 +33,7 @@ const core = { ...actionsCore };
 for (const method of ['info', 'warning', 'debug', 'error']) {
   core[method] = (...args) => {
     const buffer = repositoryLogStorage.getStore();
-    if (buffer && !buffer.closed) {
+    if (buffer) {
       buffer.entries.push({ method, args });
     } else {
       actionLog[method](...args);
@@ -539,7 +539,6 @@ async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCa
   }
 }
 
-const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
 export const DEFAULT_MAX_CONCURRENCY = 5;
 const MAX_RATE_LIMIT_RETRIES = 3;
 
@@ -615,25 +614,24 @@ export function parseMaxConcurrency(value) {
 }
 
 /**
- * Buffer action log calls without changing stdout. Closed async contexts log directly,
- * so callbacks inherited from an already-finished task cannot lose later warnings.
+ * Buffer action log calls without changing stdout. Late logs stay attached to the same
+ * repository buffer so they cannot bypass ordered output.
  * @template T
  * @param {() => Promise<T>} fn - Async function to run
  * @param {(entries: Array<Object>) => void} [flush] - Flush or queue the completed log entries
  * @returns {Promise<T>} Result of fn
  */
 export async function runWithBufferedLogs(fn, flush = flushRepositoryLogs) {
-  const buffer = { entries: [], closed: false };
+  const buffer = { entries: [] };
   try {
     return await repositoryLogStorage.run(buffer, fn);
   } finally {
-    buffer.closed = true;
     flush(buffer.entries);
   }
 }
 
 function flushRepositoryLogs(entries) {
-  for (const { method, args } of entries) {
+  for (const { method, args } of entries.splice(0)) {
     actionLog[method](...args);
   }
 }
@@ -664,8 +662,8 @@ async function mapWithConcurrencyLimit(items, concurrency, mapper) {
   return results;
 }
 
-async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache) {
-  return mapWithConcurrencyLimit(matchedRepos, REPOSITORY_METADATA_FETCH_CONCURRENCY, async matchedRepo => ({
+async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache, concurrency) {
+  return mapWithConcurrencyLimit(matchedRepos, concurrency, async matchedRepo => ({
     ...matchedRepo,
     repository:
       matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
@@ -768,7 +766,7 @@ function mergeRulesetsFiles(existing, incoming, repo, basePath = '') {
  * @param {Octokit} octokit - Octokit instance
  * @returns {Promise<Array>} Array of repository objects with merged settings from matching rules
  */
-export async function parseConfigWithRules(config, octokit) {
+export async function parseConfigWithRules(config, octokit, maxConcurrency = DEFAULT_MAX_CONCURRENCY) {
   if (!config.rules || !Array.isArray(config.rules)) {
     throw new Error('Configuration must contain a "rules" array');
   }
@@ -932,7 +930,12 @@ export async function parseConfigWithRules(config, octokit) {
     }
 
     if (rule.selector.fork !== undefined || rule.selector.visibility !== undefined) {
-      matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
+      matchedRepos = await ensureRepositoriesHaveMetadata(
+        matchedRepos,
+        octokit,
+        repositoryMetadataCache,
+        maxConcurrency
+      );
     }
 
     if (rule.selector.fork !== undefined) {
@@ -1001,7 +1004,8 @@ export async function parseRepositories(
   owner,
   octokit,
   customPropertyName,
-  customPropertyValue
+  customPropertyValue,
+  maxConcurrency = DEFAULT_MAX_CONCURRENCY
 ) {
   let repoList = [];
 
@@ -1035,7 +1039,7 @@ export async function parseRepositories(
       // Check if this is a rules-based configuration
       if (Array.isArray(data.rules)) {
         core.info('Detected rules-based configuration file');
-        repoList = await parseConfigWithRules(data, octokit);
+        repoList = await parseConfigWithRules(data, octokit, maxConcurrency);
       }
       // Support repos array format (backwards compatible)
       else if (Array.isArray(data.repos)) {
@@ -5834,7 +5838,8 @@ export async function run() {
       owner,
       octokit,
       customPropertyName,
-      customPropertyValue
+      customPropertyValue,
+      maxConcurrency
     );
 
     core.info(
@@ -7057,15 +7062,30 @@ export async function run() {
     const repositoryQueues = new Map();
     const completedLogs = new Array(repoList.length);
     let nextLogIndex = 0;
+    let windowWaiters = [];
     const queueRepositoryLogs = (repoIndex, entries) => {
       completedLogs[repoIndex] = entries;
+      const previousLogIndex = nextLogIndex;
       while (completedLogs[nextLogIndex]) {
         flushRepositoryLogs(completedLogs[nextLogIndex]);
-        completedLogs[nextLogIndex] = undefined;
         nextLogIndex++;
+      }
+      if (nextLogIndex !== previousLogIndex) {
+        for (const resolve of windowWaiters) {
+          resolve();
+        }
+        windowWaiters = [];
+      }
+    };
+    const waitForLogWindow = async repoIndex => {
+      while (repoIndex >= nextLogIndex + maxConcurrency) {
+        await new Promise(resolve => windowWaiters.push(resolve));
       }
     };
     const processRepositoryWithLock = async (repoConfig, repoIndex) => {
+      if (maxConcurrency > 1 && repoList.length > 1) {
+        await waitForLogWindow(repoIndex);
+      }
       const key = String(repoConfig.repo).trim().toLowerCase();
       const previous = repositoryQueues.get(key) ?? Promise.resolve();
       let release;
@@ -7097,6 +7117,12 @@ export async function run() {
     } else {
       for (const [repoIndex, repoConfig] of repoList.entries()) {
         await processRepositoryWithLock(repoConfig, repoIndex);
+      }
+    }
+
+    for (const entries of completedLogs) {
+      if (entries?.length) {
+        flushRepositoryLogs(entries);
       }
     }
 

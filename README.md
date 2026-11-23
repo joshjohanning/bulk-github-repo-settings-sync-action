@@ -1113,7 +1113,9 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 
 Repositories are processed in parallel, up to 5 at a time by default. Use the `max-concurrency` input to change this, or set it to `1` to process repositories one at a time. This primarily speeds up reads and no-op reconciliation; Octokit still paces writes across all repositories to respect GitHub's limits. Changes within each repository remain sequential, and repeated entries for the same repository are serialized.
 
-When processing in parallel, each repository's action logs are buffered until it finishes, then printed together in repository input order. A later repository that finishes first waits for earlier repositories before its logs appear. Logs never interleave between repository blocks; warnings from callbacks that outlive a completed repository are still emitted rather than discarded. The action does not intercept stdout.
+When processing in parallel, each repository's action logs are buffered until it finishes, then printed together in repository input order. Scheduling uses a bounded lookahead, so completed logs cannot accumulate for the entire input while an earlier repository is still running. A later repository that finishes first waits for earlier repositories before its logs appear. Logs never interleave between repository blocks; late callback logs remain queued with their repository and are emitted after the regular repository blocks in input order. The action does not intercept stdout.
+
+The `max-concurrency` limit also applies to repository metadata reads needed by rules-based `fork` and `visibility` selectors.
 
 The action automatically backs off and retries requests that hit primary or secondary rate limits. Transient server errors are retried for reads only; write requests are not retried on ambiguous errors because GitHub may have applied the change before the error was returned. If you see frequent secondary rate limit warnings, lower `max-concurrency`.
 
