@@ -214,7 +214,7 @@ inputs:
     required: false
     default: 'false'
   max-concurrency:
-    description: 'Maximum number of repositories to process in parallel, primarily overlapping reads. Writes remain paced by Octokit, and repository logs print in input order. Set to 1 for sequential processing.'
+    description: 'Maximum number of repositories to process in parallel, primarily overlapping reads. Octokit paces writes. Repository logs, including rate-limit warnings, print in input order. Set to 1 for sequential processing.'
     required: false
     default: '5'
   write-job-summary:

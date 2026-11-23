@@ -23,6 +23,7 @@ import * as url from 'url';
 import * as yaml from 'js-yaml';
 
 const repositoryLogStorage = new AsyncLocalStorage();
+const requestLogBuffers = new WeakMap();
 const actionLog = {
   info: actionsCore.info,
   warning: actionsCore.warning,
@@ -557,7 +558,18 @@ export function disableWriteRetries(octokit) {
   return {};
 }
 
-const ThrottledOctokit = Octokit.plugin(throttling, retry, disableWriteRetries);
+function withRequestLogBuffer(options, fn, ...args) {
+  return requestLogBuffers.has(options)
+    ? repositoryLogStorage.run(requestLogBuffers.get(options), fn, ...args)
+    : fn(...args);
+}
+
+function scopeQueuedRequestLogs(octokit) {
+  // Register inside throttling so Octokit's request logger runs in the issuer's context on every attempt.
+  octokit.hook.wrap('request', (request, options) => withRequestLogBuffer(options, request, options));
+}
+
+const ThrottledOctokit = Octokit.plugin(scopeQueuedRequestLogs, throttling, retry, disableWriteRetries);
 
 /**
  * Create the API client with one retry policy for production and integration tests.
@@ -565,7 +577,7 @@ const ThrottledOctokit = Octokit.plugin(throttling, retry, disableWriteRetries);
  * @returns {import('@octokit/rest').Octokit} Configured client
  */
 export function createApiClient(options) {
-  return new ThrottledOctokit({
+  const octokit = new ThrottledOctokit({
     ...options,
     log: { debug: core.debug, info: core.info, warn: core.warning, error: core.error },
     retry: {
@@ -578,6 +590,11 @@ export function createApiClient(options) {
       ...options.throttle
     }
   });
+  // Bottleneck can run a queued callback in the previous request's async context.
+  octokit.hook.before('request', requestOptions => {
+    requestLogBuffers.set(requestOptions, repositoryLogStorage.getStore());
+  });
+  return octokit;
 }
 
 /**
@@ -588,12 +605,12 @@ export function createApiClient(options) {
 export function createRateLimitHandler(label) {
   return (retryAfter, options, _octokit, retryCount) => {
     const request = `${options.method} ${options.url}`;
-    if (retryCount < MAX_RATE_LIMIT_RETRIES) {
-      core.warning(`${label} hit for ${request}; retrying after ${retryAfter} seconds (attempt ${retryCount + 1})`);
-      return true;
-    }
-    core.warning(`${label} hit for ${request}; giving up after ${retryCount} retries`);
-    return false;
+    const shouldRetry = retryCount < MAX_RATE_LIMIT_RETRIES;
+    const decision = shouldRetry
+      ? `retrying after ${retryAfter} seconds (attempt ${retryCount + 1})`
+      : `giving up after ${retryCount} retries`;
+    withRequestLogBuffer(options, core.warning, `${label} hit for ${request}; ${decision}`);
+    return shouldRetry;
   };
 }
 
@@ -4675,7 +4692,11 @@ async function resolveReviewer(octokit, owner, reviewer, cache) {
  */
 async function resolveReviewers(octokit, owner, reviewers, cache) {
   if (!reviewers || reviewers.length === 0) return [];
-  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
+  const lookups = await Promise.allSettled(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
+  return lookups.map(lookup => {
+    if (lookup.status === 'rejected') throw lookup.reason;
+    return lookup.value;
+  });
 }
 
 /**

@@ -11885,6 +11885,31 @@ rules:
       expect(result.error).toContain('Failed to sync environments');
     });
 
+    test('waits for sibling reviewer lookups before reporting a failure and flushing repository warnings', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      mockOctokit.rest.users.getByUsername.mockRejectedValueOnce(new Error('not found'));
+      mockOctokit.rest.teams.getByName.mockImplementationOnce(async () => {
+        await new Promise(resolve => setImmediate(resolve));
+        warn(1, { method: 'GET', url: '/teams/ops' }, {}, 0);
+        return { data: { id: 42 } };
+      });
+      const reviewers = [
+        { type: 'User', login: 'missing' },
+        { type: 'Team', slug: 'ops' }
+      ];
+
+      const result = await runWithBufferedLogs(() =>
+        syncEnvironments(mockOctokit, 'owner/repo', [{ name: 'prod', reviewers }], false, false)
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: 'Failed to resolve reviewers for environment "prod": Failed to resolve User login "missing": not found'
+      });
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('GET /teams/ops'));
+      expect(mockOctokit.request).not.toHaveBeenCalled();
+    });
+
     test('should pass reviewers and deployment_branch_policy to API', async () => {
       const envConfig = {
         environments: [
