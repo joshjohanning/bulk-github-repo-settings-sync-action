@@ -10,7 +10,7 @@
  *    env 'INPUT_GITHUB-TOKEN=ghp_xxx' 'INPUT_REPOSITORIES=owner/repo1,owner/repo2' node src/index.js
  */
 
-import * as core from '@actions/core';
+import * as actionsCore from '@actions/core';
 import { retry } from '@octokit/plugin-retry';
 import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from '@octokit/rest';
@@ -21,6 +21,25 @@ import ignore from 'ignore';
 import * as path from 'path';
 import * as url from 'url';
 import * as yaml from 'js-yaml';
+
+const repositoryLogStorage = new AsyncLocalStorage();
+const actionLog = {
+  info: actionsCore.info,
+  warning: actionsCore.warning,
+  debug: actionsCore.debug,
+  error: actionsCore.error
+};
+const core = { ...actionsCore };
+for (const method of ['info', 'warning', 'debug', 'error']) {
+  core[method] = (...args) => {
+    const buffer = repositoryLogStorage.getStore();
+    if (buffer && !buffer.closed) {
+      buffer.entries.push({ method, args });
+    } else {
+      actionLog[method](...args);
+    }
+  };
+}
 
 export const LATEST_API_VERSION = '2026-03-10';
 export const FALLBACK_API_VERSION = '2022-11-28';
@@ -542,6 +561,27 @@ export function disableWriteRetries(octokit) {
 const ThrottledOctokit = Octokit.plugin(throttling, retry, disableWriteRetries);
 
 /**
+ * Create the API client with one retry policy for production and integration tests.
+ * @param {Object} options - Octokit options including authentication and API base URL
+ * @returns {import('@octokit/rest').Octokit} Configured client
+ */
+export function createApiClient(options) {
+  return new ThrottledOctokit({
+    ...options,
+    log: { debug: core.debug, info: core.info, warn: core.warning, error: core.error },
+    retry: {
+      ...options.retry,
+      doNotRetry: [400, 401, 403, 404, 410, 422, 429, 451]
+    },
+    throttle: {
+      onRateLimit: createRateLimitHandler('Rate limit'),
+      onSecondaryRateLimit: createRateLimitHandler('Secondary rate limit'),
+      ...options.throttle
+    }
+  });
+}
+
+/**
  * Create an Octokit throttling handler that retries rate-limited requests a bounded number of times.
  * @param {string} label - Human-readable rate limit type for log messages
  * @returns {(retryAfter: number, options: Object, octokit: Object, retryCount: number) => boolean} Handler
@@ -574,59 +614,27 @@ export function parseMaxConcurrency(value) {
   return Number(trimmed);
 }
 
-const outputBufferStorage = new AsyncLocalStorage();
-let originalStdoutWrite;
-let bufferedStdoutWrite;
-let activeOutputBuffers = 0;
-
 /**
- * Run a function while buffering everything it writes to stdout (including @actions/core logs),
- * then flush the buffer in one block. This keeps per-repository logs together when repositories
- * are processed concurrently.
+ * Buffer action log calls without changing stdout. Closed async contexts log directly,
+ * so callbacks inherited from an already-finished task cannot lose later warnings.
  * @template T
  * @param {() => Promise<T>} fn - Async function to run
+ * @param {(entries: Array<Object>) => void} [flush] - Flush or queue the completed log entries
  * @returns {Promise<T>} Result of fn
  */
-export async function runWithBufferedOutput(fn) {
-  if (!bufferedStdoutWrite) {
-    originalStdoutWrite = process.stdout.write;
-    bufferedStdoutWrite = function (...args) {
-      const [chunk, encoding, callback] = args;
-      const buffer = outputBufferStorage.getStore();
-      if (!buffer) {
-        return originalStdoutWrite.apply(process.stdout, args);
-      }
-      buffer.push(
-        typeof chunk === 'string'
-          ? chunk
-          : Buffer.from(chunk).toString(typeof encoding === 'string' ? encoding : 'utf8')
-      );
-      const done = typeof encoding === 'function' ? encoding : callback;
-      if (typeof done === 'function') {
-        done();
-      }
-      return true;
-    };
-    process.stdout.write = bufferedStdoutWrite;
-  }
-
-  const buffer = [];
-  activeOutputBuffers++;
+export async function runWithBufferedLogs(fn, flush = flushRepositoryLogs) {
+  const buffer = { entries: [], closed: false };
   try {
-    return await outputBufferStorage.run(buffer, fn);
+    return await repositoryLogStorage.run(buffer, fn);
   } finally {
-    try {
-      if (buffer.length > 0) {
-        process.stdout.write(buffer.join(''));
-      }
-    } finally {
-      activeOutputBuffers--;
-      if (activeOutputBuffers === 0) {
-        process.stdout.write = originalStdoutWrite;
-        originalStdoutWrite = undefined;
-        bufferedStdoutWrite = undefined;
-      }
-    }
+    buffer.closed = true;
+    flush(buffer.entries);
+  }
+}
+
+function flushRepositoryLogs(entries) {
+  for (const { method, args } of entries) {
+    actionLog[method](...args);
   }
 }
 
@@ -5803,13 +5811,9 @@ export async function run() {
     }
 
     // Initialize Octokit with throttling (rate-limit backoff) and retries for transient errors
-    const octokit = new ThrottledOctokit({
+    const octokit = createApiClient({
       auth: githubToken,
-      baseUrl: githubApiUrl,
-      throttle: {
-        onRateLimit: createRateLimitHandler('Rate limit'),
-        onSecondaryRateLimit: createRateLimitHandler('Secondary rate limit')
-      }
+      baseUrl: githubApiUrl
     });
     await configureApiVersion(octokit, githubApiUrl);
 
@@ -5920,6 +5924,7 @@ export async function run() {
 
     const processRepositoryUnsafe = async (repoConfig, repoIndex) => {
       const repo = repoConfig.repo;
+      core.info(`Updating ${repo}...`);
       // Merge global settings with repo-specific overrides
       const repoSettings = {
         allow_squash_merge: coerceBooleanConfig(
@@ -7050,6 +7055,16 @@ export async function run() {
     };
 
     const repositoryQueues = new Map();
+    const completedLogs = new Array(repoList.length);
+    let nextLogIndex = 0;
+    const queueRepositoryLogs = (repoIndex, entries) => {
+      completedLogs[repoIndex] = entries;
+      while (completedLogs[nextLogIndex]) {
+        flushRepositoryLogs(completedLogs[nextLogIndex]);
+        completedLogs[nextLogIndex] = undefined;
+        nextLogIndex++;
+      }
+    };
     const processRepositoryWithLock = async (repoConfig, repoIndex) => {
       const key = String(repoConfig.repo).trim().toLowerCase();
       const previous = repositoryQueues.get(key) ?? Promise.resolve();
@@ -7061,9 +7076,11 @@ export async function run() {
       await previous;
 
       try {
-        core.info(`Updating ${repoConfig.repo}...`);
         if (maxConcurrency > 1 && repoList.length > 1) {
-          await runWithBufferedOutput(() => processRepository(repoConfig, repoIndex));
+          await runWithBufferedLogs(
+            () => processRepository(repoConfig, repoIndex),
+            entries => queueRepositoryLogs(repoIndex, entries)
+          );
         } else {
           await processRepository(repoConfig, repoIndex);
         }

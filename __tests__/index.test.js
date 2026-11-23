@@ -413,7 +413,7 @@ const {
   parseFileSyncConfig,
   syncFileSyncGroup,
   configureApiVersion,
-  runWithBufferedOutput,
+  runWithBufferedLogs,
   createRateLimitHandler,
   disableWriteRetries,
   LATEST_API_VERSION,
@@ -4410,6 +4410,13 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(tracker.maxInFlight).toBe(3);
       expect(getResultsOutput().map(r => r.repository)).toEqual(['owner/repo1', 'owner/repo2', 'owner/repo3']);
       expect(mockCore.info).toHaveBeenCalledWith('Processing 3 repositories (up to 5 in parallel)...');
+      expect(
+        mockCore.info.mock.calls.map(([message]) => message).filter(message => message.startsWith('Updating '))
+      ).toEqual(['Updating owner/repo1...', 'Updating owner/repo2...', 'Updating owner/repo3...']);
+      const repoLogOrder = mockCore.info.mock.calls
+        .map(([message]) => message.match(/owner\/repo(\d)/)?.[1])
+        .filter(Boolean);
+      expect(repoLogOrder).toEqual([...repoLogOrder].sort());
     });
 
     test('should process repositories sequentially when max-concurrency is 1', async () => {
@@ -4488,6 +4495,82 @@ describe('Bulk GitHub Repository Settings Action', () => {
         success: false,
         error: 'temporary repository failure'
       });
+    });
+
+    test('should report an unexpected error before assigning results and finish queued repositories', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '2'
+          })[name] || ''
+      );
+      setMockFileContent('test repos', 'repos.yml');
+      setMockYamlContent(
+        {
+          repos: [{ repo: 'owner/repo1', 'rulesets-file': [true] }, { repo: 'owner/repo1' }, { repo: 'owner/repo2' }]
+        },
+        'test repos'
+      );
+
+      await run();
+
+      const results = getResultsOutput();
+      expect(results[0]).toMatchObject({
+        repository: 'owner/repo1',
+        success: false,
+        subResults: [],
+        error: expect.stringContaining('Invalid entry in "rulesets-file"')
+      });
+      expect(results.slice(1).every(result => result.success)).toBe(true);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update owner/repo1'));
+    });
+
+    test('should preserve partial results after an unexpected error and finish queued repositories', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '2'
+          })[name] || ''
+      );
+      const failingConfig = { repo: 'owner/repo1' };
+      Object.defineProperty(failingConfig, 'package-json-file', {
+        get() {
+          throw new Error('unexpected package sync configuration failure');
+        }
+      });
+      setMockFileContent('test repos', 'repos.yml');
+      setMockYamlContent({ repos: [failingConfig, { repo: 'owner/repo1' }, { repo: 'owner/repo2' }] }, 'test repos');
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+
+      await run();
+
+      const results = getResultsOutput();
+      expect(results[0]).toMatchObject({
+        success: false,
+        error: 'unexpected package sync configuration failure',
+        changes: expect.arrayContaining([expect.objectContaining({ setting: 'allow_squash_merge' })]),
+        subResults: expect.arrayContaining([
+          expect.objectContaining({ status: 'changed' }),
+          expect.objectContaining({
+            kind: 'repository-processing',
+            status: 'warning',
+            message: 'unexpected package sync configuration failure'
+          })
+        ])
+      });
+      expect(results.slice(1).every(result => result.success)).toBe(true);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(3);
     });
 
     test('should fail on invalid max-concurrency input', async () => {
@@ -15324,56 +15407,61 @@ rules:
     });
   });
 
-  describe('runWithBufferedOutput', () => {
-    test('groups each concurrent task output together instead of interleaving', async () => {
+  describe('runWithBufferedLogs', () => {
+    test('buffers action logs without replacing stdout', async () => {
       const originalWrite = process.stdout.write;
-      const writes = [];
-      const mockWrite = jest.fn(chunk => {
-        writes.push(chunk);
-        return true;
+      const warn = createRateLimitHandler('Rate limit');
+      const options = { method: 'GET', url: '/test' };
+      const result = await runWithBufferedLogs(async () => {
+        warn(1, options, {}, 0);
+        expect(mockCore.warning).not.toHaveBeenCalled();
+        expect(process.stdout.write).toBe(originalWrite);
+        return 'finished';
       });
-      process.stdout.write = mockWrite;
-      try {
-        const task = async (name, delay) => {
-          process.stdout.write(`${name}-start\n`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          process.stdout.write(`${name}-end\n`);
-          return name;
-        };
-        const results = await Promise.all([
-          runWithBufferedOutput(() => task('a', 10)),
-          runWithBufferedOutput(() => task('b', 1))
-        ]);
-        process.stdout.write('unbuffered\n');
 
-        expect(results).toEqual(['a', 'b']);
-        expect(writes).toEqual(['b-start\nb-end\n', 'a-start\na-end\n', 'unbuffered\n']);
-        expect(process.stdout.write).toBe(mockWrite);
-      } finally {
-        process.stdout.write = originalWrite;
-      }
+      expect(result).toBe('finished');
+      expect(mockCore.warning).toHaveBeenCalledTimes(1);
+      expect(process.stdout.write).toBe(originalWrite);
     });
 
-    test('flushes buffered output when the task throws', async () => {
-      const originalWrite = process.stdout.write;
-      const writes = [];
-      const mockWrite = jest.fn(chunk => {
-        writes.push(chunk);
-        return true;
+    test('preserves late warnings from a closed async context while another task is buffering', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      let emitLateWarning;
+      let lateWarning;
+      await runWithBufferedLogs(async () => {
+        lateWarning = (async () => {
+          await new Promise(resolve => {
+            emitLateWarning = resolve;
+          });
+          warn(1, { method: 'GET', url: '/late-warning' }, {}, 0);
+        })();
       });
-      process.stdout.write = mockWrite;
-      try {
-        await expect(
-          runWithBufferedOutput(async () => {
-            process.stdout.write('before failure\n');
-            throw new Error('boom');
-          })
-        ).rejects.toThrow('boom');
-        expect(writes).toEqual(['before failure\n']);
-        expect(process.stdout.write).toBe(mockWrite);
-      } finally {
-        process.stdout.write = originalWrite;
-      }
+      let finishSecond;
+      const second = runWithBufferedLogs(async () => {
+        warn(1, { method: 'GET', url: '/second' }, {}, 0);
+        await new Promise(resolve => {
+          finishSecond = resolve;
+        });
+      });
+      emitLateWarning();
+      await lateWarning;
+      expect(mockCore.warning.mock.calls.map(([message]) => message)).toEqual([
+        'Rate limit hit for GET /late-warning; retrying after 1 seconds (attempt 1)'
+      ]);
+      finishSecond();
+      await second;
+      expect(mockCore.warning).toHaveBeenCalledTimes(2);
+    });
+
+    test('flushes buffered logs when the task throws', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      await expect(
+        runWithBufferedLogs(async () => {
+          warn(1, { method: 'GET', url: '/test' }, {}, 0);
+          throw new Error('boom');
+        })
+      ).rejects.toThrow('boom');
+      expect(mockCore.warning).toHaveBeenCalledTimes(1);
     });
   });
 
