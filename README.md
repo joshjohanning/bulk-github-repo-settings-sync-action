@@ -1109,6 +1109,16 @@ When syncing files via pull request (dependabot.yml, .gitignore, workflow files,
 
 The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about-the-rest-api/api-versions) header on every REST request. GitHub.com and GHE.com (GHEC with data residency) use `2026-03-10`. For GitHub Enterprise Server, the action checks once at startup whether `2026-03-10` is supported (GHES 3.21+) and otherwise falls back to `2022-11-28`. No configuration is required.
 
+### Parallel Processing and Rate Limits
+
+Repositories are processed in parallel, up to 5 at a time by default. Use the `max-concurrency` input to change this, or set it to `1` to process repositories one at a time. This primarily speeds up reads and no-op reconciliation; Octokit still paces writes across all repositories to respect GitHub's limits. Changes within each repository remain sequential, and repeated entries for the same repository are serialized.
+
+When processing in parallel, each repository's action logs are buffered until it finishes, then printed together in repository input order. Scheduling uses a bounded lookahead, so completed logs cannot accumulate for the entire input while an earlier repository is still running. Queued API requests and rate-limit warnings are logged with the repository that issued the request. A failed environment reviewer lookup waits for the other lookups to finish before the repository's logs are printed. The action does not intercept stdout.
+
+The `max-concurrency` limit also applies to repository metadata reads needed by rules-based `fork` and `visibility` selectors.
+
+The action automatically backs off and retries requests that hit primary or secondary rate limits. Transient server errors are retried for reads only; write requests are not retried on ambiguous errors because GitHub may have applied the change before the error was returned. If you see frequent secondary rate limit warnings, lower `max-concurrency`.
+
 ## Action Inputs
 
 | Input                                      | Description                                                                                                                                 | Required | Default                                   |
@@ -1171,6 +1181,7 @@ The action sends the [`X-GitHub-Api-Version`](https://docs.github.com/rest/about
 | `package-json-sync-engines`                | Sync engines field from package-json-file to target repositories (useful for Node.js version requirements)                                  | No       | `true`                                    |
 | `package-json-pr-title`                    | Title for pull requests when updating package.json                                                                                          | No       | `chore: update package.json`              |
 | `dry-run`                                  | Preview changes without applying them (logs what would be changed)                                                                          | No       | `false`                                   |
+| `max-concurrency`                          | Maximum number of repositories to process in parallel (`1` processes sequentially); rate-limited requests are retried automatically         | No       | `5`                                       |
 | `write-job-summary`                        | Write a summary table to the GitHub Actions job summary                                                                                     | No       | `true`                                    |
 | `summary-heading`                          | Custom heading for the GitHub Actions job summary                                                                                           | No       | `Bulk Repository Settings Update Results` |
 

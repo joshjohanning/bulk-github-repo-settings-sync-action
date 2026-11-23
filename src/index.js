@@ -10,14 +10,37 @@
  *    env 'INPUT_GITHUB-TOKEN=ghp_xxx' 'INPUT_REPOSITORIES=owner/repo1,owner/repo2' node src/index.js
  */
 
-import * as core from '@actions/core';
+import * as actionsCore from '@actions/core';
+import { retry } from '@octokit/plugin-retry';
+import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from '@octokit/rest';
+import { AsyncLocalStorage } from 'async_hooks';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import ignore from 'ignore';
 import * as path from 'path';
 import * as url from 'url';
 import * as yaml from 'js-yaml';
+
+const repositoryLogStorage = new AsyncLocalStorage();
+const requestLogBuffers = new WeakMap();
+const actionLog = {
+  info: actionsCore.info,
+  warning: actionsCore.warning,
+  debug: actionsCore.debug,
+  error: actionsCore.error
+};
+const core = { ...actionsCore };
+for (const method of ['info', 'warning', 'debug', 'error']) {
+  core[method] = (...args) => {
+    const buffer = repositoryLogStorage.getStore();
+    if (buffer) {
+      buffer.entries.push({ method, args });
+    } else {
+      actionLog[method](...args);
+    }
+  };
+}
 
 export const LATEST_API_VERSION = '2026-03-10';
 export const FALLBACK_API_VERSION = '2022-11-28';
@@ -517,7 +540,118 @@ async function getRepositoryMetadata(octokit, repoFullName, repositoryMetadataCa
   }
 }
 
-const REPOSITORY_METADATA_FETCH_CONCURRENCY = 5;
+export const DEFAULT_MAX_CONCURRENCY = 5;
+const MAX_RATE_LIMIT_RETRIES = 3;
+
+/**
+ * Disable generic error retries for non-idempotent writes; throttling still retries rate limits.
+ * @param {Object} octokit - Octokit instance being extended
+ * @returns {Object} Empty plugin additions
+ */
+export function disableWriteRetries(octokit) {
+  octokit.hook.wrap('request', (request, options) => {
+    if (!['GET', 'HEAD'].includes(options.method.toUpperCase())) {
+      options.request = { ...options.request, retries: 0 };
+    }
+    return request(options);
+  });
+  return {};
+}
+
+function withRequestLogBuffer(options, fn, ...args) {
+  return requestLogBuffers.has(options)
+    ? repositoryLogStorage.run(requestLogBuffers.get(options), fn, ...args)
+    : fn(...args);
+}
+
+function scopeQueuedRequestLogs(octokit) {
+  // Register inside throttling so Octokit's request logger runs in the issuer's context on every attempt.
+  octokit.hook.wrap('request', (request, options) => withRequestLogBuffer(options, request, options));
+}
+
+const ThrottledOctokit = Octokit.plugin(scopeQueuedRequestLogs, throttling, retry, disableWriteRetries);
+
+/**
+ * Create the API client with one retry policy for production and integration tests.
+ * @param {Object} options - Octokit options including authentication and API base URL
+ * @returns {import('@octokit/rest').Octokit} Configured client
+ */
+export function createApiClient(options) {
+  const octokit = new ThrottledOctokit({
+    ...options,
+    log: { debug: core.debug, info: core.info, warn: core.warning, error: core.error },
+    retry: {
+      ...options.retry,
+      doNotRetry: [400, 401, 403, 404, 410, 422, 429, 451]
+    },
+    throttle: {
+      onRateLimit: createRateLimitHandler('Rate limit'),
+      onSecondaryRateLimit: createRateLimitHandler('Secondary rate limit'),
+      ...options.throttle
+    }
+  });
+  // Bottleneck can run a queued callback in the previous request's async context.
+  octokit.hook.before('request', requestOptions => {
+    requestLogBuffers.set(requestOptions, repositoryLogStorage.getStore());
+  });
+  return octokit;
+}
+
+/**
+ * Create an Octokit throttling handler that retries rate-limited requests a bounded number of times.
+ * @param {string} label - Human-readable rate limit type for log messages
+ * @returns {(retryAfter: number, options: Object, octokit: Object, retryCount: number) => boolean} Handler
+ */
+export function createRateLimitHandler(label) {
+  return (retryAfter, options, _octokit, retryCount) => {
+    const request = `${options.method} ${options.url}`;
+    const shouldRetry = retryCount < MAX_RATE_LIMIT_RETRIES;
+    const decision = shouldRetry
+      ? `retrying after ${retryAfter} seconds (attempt ${retryCount + 1})`
+      : `giving up after ${retryCount} retries`;
+    withRequestLogBuffer(options, core.warning, `${label} hit for ${request}; ${decision}`);
+    return shouldRetry;
+  };
+}
+
+/**
+ * Parse the max-concurrency input.
+ * @param {string} value - Raw input value
+ * @returns {number} Positive integer concurrency
+ */
+export function parseMaxConcurrency(value) {
+  const trimmed = (value ?? '').trim();
+  if (trimmed === '') {
+    return DEFAULT_MAX_CONCURRENCY;
+  }
+  if (!/^\d+$/.test(trimmed) || Number(trimmed) < 1) {
+    throw new Error(`Invalid 'max-concurrency' input: ${value}. Must be a positive integer.`);
+  }
+  return Number(trimmed);
+}
+
+/**
+ * Buffer action log calls without changing stdout. Late logs stay attached to the same
+ * repository buffer so they cannot bypass ordered output.
+ * @template T
+ * @param {() => Promise<T>} fn - Async function to run
+ * @param {(entries: Array<Object>) => void} [flush] - Flush or queue the completed log entries
+ * @returns {Promise<T>} Result of fn
+ */
+export async function runWithBufferedLogs(fn, flush = flushRepositoryLogs) {
+  const buffer = { entries: [] };
+  try {
+    return await repositoryLogStorage.run(buffer, fn);
+  } finally {
+    flush(buffer.entries);
+  }
+}
+
+function flushRepositoryLogs(entries) {
+  for (const { method, args } of entries.splice(0)) {
+    actionLog[method](...args);
+  }
+}
 
 /**
  * Map items with a bounded level of concurrency while preserving result order.
@@ -545,8 +679,8 @@ async function mapWithConcurrencyLimit(items, concurrency, mapper) {
   return results;
 }
 
-async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache) {
-  return mapWithConcurrencyLimit(matchedRepos, REPOSITORY_METADATA_FETCH_CONCURRENCY, async matchedRepo => ({
+async function ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache, concurrency) {
+  return mapWithConcurrencyLimit(matchedRepos, concurrency, async matchedRepo => ({
     ...matchedRepo,
     repository:
       matchedRepo.repository ?? (await getRepositoryMetadata(octokit, matchedRepo.repo, repositoryMetadataCache))
@@ -649,7 +783,7 @@ function mergeRulesetsFiles(existing, incoming, repo, basePath = '') {
  * @param {Octokit} octokit - Octokit instance
  * @returns {Promise<Array>} Array of repository objects with merged settings from matching rules
  */
-export async function parseConfigWithRules(config, octokit) {
+export async function parseConfigWithRules(config, octokit, maxConcurrency = DEFAULT_MAX_CONCURRENCY) {
   if (!config.rules || !Array.isArray(config.rules)) {
     throw new Error('Configuration must contain a "rules" array');
   }
@@ -813,7 +947,12 @@ export async function parseConfigWithRules(config, octokit) {
     }
 
     if (rule.selector.fork !== undefined || rule.selector.visibility !== undefined) {
-      matchedRepos = await ensureRepositoriesHaveMetadata(matchedRepos, octokit, repositoryMetadataCache);
+      matchedRepos = await ensureRepositoriesHaveMetadata(
+        matchedRepos,
+        octokit,
+        repositoryMetadataCache,
+        maxConcurrency
+      );
     }
 
     if (rule.selector.fork !== undefined) {
@@ -882,7 +1021,8 @@ export async function parseRepositories(
   owner,
   octokit,
   customPropertyName,
-  customPropertyValue
+  customPropertyValue,
+  maxConcurrency = DEFAULT_MAX_CONCURRENCY
 ) {
   let repoList = [];
 
@@ -916,7 +1056,7 @@ export async function parseRepositories(
       // Check if this is a rules-based configuration
       if (Array.isArray(data.rules)) {
         core.info('Detected rules-based configuration file');
-        repoList = await parseConfigWithRules(data, octokit);
+        repoList = await parseConfigWithRules(data, octokit, maxConcurrency);
       }
       // Support repos array format (backwards compatible)
       else if (Array.isArray(data.repos)) {
@@ -4552,7 +4692,11 @@ async function resolveReviewer(octokit, owner, reviewer, cache) {
  */
 async function resolveReviewers(octokit, owner, reviewers, cache) {
   if (!reviewers || reviewers.length === 0) return [];
-  return Promise.all(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
+  const lookups = await Promise.allSettled(reviewers.map(r => resolveReviewer(octokit, owner, r, cache)));
+  return lookups.map(lookup => {
+    if (lookup.status === 'rejected') throw lookup.reason;
+    return lookup.value;
+  });
 }
 
 /**
@@ -5561,6 +5705,7 @@ export async function run() {
 
     const dryRun = getBooleanInput('dry-run');
     const writeJobSummary = getBooleanInput('write-job-summary') !== false;
+    const maxConcurrency = parseMaxConcurrency(core.getInput('max-concurrency'));
     const jobSummaryHeadingBase = core.getInput('summary-heading').trim();
 
     // Parse topics if provided
@@ -5690,8 +5835,8 @@ export async function run() {
       );
     }
 
-    // Initialize Octokit
-    const octokit = new Octokit({
+    // Initialize Octokit with throttling (rate-limit backoff) and retries for transient errors
+    const octokit = createApiClient({
       auth: githubToken,
       baseUrl: githubApiUrl
     });
@@ -5714,10 +5859,13 @@ export async function run() {
       owner,
       octokit,
       customPropertyName,
-      customPropertyValue
+      customPropertyValue,
+      maxConcurrency
     );
 
-    core.info(`Processing ${repoList.length} repositories...`);
+    core.info(
+      `Processing ${repoList.length} repositories${maxConcurrency > 1 && repoList.length > 1 ? ` (up to ${maxConcurrency} in parallel)` : ''}...`
+    );
     core.info(`Settings to apply: ${JSON.stringify(settings, null, 2)}`);
     if (enableCodeScanning) {
       core.info('CodeQL scanning will be enabled');
@@ -5790,7 +5938,7 @@ export async function run() {
     }
 
     // Update repositories
-    const results = [];
+    const results = new Array(repoList.length);
     let successCount = 0;
     let failureCount = 0;
     let changedCount = 0;
@@ -5800,10 +5948,9 @@ export async function run() {
     // Cache for resolved reviewer IDs across repos (avoids duplicate API calls)
     const reviewerCache = new Map();
 
-    for (const repoConfig of repoList) {
+    const processRepositoryUnsafe = async (repoConfig, repoIndex) => {
       const repo = repoConfig.repo;
       core.info(`Updating ${repo}...`);
-
       // Merge global settings with repo-specific overrides
       const repoSettings = {
         allow_squash_merge: coerceBooleanConfig(
@@ -6099,12 +6246,11 @@ export async function run() {
         repoSecuritySettings,
         dryRun
       );
-      results.push(result);
+      results[repoIndex] = result;
 
       if (result.archived) {
-        successCount++;
         core.info(`⏭️ Skipping archived repository ${repo}`);
-        continue;
+        return;
       }
 
       // TODO(v3): Remove legacy sync warning properties (e.g., dependabotSyncWarning, gitignoreSyncWarning)
@@ -6728,17 +6874,8 @@ export async function run() {
       result.hasWarnings = result.subResults.some(s => s.status === SubResultStatus.WARNING);
 
       if (result.success) {
-        successCount++;
-        if (result.hasWarnings) {
-          warningCount++;
-        }
         const repoHasChanges = hasRepositoryChanges(result);
         const repoHasPending = !repoHasChanges && hasRepositoryPending(result);
-        if (repoHasChanges) {
-          changedCount++;
-        } else if (repoHasPending) {
-          pendingCount++;
-        }
         if (dryRun) {
           if (repoHasChanges) {
             core.info(`🔍 Would update ${repo}`);
@@ -6911,8 +7048,124 @@ export async function run() {
           core.warning(`  ⚠️ ${result.dependabotSecurityUpdatesWarning}`);
         }
       } else {
-        failureCount++;
         core.warning(`❌ Failed to update ${repo}: ${result.error}`);
+      }
+    };
+
+    const processRepository = async (repoConfig, repoIndex) => {
+      const repo = repoConfig.repo;
+      try {
+        await processRepositoryUnsafe(repoConfig, repoIndex);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (results[repoIndex]) {
+          results[repoIndex].success = false;
+          results[repoIndex].hasWarnings = true;
+          results[repoIndex].error = message;
+          results[repoIndex].subResults ??= [];
+          results[repoIndex].subResults.push(
+            createSubResult('repository-processing', SubResultStatus.WARNING, message)
+          );
+        } else {
+          results[repoIndex] = {
+            repository: repo,
+            success: false,
+            hasWarnings: false,
+            subResults: [],
+            error: message,
+            dryRun
+          };
+        }
+        core.warning(`❌ Failed to update ${repo}: ${message}`);
+      }
+    };
+
+    const repositoryQueues = new Map();
+    const completedLogs = new Array(repoList.length);
+    let nextLogIndex = 0;
+    let windowWaiters = [];
+    const queueRepositoryLogs = (repoIndex, entries) => {
+      completedLogs[repoIndex] = entries;
+      const previousLogIndex = nextLogIndex;
+      while (completedLogs[nextLogIndex]) {
+        flushRepositoryLogs(completedLogs[nextLogIndex]);
+        nextLogIndex++;
+      }
+      if (nextLogIndex !== previousLogIndex) {
+        for (const resolve of windowWaiters) {
+          resolve();
+        }
+        windowWaiters = [];
+      }
+    };
+    const waitForLogWindow = async repoIndex => {
+      while (repoIndex >= nextLogIndex + maxConcurrency) {
+        await new Promise(resolve => windowWaiters.push(resolve));
+      }
+    };
+    const processRepositoryWithLock = async (repoConfig, repoIndex) => {
+      if (maxConcurrency > 1 && repoList.length > 1) {
+        await waitForLogWindow(repoIndex);
+      }
+      const key = String(repoConfig.repo).trim().toLowerCase();
+      const previous = repositoryQueues.get(key) ?? Promise.resolve();
+      let release;
+      const current = new Promise(resolve => {
+        release = resolve;
+      });
+      repositoryQueues.set(key, current);
+      await previous;
+
+      try {
+        if (maxConcurrency > 1 && repoList.length > 1) {
+          await runWithBufferedLogs(
+            () => processRepository(repoConfig, repoIndex),
+            entries => queueRepositoryLogs(repoIndex, entries)
+          );
+        } else {
+          await processRepository(repoConfig, repoIndex);
+        }
+      } finally {
+        release();
+        if (repositoryQueues.get(key) === current) {
+          repositoryQueues.delete(key);
+        }
+      }
+    };
+
+    if (maxConcurrency > 1 && repoList.length > 1) {
+      await mapWithConcurrencyLimit(repoList, maxConcurrency, processRepositoryWithLock);
+    } else {
+      for (const [repoIndex, repoConfig] of repoList.entries()) {
+        await processRepositoryWithLock(repoConfig, repoIndex);
+      }
+    }
+
+    for (const entries of completedLogs) {
+      if (entries?.length) {
+        flushRepositoryLogs(entries);
+      }
+    }
+
+    for (const result of results) {
+      if (!result.success) {
+        failureCount++;
+        continue;
+      }
+
+      successCount++;
+      if (result.archived) {
+        continue;
+      }
+      if (result.hasWarnings) {
+        warningCount++;
+      }
+      const repoHasChanges = hasRepositoryChanges(result);
+      const repoHasPending = !repoHasChanges && hasRepositoryPending(result);
+      if (repoHasChanges) {
+        changedCount++;
+      } else if (repoHasPending) {
+        pendingCount++;
       }
     }
 

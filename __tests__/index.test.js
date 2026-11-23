@@ -364,8 +364,10 @@ function setMockYamlContent(result, forContent = '__default__') {
 
 // Mock the modules before importing the main module
 jest.unstable_mockModule('@actions/core', () => mockCore);
+const MockOctokit = jest.fn(() => mockOctokit);
+MockOctokit.plugin = jest.fn(() => MockOctokit);
 jest.unstable_mockModule('@octokit/rest', () => ({
-  Octokit: jest.fn(() => mockOctokit)
+  Octokit: MockOctokit
 }));
 jest.unstable_mockModule('fs', () => mockFs);
 jest.unstable_mockModule('js-yaml', () => mockYaml);
@@ -411,6 +413,9 @@ const {
   parseFileSyncConfig,
   syncFileSyncGroup,
   configureApiVersion,
+  runWithBufferedLogs,
+  createRateLimitHandler,
+  disableWriteRetries,
   LATEST_API_VERSION,
   FALLBACK_API_VERSION
 } = await import('../src/index.js');
@@ -2524,6 +2529,32 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(result).toEqual([{ repo: 'my-org/private-repo', 'allow-squash-merge': true }]);
     });
 
+    test('should limit metadata reads for fork and visibility filters to max-concurrency', async () => {
+      const tracker = { inFlight: 0, maxInFlight: 0 };
+      mockOctokit.rest.repos.get.mockImplementation(async ({ repo }) => {
+        tracker.inFlight++;
+        tracker.maxInFlight = Math.max(tracker.maxInFlight, tracker.inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        tracker.inFlight--;
+        return { data: { full_name: `my-org/${repo}`, fork: false, visibility: 'private' } };
+      });
+
+      const config = {
+        owner: 'my-org',
+        rules: [
+          {
+            selector: { repos: ['repo1', 'repo2', 'repo3'], fork: false, visibility: 'private' },
+            settings: { 'allow-squash-merge': true }
+          }
+        ]
+      };
+
+      const result = await parseConfigWithRules(config, mockOctokit, 1);
+
+      expect(tracker.maxInFlight).toBe(1);
+      expect(result.map(({ repo }) => repo)).toEqual(['my-org/repo1', 'my-org/repo2', 'my-org/repo3']);
+    });
+
     test('should process visibility filter with custom-property selector', async () => {
       mockOctokit.rest.orgs.get.mockResolvedValue({ data: { login: 'my-org' } });
       mockOctokit.request.mockResolvedValueOnce({
@@ -4373,6 +4404,273 @@ describe('Bulk GitHub Repository Settings Action', () => {
       expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '0');
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '0');
       expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(2);
+    });
+
+    const trackConcurrentUpdates = () => {
+      const tracker = { inFlight: 0, maxInFlight: 0 };
+      mockOctokit.rest.repos.update.mockImplementation(async ({ repo }) => {
+        tracker.inFlight++;
+        tracker.maxInFlight = Math.max(tracker.maxInFlight, tracker.inFlight);
+        // Finish earlier repositories last so completion order differs from input order
+        await new Promise(resolve => setTimeout(resolve, repo === 'repo1' ? 20 : 1));
+        tracker.inFlight--;
+        return {};
+      });
+      return tracker;
+    };
+
+    test('should process repositories in parallel by default and keep results in input order', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3',
+            'allow-squash-merge': 'true'
+          })[name] || ''
+      );
+      const tracker = trackConcurrentUpdates();
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(tracker.maxInFlight).toBe(3);
+      expect(getResultsOutput().map(r => r.repository)).toEqual(['owner/repo1', 'owner/repo2', 'owner/repo3']);
+      expect(mockCore.info).toHaveBeenCalledWith('Processing 3 repositories (up to 5 in parallel)...');
+      expect(
+        mockCore.info.mock.calls.map(([message]) => message).filter(message => message.startsWith('Updating '))
+      ).toEqual(['Updating owner/repo1...', 'Updating owner/repo2...', 'Updating owner/repo3...']);
+      const repoLogOrder = mockCore.info.mock.calls
+        .map(([message]) => message.match(/owner\/repo(\d)/)?.[1])
+        .filter(Boolean);
+      expect(repoLogOrder).toEqual([...repoLogOrder].sort());
+    });
+
+    test('should bound completed work while an earlier repository is still logging', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3,owner/repo4,owner/repo5,owner/repo6,owner/repo7',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '5'
+          })[name] || ''
+      );
+      let releaseFirstRepo;
+      let markFirstRepoStarted;
+      let markOtherFirstWaveReposFinished;
+      const firstRepoStarted = new Promise(resolve => {
+        markFirstRepoStarted = resolve;
+      });
+      const otherFirstWaveReposFinished = new Promise(resolve => {
+        markOtherFirstWaveReposFinished = resolve;
+      });
+      let otherFirstWaveRepoCount = 0;
+      mockOctokit.rest.repos.update.mockImplementation(async ({ repo }) => {
+        if (repo === 'repo1') {
+          markFirstRepoStarted();
+          await new Promise(resolve => {
+            releaseFirstRepo = resolve;
+          });
+          return {};
+        }
+
+        if (Number(repo.replace('repo', '')) <= 5) {
+          otherFirstWaveRepoCount++;
+          if (otherFirstWaveRepoCount === 4) {
+            markOtherFirstWaveReposFinished();
+          }
+        }
+        return {};
+      });
+
+      const runPromise = run();
+      await firstRepoStarted;
+      await otherFirstWaveReposFinished;
+
+      expect(mockOctokit.rest.repos.update.mock.calls.map(([{ repo }]) => repo)).toEqual([
+        'repo1',
+        'repo2',
+        'repo3',
+        'repo4',
+        'repo5'
+      ]);
+
+      releaseFirstRepo();
+      await runPromise;
+
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(7);
+    });
+
+    test('should process repositories sequentially when max-concurrency is 1', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '1'
+          })[name] || ''
+      );
+      const tracker = trackConcurrentUpdates();
+
+      await run();
+
+      expect(tracker.maxInFlight).toBe(1);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '3');
+    });
+
+    test('should serialize duplicate repositories while processing different repositories in parallel', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,OWNER/REPO1',
+            'allow-squash-merge': 'true'
+          })[name] || ''
+      );
+      const tracker = { inFlight: 0, maxInFlight: 0 };
+      mockOctokit.rest.repos.get.mockImplementation(async () => {
+        tracker.inFlight++;
+        tracker.maxInFlight = Math.max(tracker.maxInFlight, tracker.inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        tracker.inFlight--;
+        return { data: makeReadableRepoData() };
+      });
+
+      await run();
+
+      expect(tracker.maxInFlight).toBe(1);
+      expect(getResultsOutput().map(result => result.repository)).toEqual(['owner/repo1', 'OWNER/REPO1']);
+    });
+
+    test('should finish all repositories and report a per-repository failure', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1,owner/repo2,owner/repo3,owner/repo4,owner/repo5,owner/repo6',
+            'allow-squash-merge': 'true'
+          })[name] || ''
+      );
+      mockOctokit.rest.repos.get.mockImplementation(async ({ repo }) => {
+        if (repo === 'repo2') {
+          throw new Error('temporary repository failure');
+        }
+        return { data: makeReadableRepoData() };
+      });
+
+      await run();
+
+      expect(mockOctokit.rest.repos.get).toHaveBeenCalledTimes(6);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '5');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(getResultsOutput().map(result => result.repository)).toEqual([
+        'owner/repo1',
+        'owner/repo2',
+        'owner/repo3',
+        'owner/repo4',
+        'owner/repo5',
+        'owner/repo6'
+      ]);
+      expect(getResultsOutput()[1]).toMatchObject({
+        success: false,
+        error: 'temporary repository failure'
+      });
+    });
+
+    test('should report an unexpected error before assigning results and finish queued repositories', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '2'
+          })[name] || ''
+      );
+      setMockFileContent('test repos', 'repos.yml');
+      setMockYamlContent(
+        {
+          repos: [{ repo: 'owner/repo1', 'rulesets-file': [true] }, { repo: 'owner/repo1' }, { repo: 'owner/repo2' }]
+        },
+        'test repos'
+      );
+
+      await run();
+
+      const results = getResultsOutput();
+      expect(results[0]).toMatchObject({
+        repository: 'owner/repo1',
+        success: false,
+        subResults: [],
+        error: expect.stringContaining('Invalid entry in "rulesets-file"')
+      });
+      expect(results.slice(1).every(result => result.success)).toBe(true);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '2');
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('Failed to update owner/repo1'));
+    });
+
+    test('should preserve partial results after an unexpected error and finish queued repositories', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            'repositories-file': 'repos.yml',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '2'
+          })[name] || ''
+      );
+      const failingConfig = { repo: 'owner/repo1' };
+      Object.defineProperty(failingConfig, 'package-json-file', {
+        get() {
+          throw new Error('unexpected package sync configuration failure');
+        }
+      });
+      setMockFileContent('test repos', 'repos.yml');
+      setMockYamlContent({ repos: [failingConfig, { repo: 'owner/repo1' }, { repo: 'owner/repo2' }] }, 'test repos');
+      mockOctokit.rest.repos.get.mockResolvedValue({ data: makeReadableRepoData() });
+
+      await run();
+
+      const results = getResultsOutput();
+      expect(results[0]).toMatchObject({
+        success: false,
+        error: 'unexpected package sync configuration failure',
+        changes: expect.arrayContaining([expect.objectContaining({ setting: 'allow_squash_merge' })]),
+        subResults: expect.arrayContaining([
+          expect.objectContaining({ status: 'changed' }),
+          expect.objectContaining({
+            kind: 'repository-processing',
+            status: 'warning',
+            message: 'unexpected package sync configuration failure'
+          })
+        ])
+      });
+      expect(results.slice(1).every(result => result.success)).toBe(true);
+      expect(mockCore.setOutput).toHaveBeenCalledWith('failed-repositories', '1');
+      expect(mockCore.setFailed).toHaveBeenCalledWith('1 repository failed to update');
+      expect(mockOctokit.rest.repos.update).toHaveBeenCalledTimes(3);
+    });
+
+    test('should fail on invalid max-concurrency input', async () => {
+      mockCore.getInput.mockImplementation(
+        name =>
+          ({
+            'github-token': 'test-token',
+            repositories: 'owner/repo1',
+            'allow-squash-merge': 'true',
+            'max-concurrency': '0'
+          })[name] || ''
+      );
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        `Action failed with error: Invalid 'max-concurrency' input: 0. Must be a positive integer.`
+      );
     });
 
     test('should skip archived repositories during action execution', async () => {
@@ -7055,10 +7353,12 @@ rules:
 
       await run();
 
-      expect(Octokit).toHaveBeenCalledWith({
-        auth: 'test-token',
-        baseUrl: customApiUrl
-      });
+      expect(Octokit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: 'test-token',
+          baseUrl: customApiUrl
+        })
+      );
       expect(mockOctokit.request).toHaveBeenCalledWith('GET /meta', {
         headers: { 'x-github-api-version': LATEST_API_VERSION }
       });
@@ -7082,10 +7382,12 @@ rules:
 
       await run();
 
-      expect(Octokit).toHaveBeenCalledWith({
-        auth: 'test-token',
-        baseUrl: 'https://api.github.com'
-      });
+      expect(Octokit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: 'test-token',
+          baseUrl: 'https://api.github.com'
+        })
+      );
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
 
@@ -7107,10 +7409,12 @@ rules:
 
       await run();
 
-      expect(Octokit).toHaveBeenCalledWith({
-        auth: 'test-token',
-        baseUrl: gheUrl
-      });
+      expect(Octokit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: 'test-token',
+          baseUrl: gheUrl
+        })
+      );
       expect(mockCore.setOutput).toHaveBeenCalledWith('updated-repositories', '1');
     });
   });
@@ -10427,15 +10731,21 @@ rules:
 
       await run();
       expect(mockCore.setFailed).not.toHaveBeenCalled();
-      expect(
-        mockOctokit.rest.issues.createLabel.mock.calls.map(([args]) => [args.repo, args.name, args.color])
-      ).toEqual([
-        ['inherit', 'Urgent', 'f9d37c'],
-        ['inherit', 'COMMON', 'abcdef'],
-        ['custom', 'Needs-review', '905fe6'],
-        ['custom', 'risk,legal', expect.stringMatching(/^[0-9a-f]{6}$/)],
-        ['file-only', 'COMMON', 'abcdef']
+      const createdLabels = mockOctokit.rest.issues.createLabel.mock.calls.map(([args]) => [
+        args.repo,
+        args.name,
+        args.color
       ]);
+      expect(createdLabels).toHaveLength(5);
+      expect(createdLabels).toEqual(
+        expect.arrayContaining([
+          ['inherit', 'Urgent', 'f9d37c'],
+          ['inherit', 'COMMON', 'abcdef'],
+          ['custom', 'Needs-review', '905fe6'],
+          ['custom', 'risk,legal', expect.stringMatching(/^[0-9a-f]{6}$/)],
+          ['file-only', 'COMMON', 'abcdef']
+        ])
+      );
       expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('labels must be a string or an array'));
       expect(mockCore.setOutput).toHaveBeenCalledWith('warning-repositories', '1');
       const results = JSON.parse(mockCore.setOutput.mock.calls.find(([key]) => key === 'results')[1]);
@@ -11573,6 +11883,31 @@ rules:
       const result = await syncEnvironments(mockOctokit, 'owner/repo', testEnvironments, false, false);
       expect(result.success).toBe(false);
       expect(result.error).toContain('Failed to sync environments');
+    });
+
+    test('waits for sibling reviewer lookups before reporting a failure and flushing repository warnings', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      mockOctokit.rest.users.getByUsername.mockRejectedValueOnce(new Error('not found'));
+      mockOctokit.rest.teams.getByName.mockImplementationOnce(async () => {
+        await new Promise(resolve => setImmediate(resolve));
+        warn(1, { method: 'GET', url: '/teams/ops' }, {}, 0);
+        return { data: { id: 42 } };
+      });
+      const reviewers = [
+        { type: 'User', login: 'missing' },
+        { type: 'Team', slug: 'ops' }
+      ];
+
+      const result = await runWithBufferedLogs(() =>
+        syncEnvironments(mockOctokit, 'owner/repo', [{ name: 'prod', reviewers }], false, false)
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: 'Failed to resolve reviewers for environment "prod": Failed to resolve User login "missing": not found'
+      });
+      expect(mockCore.warning).toHaveBeenCalledWith(expect.stringContaining('GET /teams/ops'));
+      expect(mockOctokit.request).not.toHaveBeenCalled();
     });
 
     test('should pass reviewers and deployment_branch_policy to API', async () => {
@@ -15176,6 +15511,104 @@ rules:
       setMockYamlContent({ repos: [{ repo: 'owner/repo3' }] });
       await parseRepositories('', 'repos3.yml', '', mockOctokit);
       expect(readCount).toBe(2);
+    });
+  });
+
+  describe('runWithBufferedLogs', () => {
+    test('buffers action logs without replacing stdout', async () => {
+      const originalWrite = process.stdout.write;
+      const warn = createRateLimitHandler('Rate limit');
+      const options = { method: 'GET', url: '/test' };
+      const result = await runWithBufferedLogs(async () => {
+        warn(1, options, {}, 0);
+        expect(mockCore.warning).not.toHaveBeenCalled();
+        expect(process.stdout.write).toBe(originalWrite);
+        return 'finished';
+      });
+
+      expect(result).toBe('finished');
+      expect(mockCore.warning).toHaveBeenCalledTimes(1);
+      expect(process.stdout.write).toBe(originalWrite);
+    });
+
+    test('keeps late warnings attached to their closed repository buffer', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      const flushed = [];
+      let retainedEntries;
+      const flush = entries => {
+        retainedEntries = entries;
+        flushed.push(...entries.splice(0));
+      };
+      let emitLateWarning;
+      let lateWarning;
+      await runWithBufferedLogs(async () => {
+        lateWarning = (async () => {
+          await new Promise(resolve => {
+            emitLateWarning = resolve;
+          });
+          warn(1, { method: 'GET', url: '/late-warning' }, {}, 0);
+        })();
+      }, flush);
+      emitLateWarning();
+      await lateWarning;
+      expect(mockCore.warning).not.toHaveBeenCalled();
+      expect(flushed).toEqual([]);
+
+      flush(retainedEntries);
+
+      expect(flushed).toEqual([
+        {
+          method: 'warning',
+          args: ['Rate limit hit for GET /late-warning; retrying after 1 seconds (attempt 1)']
+        }
+      ]);
+    });
+
+    test('flushes buffered logs when the task throws', async () => {
+      const warn = createRateLimitHandler('Rate limit');
+      await expect(
+        runWithBufferedLogs(async () => {
+          warn(1, { method: 'GET', url: '/test' }, {}, 0);
+          throw new Error('boom');
+        })
+      ).rejects.toThrow('boom');
+      expect(mockCore.warning).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('createRateLimitHandler', () => {
+    test('retries up to the limit and then gives up', () => {
+      const handler = createRateLimitHandler('Secondary rate limit');
+      const options = { method: 'POST', url: '/repos/{owner}/{repo}/pulls' };
+
+      expect(handler(60, options, {}, 0)).toBe(true);
+      expect(handler(60, options, {}, 2)).toBe(true);
+      expect(handler(60, options, {}, 3)).toBe(false);
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'Secondary rate limit hit for POST /repos/{owner}/{repo}/pulls; retrying after 60 seconds (attempt 1)'
+      );
+      expect(mockCore.warning).toHaveBeenCalledWith(
+        'Secondary rate limit hit for POST /repos/{owner}/{repo}/pulls; giving up after 3 retries'
+      );
+    });
+  });
+
+  describe('disableWriteRetries', () => {
+    test('disables generic retries for writes but preserves retries for reads', async () => {
+      let wrapRequest;
+      const hook = {
+        wrap: jest.fn((name, wrapper) => {
+          expect(name).toBe('request');
+          wrapRequest = wrapper;
+        })
+      };
+      const octokit = { hook };
+      const request = jest.fn(async options => options.request.retries);
+
+      expect(disableWriteRetries(octokit)).toEqual({});
+      expect(hook.wrap).toHaveBeenCalledTimes(1);
+      await expect(wrapRequest(request, { method: 'POST', request: { retries: 3 } })).resolves.toBe(0);
+      await expect(wrapRequest(request, { method: 'GET', request: { retries: 3 } })).resolves.toBe(3);
     });
   });
 });
